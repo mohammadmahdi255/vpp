@@ -72,7 +72,7 @@ VLIB_REGISTER_NODE (ethernet_node) = {
 	.format_trace = format_ethernet_trace,
 	.type = VLIB_NODE_TYPE_INTERNAL,
 	.n_errors = 0,
-	.n_next_nodes = ETHERNET_NEXT_N,
+	.n_next_nodes = 1,
 	.next_nodes = {
 		[ETHERNET_NEXT_DROP] = "error-drop",
 	},
@@ -132,8 +132,8 @@ VLIB_NODE_FN (ethernet_node) (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_f
 	return frame->n_vectors;
 }
 
-VNET_FEATURE_INIT (ethernet_node, static) = {
-	.arc_name = "ethernet-input",
+VNET_FEATURE_INIT (ethernet_node_input, static) = {
+	.arc_name = "device-input",
 	.node_name = "ethernet-node",
 	.runs_before = 0,
 };
