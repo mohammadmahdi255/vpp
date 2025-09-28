@@ -5,7 +5,6 @@
 #include <vnet/vnet.h>
 #include <vnet/ethernet/ethernet.h>
 
-/* Per-packet trace data */
 typedef struct {
 	u32 next_index;
 	u32 sw_if_index;
@@ -14,44 +13,37 @@ typedef struct {
 
 typedef enum
 {
-  ETHERNET_NEXT_DROP,
-  ETHERNET_NEXT_VLAN,
-  ETHERNET_NEXT_IP4,
-  ETHERNET_NEXT_IP6,
-  ETHERNET_NEXT_N,
+	ETHERNET_NEXT_DROP,
+	ETHERNET_NEXT_VLAN,
+	ETHERNET_NEXT_IP4,
+	ETHERNET_NEXT_IP6,
+	ETHERNET_NEXT_N,
 } ethenet_next_t;
 
-static_always_inline u8 *format_ethernet_trace (u8 *s, va_list *args)
-{
-  ethenet_trace_t *t = va_arg (*args, ethenet_trace_t *);
-  return format (s, "ethernet: sw_if_index %u ethertype 0x%04x next %u",
-                 t->sw_if_index, t->ethertype, t->next_index);
-}
-
-static_always_inline u16 process_packet   (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b)
+static_always_inline u16 process_packet (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b)
 {
 	if (b->current_length < sizeof(ethernet_header_t))
-		return VNET_DEVICE_INPUT_NEXT_DROP;
+		return ETHERNET_NEXT_DROP;
 
 	ethernet_header_t *eth_header = vlib_buffer_get_current (b);
 	u16 ethertype = ntohs(eth_header->type);
 	u16 next;
 
-			switch (ethertype)
-			{
-				case ETHERNET_TYPE_VLAN:
-					next = ETHERNET_NEXT_VLAN;
-					break;
-				case ETHERNET_TYPE_IP4:
-					next = ETHERNET_NEXT_IP4;
-					break;
-				case ETHERNET_TYPE_IP6:
-					next = ETHERNET_NEXT_IP6;
-					break;
-				default:
-					next = ETHERNET_NEXT_DROP;
-					break;
-			}
+	switch (ethertype)
+	{
+		case ETHERNET_TYPE_VLAN:
+			next = ETHERNET_NEXT_VLAN;
+			break;
+		case ETHERNET_TYPE_IP4:
+			next = ETHERNET_NEXT_IP4;
+			break;
+		case ETHERNET_TYPE_IP6:
+			next = ETHERNET_NEXT_IP6;
+			break;
+		default:
+			next = ETHERNET_NEXT_DROP;
+			break;
+	}
 
 	if (PREDICT_FALSE (b->flags & VLIB_BUFFER_IS_TRACED))
 	{
@@ -66,12 +58,19 @@ static_always_inline u16 process_packet   (vlib_main_t *vm, vlib_node_runtime_t 
 
 #ifndef CLIB_MARCH_VARIANT
 
+static u8 *format_ethernet_trace (u8 *s, va_list *args)
+{
+	ethenet_trace_t *t = va_arg (*args, ethenet_trace_t *);
+	return format (s, "ethernet: sw_if_index %u ethertype 0x%04x next %u",
+			t->sw_if_index, t->ethertype, t->next_index);
+}
+
 /* Register node */
 VLIB_REGISTER_NODE (ethernet_node) = {
 	.name = "ethernet-node",
 	.vector_size = sizeof (u32),
-	.type = VLIB_NODE_TYPE_INTERNAL,
 	.format_trace = format_ethernet_trace,
+	.type = VLIB_NODE_TYPE_INTERNAL,
 	.n_errors = 0,
 	.n_next_nodes = ETHERNET_NEXT_N,
 	.next_nodes = {
@@ -96,15 +95,18 @@ VLIB_NODE_FN (ethernet_node) (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_f
 	/* Unrolled loop: process 4 at a time */
 	while (n_left_from >= 4) {
 
-		vlib_prefetch_buffer_header (b[4], LOAD);
-	    vlib_prefetch_buffer_header (b[5], LOAD);
-		vlib_prefetch_buffer_header (b[6], LOAD);
-		vlib_prefetch_buffer_header (b[7], LOAD);
+		if (n_left_from >= 8)
+		{
+			vlib_prefetch_buffer_header (b[4], LOAD);
+			vlib_prefetch_buffer_header (b[5], LOAD);
+			vlib_prefetch_buffer_header (b[6], LOAD);
+			vlib_prefetch_buffer_header (b[7], LOAD);
 
-		vlib_prefetch_buffer_data (b[4], LOAD);
-	    vlib_prefetch_buffer_data (b[5], LOAD);
-		vlib_prefetch_buffer_data (b[6], LOAD);
-		vlib_prefetch_buffer_data (b[7], LOAD);
+			vlib_prefetch_buffer_data (b[4], LOAD);
+			vlib_prefetch_buffer_data (b[5], LOAD);
+			vlib_prefetch_buffer_data (b[6], LOAD);
+			vlib_prefetch_buffer_data (b[7], LOAD);
+		}
 
 		next[0] = process_packet (vm, node, b[0]);
 		next[1] = process_packet (vm, node, b[1]);
@@ -116,8 +118,8 @@ VLIB_NODE_FN (ethernet_node) (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_f
 		n_left_from -= 4;
 	}
 
-	/* Scalar loop for leftovers */
 	while (n_left_from > 0) {
+
 		next[0] = process_packet (vm, node, b[0]);
 
 		b++;
@@ -125,14 +127,12 @@ VLIB_NODE_FN (ethernet_node) (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_f
 		n_left_from--;
 	}
 
-	/* Enqueue all buffers at once */
 	vlib_buffer_enqueue_to_next (vm, node, from, nexts, frame->n_vectors);
 
 	return frame->n_vectors;
 }
 
-/* Hook into ethernet-input arc */
-VNET_FEATURE_INIT (my_eth_feat, static) = {
+VNET_FEATURE_INIT (ethernet_node, static) = {
 	.arc_name = "ethernet-input",
 	.node_name = "ethernet-node",
 	.runs_before = 0,
