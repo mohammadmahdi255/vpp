@@ -8,22 +8,23 @@
 #include <vppinfra/clib.h>
 
 #include "detunnel.h"
+#include "vlib/counter.h"
 
-typedef enum
+enum
 {
-	ETHERNET_COUNTER,
-	ETHERNET_COUNTER_FAILED,
-	ETHERNET_COUNTER_N,
-} ethernet_counter_t;
+	ETHERNET,
+	ETHERNET_FAILED,
+	COUNTER_N,
+};
 
-typedef enum
+enum
 {
-	ETHERNET_NEXT_DROP,
-	ETHERNET_NEXT_VLAN,
-	ETHERNET_NEXT_IP4,
-	ETHERNET_NEXT_IP6,
-	ETHERNET_NEXT_N,
-} ethernet_next_t;
+	NEXT_NODE_ERROR_DROP,
+	NEXT_NODE_VLAN_DETUNNEL,
+	NEXT_NODE_IP4,
+	NEXT_NODE_IP6,
+	NEXT_NODE_N,
+};
 
 typedef struct {
 	u32 sw_if_index;
@@ -33,7 +34,7 @@ typedef struct {
 
 typedef struct {
 	u32 counter_length;
-	vlib_combined_counter_main_t counters[ETHERNET_COUNTER_N];
+	vlib_combined_counter_main_t counters[COUNTER_N];
 } ethernet_detunnel_main_t;
 
 #ifndef CLIB_MARCH_VARIANT
@@ -48,30 +49,30 @@ static_always_inline ethernet_trace_t process_buffer (vlib_main_t *vm, vlib_buff
 	ethernet_trace_t trace;
 	trace.sw_if_index = vnet_buffer(b)->sw_if_index[VLIB_RX];
 	trace.ethertype = 0;
-	trace.next_index = ETHERNET_NEXT_DROP;
+	trace.next_index = NEXT_NODE_ERROR_DROP;
 
 	if (trace.sw_if_index >= edm->counter_length)
 	{
-		vlib_validate_combined_counter(&edm->counters[ETHERNET_COUNTER], trace.sw_if_index);
-		vlib_validate_combined_counter(&edm->counters[ETHERNET_COUNTER_FAILED], trace.sw_if_index);
+		vlib_validate_combined_counter(&edm->counters[ETHERNET], trace.sw_if_index);
+		vlib_validate_combined_counter(&edm->counters[ETHERNET_FAILED], trace.sw_if_index);
 		for (u32 i = edm->counter_length; i <= trace.sw_if_index; i++)
 		{
-			vlib_zero_combined_counter (&edm->counters[ETHERNET_COUNTER], trace.sw_if_index);
-			vlib_zero_combined_counter (&edm->counters[ETHERNET_COUNTER_FAILED], trace.sw_if_index);
+			vlib_zero_combined_counter (&edm->counters[ETHERNET], trace.sw_if_index);
+			vlib_zero_combined_counter (&edm->counters[ETHERNET_FAILED], trace.sw_if_index);
 		}
 		edm->counter_length = trace.sw_if_index + 1;
 	}
 
 	if (b->current_length < sizeof(ethernet_header_t))
 	{
-		vlib_increment_combined_counter(&edm->counters[ETHERNET_COUNTER_FAILED], vm->thread_index,
+		vlib_increment_combined_counter(&edm->counters[ETHERNET_FAILED], vm->thread_index,
 				trace.sw_if_index, 1, sizeof(ethernet_header_t));
 		return trace;
 	}
 
 	ethernet_header_t *eth_header = vlib_buffer_get_current (b);
 	vlib_buffer_advance(b, sizeof(ethernet_header_t));
-	vlib_increment_combined_counter(&edm->counters[ETHERNET_COUNTER], vm->thread_index,
+	vlib_increment_combined_counter(&edm->counters[ETHERNET], vm->thread_index,
 			trace.sw_if_index, 1, sizeof(ethernet_header_t));
 
 	trace.ethertype = ntohs(eth_header->type);
@@ -79,16 +80,16 @@ static_always_inline ethernet_trace_t process_buffer (vlib_main_t *vm, vlib_buff
 	switch (trace.ethertype)
 	{
 		case ETHERNET_TYPE_VLAN:
-			trace.next_index = ETHERNET_NEXT_VLAN;
+			trace.next_index = NEXT_NODE_VLAN_DETUNNEL;
 			break;
 		case ETHERNET_TYPE_IP4:
-			trace.next_index = ETHERNET_NEXT_IP4;
+			trace.next_index = NEXT_NODE_IP4;
 			break;
 		case ETHERNET_TYPE_IP6:
-			trace.next_index = ETHERNET_NEXT_IP6;
+			trace.next_index = NEXT_NODE_IP6;
 			break;
 		default:
-			trace.next_index = ETHERNET_NEXT_DROP;
+			trace.next_index = NEXT_NODE_ERROR_DROP;
 			break;
 	}
 
@@ -120,12 +121,12 @@ VLIB_REGISTER_NODE (ethernet_detunnel) = {
 	.vector_size = sizeof (u32),
 	.format_trace = format_ethernet_trace,
 	.type = VLIB_NODE_TYPE_INTERNAL,
-	.n_next_nodes = ETHERNET_NEXT_N,
+	.n_next_nodes = NEXT_NODE_N,
 	.next_nodes = {
-		[ETHERNET_NEXT_DROP] = "drop",
-		[ETHERNET_NEXT_VLAN] = "error-drop",
-		[ETHERNET_NEXT_IP4] = "ip4-drop",
-		[ETHERNET_NEXT_IP6] = "ip6-drop",
+		[NEXT_NODE_ERROR_DROP] = "error-drop",
+		[NEXT_NODE_VLAN_DETUNNEL] = "vlan-detunnel",
+		[NEXT_NODE_IP4] = "ip4-drop",
+		[NEXT_NODE_IP6] = "ip6-drop",
 	},
 };
 
@@ -158,13 +159,18 @@ VLIB_NODE_FN (ethernet_detunnel) (vlib_main_t *vm, vlib_node_runtime_t *node, vl
 			vlib_prefetch_buffer_data (b[5], LOAD);
 			vlib_prefetch_buffer_data (b[6], LOAD);
 			vlib_prefetch_buffer_data (b[7], LOAD);
+
+			vlib_prefetch_combined_counter (edm->counters, vm->thread_index, vnet_buffer(b[4])->sw_if_index[VLIB_RX]);
+			vlib_prefetch_combined_counter (edm->counters, vm->thread_index, vnet_buffer(b[5])->sw_if_index[VLIB_RX]);
+			vlib_prefetch_combined_counter (edm->counters, vm->thread_index, vnet_buffer(b[6])->sw_if_index[VLIB_RX]);
+			vlib_prefetch_combined_counter (edm->counters, vm->thread_index, vnet_buffer(b[7])->sw_if_index[VLIB_RX]);
 		}
 
 		ethernet_trace_t t[] = {
-			process_buffer(vm, b[0]),
-			process_buffer(vm, b[1]),
-			process_buffer(vm, b[2]),
-			process_buffer(vm, b[3])
+			process_buffer (vm, b[0]),
+			process_buffer (vm, b[1]),
+			process_buffer (vm, b[2]),
+			process_buffer (vm, b[3])
 		};
 
 		next[0] = t[0].next_index;
@@ -188,7 +194,7 @@ VLIB_NODE_FN (ethernet_detunnel) (vlib_main_t *vm, vlib_node_runtime_t *node, vl
 	while (n_left_from > 0) {
 
 		ethernet_trace_t t[] = {
-			process_buffer(vm, b[0]),
+			process_buffer (vm, b[0]),
 		};
 		next[0] = t[0].next_index;
 
@@ -205,23 +211,23 @@ VLIB_NODE_FN (ethernet_detunnel) (vlib_main_t *vm, vlib_node_runtime_t *node, vl
 	return frame->n_vectors;
 }
 
-static clib_error_t *ethernet_detunnel_init(vlib_main_t *CLIB_UNUSED(vm))
+static clib_error_t *ethernet_detunnel_init (vlib_main_t *CLIB_UNUSED(vm))
 {
 	ethernet_detunnel_main_t *edm = &ethernet_detunnel_main;
 	edm->counter_length = 0;
-    edm->counters[ETHERNET_COUNTER] = (vlib_combined_counter_main_t) {
+    edm->counters[ETHERNET] = (vlib_combined_counter_main_t) {
         .name = "ethernet",
         .stat_segment_name = "/detunnel/ethernet",
     };
-    vlib_validate_combined_counter(&edm->counters[ETHERNET_COUNTER], 0);
-    vlib_zero_combined_counter(&edm->counters[ETHERNET_COUNTER], 0);
+    vlib_validate_combined_counter(&edm->counters[ETHERNET], 0);
+    vlib_zero_combined_counter(&edm->counters[ETHERNET], 0);
 
-    edm->counters[ETHERNET_COUNTER_FAILED] = (vlib_combined_counter_main_t) {
+    edm->counters[ETHERNET_FAILED] = (vlib_combined_counter_main_t) {
         .name = "ethernet_failed",
-        .stat_segment_name = "/detunnel/ethernet_failed",
+        .stat_segment_name = "/detunnel/ethernet/failed",
     };
-    vlib_validate_combined_counter(&edm->counters[ETHERNET_COUNTER_FAILED], 0);
-    vlib_zero_combined_counter(&edm->counters[ETHERNET_COUNTER_FAILED], 0);
+    vlib_validate_combined_counter(&edm->counters[ETHERNET_FAILED], 0);
+    vlib_zero_combined_counter(&edm->counters[ETHERNET_FAILED], 0);
 
     return 0;
 }

@@ -1,15 +1,15 @@
 #include "vppinfra/types.h"
 
-#define foreach_detunnel_protocol			\
-		_ (ETHERNET, ethernet)				\
-		_ (VLAN, vlan)
+// #define foreach_detunnel_protocol			\
+// 		_ (ETHERNET, ethernet)				\
+// 		_ (VLAN, vlan)
 
-typedef enum {
-#define _(E, ...) DETUNNEL_##E,
-	foreach_detunnel_protocol
-#undef _
-	DETUNNEL_STATISTICS_N
-} detunnel_statistics_t;
+// typedef enum {
+// #define _(E, ...) DETUNNEL_##E,
+// 	foreach_detunnel_protocol
+// #undef _
+// 	DETUNNEL_STATISTICS_N
+// } detunnel_statistics_t;
 
 typedef struct
 {
