@@ -11,8 +11,8 @@
 #include "vlib/counter.h"
 
 #define foreach_ethernet_counter	\
-	_(PROCESSED, "processed")		\
-	_(FAILED, "failed")
+	_(PROCESSED, processed)			\
+	_(FAILED, failed)
 
 enum
 {
@@ -38,7 +38,7 @@ typedef struct {
 } ethernet_trace_t;
 
 typedef struct {
-	u32 counter_length;
+	u32 counter_if_index;
 	vlib_combined_counter_main_t counters[ETHERNET_COUNTER_N];
 } ethernet_detunnel_main_t;
 
@@ -56,23 +56,23 @@ static_always_inline ethernet_trace_t process_buffer (vlib_main_t *vm, vlib_buff
 	trace.ethertype = 0;
 	trace.next_index = NEXT_NODE_ERROR_DROP;
 
-	if (trace.sw_if_index >= edm->counter_length)
+	if (PREDICT_FALSE(edm->counter_if_index < trace.sw_if_index))
 	{
 #define _(id, name) vlib_validate_combined_counter (&edm->counters[ETHERNET_##id], trace.sw_if_index);
-		foreach_ethernet_counter
+	foreach_ethernet_counter
 #undef _
 
-		for (u32 i = edm->counter_length; i <= trace.sw_if_index; i++)
+		for (u32 i = edm->counter_if_index + 1; i <= trace.sw_if_index; i++)
 		{
 #define _(id, name) vlib_zero_combined_counter (&edm->counters[ETHERNET_##id], i);
-		foreach_ethernet_counter
+	foreach_ethernet_counter
 #undef _
 		}
 
-		edm->counter_length = trace.sw_if_index + 1;
+		edm->counter_if_index = trace.sw_if_index;
 	}
 
-	if (b->current_length < sizeof(ethernet_header_t))
+	if (PREDICT_FALSE(b->current_length < sizeof(ethernet_header_t)))
 	{
 		vlib_increment_combined_counter(&edm->counters[ETHERNET_FAILED], vm->thread_index,
 				trace.sw_if_index, 1, sizeof(ethernet_header_t));
@@ -217,14 +217,15 @@ VLIB_NODE_FN (ethernet_detunnel) (vlib_main_t *vm, vlib_node_runtime_t *node, vl
 static clib_error_t *ethernet_detunnel_init (vlib_main_t *CLIB_UNUSED(vm))
 {
 	ethernet_detunnel_main_t *edm = &ethernet_detunnel_main;
-	edm->counter_length = 1;
+	edm->counter_if_index = 0;
 
-#define _(id, name)																\
-		vlib_combined_counter_main_t *cm = &edm->counters[ETHERNET_##id];		\
-		cm->name = "ethernet_" #name;											\
-		cm->stat_segment_name = "/detunnel/ethernet/" #name;					\
-		vlib_validate_combined_counter(cm, 0);									\
-		vlib_zero_combined_counter(cm, 0);										\
+#define _(E, n)																\
+	vlib_combined_counter_main_t *cm_##n = &edm->counters[ETHERNET_##E];	\
+	cm_##n->name = "ethernet_" #n;											\
+	cm_##n->stat_segment_name = "/detunnel/ethernet/" #n;					\
+	vlib_validate_combined_counter(cm_##n, 0);								\
+	vlib_zero_combined_counter(cm_##n, 0);
+
 	foreach_ethernet_counter
 #undef _
 
