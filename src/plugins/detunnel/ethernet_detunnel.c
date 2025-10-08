@@ -1,17 +1,13 @@
 #include <netinet/in.h>
-#include <stddef.h>
 
 #include <vlib/vlib.h>
 #include <vnet/ethernet/ethernet.h>
-#include <vnet/ethernet/packet.h>
 #include <vnet/vnet.h>
 #include <vppinfra/clib.h>
 
-#include "detunnel.h"
-#include "vlib/counter.h"
-
 #define foreach_ethernet_counter	\
 	_(PROCESSED, processed)			\
+	_(UNPROCESSED, unprocessed)		\
 	_(FAILED, failed)
 
 enum
@@ -56,6 +52,9 @@ static_always_inline ethernet_trace_t process_buffer (vlib_main_t *vm, vlib_buff
 	trace.ethertype = 0;
 	trace.next_index = NEXT_NODE_ERROR_DROP;
 
+	if (PREDICT_FALSE (b->flags & VLIB_BUFFER_NEXT_PRESENT))
+		return trace;
+
 	if (PREDICT_FALSE(edm->counter_if_index < trace.sw_if_index))
 	{
 #define _(id, name) vlib_validate_combined_counter (&edm->counters[ETHERNET_##id], trace.sw_if_index);
@@ -75,7 +74,7 @@ static_always_inline ethernet_trace_t process_buffer (vlib_main_t *vm, vlib_buff
 	if (PREDICT_FALSE(b->current_length < sizeof(ethernet_header_t)))
 	{
 		vlib_increment_combined_counter(&edm->counters[ETHERNET_FAILED], vm->thread_index,
-				trace.sw_if_index, 1, sizeof(ethernet_header_t));
+				trace.sw_if_index, 1, b->current_length);
 		return trace;
 	}
 
@@ -83,6 +82,8 @@ static_always_inline ethernet_trace_t process_buffer (vlib_main_t *vm, vlib_buff
 	vlib_buffer_advance(b, sizeof(ethernet_header_t));
 	vlib_increment_combined_counter(&edm->counters[ETHERNET_PROCESSED], vm->thread_index,
 			trace.sw_if_index, 1, sizeof(ethernet_header_t));
+	vlib_increment_combined_counter(&edm->counters[ETHERNET_UNPROCESSED], vm->thread_index,
+			trace.sw_if_index, 1, b->current_length - sizeof(ethernet_header_t));
 
 	trace.ethertype = ntohs(eth_header->type);
 
