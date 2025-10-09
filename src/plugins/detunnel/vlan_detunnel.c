@@ -72,53 +72,53 @@ static_always_inline u16 process_buffer(vlib_main_t *vm, vlib_buffer_t *b, vlan_
 		vdm->counter_if_index = t->sw_if_index;
 	}
 
-	// vlib_increment_combined_counter(&vdm->counters[VLAN_TOTAL], vm->thread_index,
-	// 		t->sw_if_index, 1, b->current_length);
+	vlib_increment_combined_counter(&vdm->counters[VLAN_TOTAL], vm->thread_index,
+			t->sw_if_index, 1, b->current_length);
 
 	if (b->current_length < sizeof(vlan_header_t))
 	{
-		// vlib_increment_combined_counter(&vdm->counters[VLAN_FAILED], vm->thread_index,
-		// 		t->sw_if_index, 1, sizeof(vlan_header_t));
+		vlib_increment_combined_counter(&vdm->counters[VLAN_FAILED], vm->thread_index,
+				t->sw_if_index, 1, sizeof(vlan_header_t));
 		return t->next_index;
 	}
 
 	vlan_header_t *vlan_header = vlib_buffer_get_current(b);
-	// vlib_buffer_advance(b, sizeof(vlan_header_t));
-	// vlib_increment_combined_counter(&vdm->counters[VLAN_PROCESSED], vm->thread_index,
-	// 		t->sw_if_index, 1, sizeof(vlan_header_t));
+	vlib_buffer_advance(b, sizeof(vlan_header_t));
+	vlib_increment_combined_counter(&vdm->counters[VLAN_PROCESSED], vm->thread_index,
+			t->sw_if_index, 1, sizeof(vlan_header_t));
 
 	t->ethertype = ntohs(vlan_header->type);
 
-	// switch (t->ethertype)
-	// {
-	// 	case ETHERNET_TYPE_VLAN:
-	// 	{
-	// 		t->next_index = NEXT_NODE_VLAN;
-	// 		break;
-	// 	}
-	// 	case ETHERNET_TYPE_IP4:
-	// 	{
-	// 		t->next_index = NEXT_NODE_IP4;
-	// 		break;
-	// 	}
-	// 	case ETHERNET_TYPE_IP6:
-	// 	{
-	// 		t->next_index = NEXT_NODE_IP6;
-	// 		break;
-	// 	}
-	// 	case ETHERNET_TYPE_MPLS:
-	// 	{
-	// 		t->next_index = NEXT_NODE_MPLS;
-	// 		break;
-	// 	}
-	// 	default:
-	// 	{
-	// 		// vlib_increment_combined_counter(&vdm->counters[VLAN_DROP], vm->thread_index,
-	// 		// 		t->sw_if_index, 1, b->current_length);
-	// 		t->next_index = NEXT_NODE_ERROR_DROP;
-	// 		break;
-	// 	}
-	// }
+	switch (t->ethertype)
+	{
+		case ETHERNET_TYPE_VLAN:
+		{
+			t->next_index = NEXT_NODE_VLAN;
+			break;
+		}
+		case ETHERNET_TYPE_IP4:
+		{
+			t->next_index = NEXT_NODE_IP4;
+			break;
+		}
+		case ETHERNET_TYPE_IP6:
+		{
+			t->next_index = NEXT_NODE_IP6;
+			break;
+		}
+		case ETHERNET_TYPE_MPLS:
+		{
+			t->next_index = NEXT_NODE_MPLS;
+			break;
+		}
+		default:
+		{
+			// vlib_increment_combined_counter(&vdm->counters[VLAN_DROP], vm->thread_index,
+			// 		t->sw_if_index, 1, b->current_length);
+			t->next_index = NEXT_NODE_ERROR_DROP;
+			break;
+		}
+	}
 
 	return t->next_index;
 }
