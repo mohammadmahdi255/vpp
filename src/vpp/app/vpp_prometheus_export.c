@@ -106,44 +106,44 @@ print_metric_v1 (FILE *stream, stat_segment_data_t *res)
       print_log2_histogram_metric (stream, res);
       break;
     case STAT_DIR_TYPE_COUNTER_VECTOR_SIMPLE:
-      fformat (stream, "# TYPE %s counter\n", prom_string (res->name));
+      fformat (stream, "# TYPE vpp%s counter\n", prom_string (res->name));
       for (k = 0; k < vec_len (res->simple_counter_vec); k++)
 	for (j = 0; j < vec_len (res->simple_counter_vec[k]); j++)
-	  fformat (stream, "%s{thread=\"%d\",interface=\"%d\"} %lld\n",
+	  fformat (stream, "vpp%s{thread=\"%d\",interface=\"%d\"} %lld\n",
 		   prom_string (res->name), k, j,
 		   res->simple_counter_vec[k][j]);
       break;
 
     case STAT_DIR_TYPE_COUNTER_VECTOR_COMBINED:
-      fformat (stream, "# TYPE %s_packets counter\n", prom_string (res->name));
-      fformat (stream, "# TYPE %s_bytes counter\n", prom_string (res->name));
+      fformat (stream, "# TYPE vpp%s_packets counter\n", prom_string (res->name));
+      fformat (stream, "# TYPE vpp%s_bytes counter\n", prom_string (res->name));
       for (k = 0; k < vec_len (res->simple_counter_vec); k++)
 	for (j = 0; j < vec_len (res->combined_counter_vec[k]); j++)
 	  {
 	    fformat (stream,
-		     "%s_packets{thread=\"%d\",interface=\"%d\"} %lld\n",
+		     "vpp%s_packets{thread=\"%d\",interface=\"%d\"} %lld\n",
 		     prom_string (res->name), k, j,
 		     res->combined_counter_vec[k][j].packets);
-	    fformat (stream, "%s_bytes{thread=\"%d\",interface=\"%d\"} %lld\n",
+	    fformat (stream, "vpp%s_bytes{thread=\"%d\",interface=\"%d\"} %lld\n",
 		     prom_string (res->name), k, j,
 		     res->combined_counter_vec[k][j].bytes);
 	  }
       break;
     case STAT_DIR_TYPE_SCALAR_INDEX:
-      fformat (stream, "# TYPE %s counter\n", prom_string (res->name));
-      fformat (stream, "%s %.2f\n", prom_string (res->name),
+      fformat (stream, "# TYPE vpp%s counter\n", prom_string (res->name));
+      fformat (stream, "vpp%s %.2f\n", prom_string (res->name),
 	       res->scalar_value);
       break;
     case STAT_DIR_TYPE_GAUGE:
-      fformat (stream, "# TYPE %s gauge\n", prom_string (res->name));
-      fformat (stream, "%s %.2f\n", prom_string (res->name),
+      fformat (stream, "# TYPE vpp%s gauge\n", prom_string (res->name));
+      fformat (stream, "vpp%s %.2f\n", prom_string (res->name),
 	       res->scalar_value);
       break;
     case STAT_DIR_TYPE_NAME_VECTOR:
-      fformat (stream, "# TYPE %s_info gauge\n", prom_string (res->name));
+      fformat (stream, "# TYPE vpp%s_info gauge\n", prom_string (res->name));
       for (k = 0; k < vec_len (res->name_vector); k++)
 	if (res->name_vector[k])
-	  fformat (stream, "%s_info{index=\"%d\",name=\"%s\"} 1\n",
+	  fformat (stream, "vpp%s_info{index=\"%d\",name=\"%s\"} 1\n",
 		   prom_string (res->name), k, res->name_vector[k]);
       break;
 

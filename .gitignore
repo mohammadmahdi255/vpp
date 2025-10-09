@@ -44,6 +44,7 @@
 /build/optional/deb/debian/vpp-ext-deps*
 /path_setup
 /tools/
+/build
 # start autotools ignore
 autom4te.cache/
 config/
