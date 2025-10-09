@@ -54,6 +54,7 @@
 /build/startup.conf
 /path_setup
 /tools/
+/build
 # start autotools ignore
 autom4te.cache/
 config/
