@@ -56,6 +56,21 @@ format_vnet_dev_interface_name (u8 *s, va_list *args)
 }
 
 u8 *
+format_vnet_dev_port_primary_intf_name (u8 *s, va_list *args)
+{
+  vnet_dev_port_t *port = va_arg (*args, vnet_dev_port_t *);
+
+  if (port == 0 || port->interfaces == 0)
+    return format (s, "(none)");
+
+  u8 *name = (u8 *) port->interfaces->primary_interface.name;
+  if (name[0] == 0)
+    return format (s, "(unnamed)");
+
+  return format (s, "%s", name);
+}
+
+u8 *
 format_vnet_dev_info (u8 *s, va_list *args)
 {
   vnet_dev_format_args_t *a = va_arg (*args, vnet_dev_format_args_t *);
@@ -547,4 +562,25 @@ unformat_vnet_dev_rss_key (unformat_input_t *input, va_list *args)
   clib_memcpy (k->key, v, len);
   k->length = len;
   return 1;
+}
+uword
+unformat_vnet_dev_vector (unformat_input_t *in, va_list *args)
+{
+  vnet_dev_t *dev, ***devs = va_arg (*args, vnet_dev_t ***);
+  u8 *s = 0;
+  uword rv = 0;
+
+  while (unformat (in, "%s", &s))
+    {
+      dev = vnet_dev_by_id ((char *) s);
+      if (!dev)
+	break;
+
+      vec_add1 (*devs, dev);
+      vec_reset_length (s);
+      rv++;
+    }
+
+  vec_free (s);
+  return rv;
 }

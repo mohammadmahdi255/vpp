@@ -191,6 +191,8 @@ typedef enum http_content_type_
 #define foreach_http_status_code                                              \
   _ (100, CONTINUE, "100 Continue")                                           \
   _ (101, SWITCHING_PROTOCOLS, "101 Switching Protocols")                     \
+  _ (102, PROCESSING, "102 Processing")                                       \
+  _ (103, EARLY_HINTS, "103 Early Hints")                                     \
   _ (200, OK, "200 OK")                                                       \
   _ (201, CREATED, "201 Created")                                             \
   _ (202, ACCEPTED, "202 Accepted")                                           \
@@ -226,13 +228,26 @@ typedef enum http_content_type_
   _ (417, EXPECTATION_FAILED, "417 Expectation Failed")                       \
   _ (421, MISDIRECTED_REQUEST, "421 Misdirected Request")                     \
   _ (422, UNPROCESSABLE_CONTENT, "422 Unprocessable_Content")                 \
+  _ (423, LOCKED, "423 Locked")                                               \
+  _ (424, FAILED_DEPENDENCY, "424 Failed Dependency")                         \
+  _ (425, TOO_EARLY, "425 Too Early")                                         \
   _ (426, UPGRADE_REQUIRED, "426 Upgrade Required")                           \
+  _ (428, PRECONDITION_REQUIRED, "428 Precondition Required")                 \
+  _ (429, TOO_MANY_REQUESTS, "429 Too Many Requests")                         \
+  _ (431, REQUEST_HEADER_FIELDS_TOO_LARGE,                                    \
+     "431 Request Header Fields Too Large")                                   \
+  _ (451, UNAVAILABLE_FOR_LEGAL_REASONS, "451 Unavailable For Legal Reasons") \
   _ (500, INTERNAL_ERROR, "500 Internal Server Error")                        \
   _ (501, NOT_IMPLEMENTED, "501 Not Implemented")                             \
   _ (502, BAD_GATEWAY, "502 Bad Gateway")                                     \
   _ (503, SERVICE_UNAVAILABLE, "503 Service Unavailable")                     \
   _ (504, GATEWAY_TIMEOUT, "504 Gateway Timeout")                             \
-  _ (505, HTTP_VERSION_NOT_SUPPORTED, "505 HTTP Version Not Supported")
+  _ (505, HTTP_VERSION_NOT_SUPPORTED, "505 HTTP Version Not Supported")       \
+  _ (506, VARIANT_ALSO_NEGOTIATES, "506 Variant Also Negotiates")             \
+  _ (507, INSUFFICIENT_STORAGE, "507 Insufficient Storage")                   \
+  _ (508, LOOP_DETECTED, "508 Loop Detected")                                 \
+  _ (511, NETWORK_AUTHENTICATION_REQUIRED,                                    \
+     "511 Network Authentication Required")
 
 typedef enum http_status_code_
 {
@@ -290,6 +305,8 @@ typedef enum http_status_code_
   _ (CONTENT_LENGTH, "Content-Length", "content-length", 28)                  \
   _ (CONTENT_LOCATION, "Content-Location", "content-location", 29)            \
   _ (CONTENT_RANGE, "Content-Range", "content-range", 30)                     \
+  _ (CONTENT_SECURITY_POLICY, "Content-Security-Policy",                      \
+     "content-security-policy", 0)                                            \
   _ (CONTENT_TYPE, "Content-Type", "content-type", 31)                        \
   _ (COOKIE, "Cookie", "cookie", 32)                                          \
   _ (DATE, "Date", "date", 33)                                                \
@@ -299,6 +316,7 @@ typedef enum http_status_code_
   _ (EARLY_DATA, "Early-Data", "early-data", 0)                               \
   _ (ETAG, "ETag", "etag", 34)                                                \
   _ (EXPECT, "Expect", "expect", 35)                                          \
+  _ (EXPECT_CT, "Expect-CT", "expect-ct", 0)                                  \
   _ (EXPIRES, "Expires", "expires", 36)                                       \
   _ (FORWARDED, "Forwarded", "forwarded", 0)                                  \
   _ (FROM, "From", "from", 37)                                                \
@@ -320,6 +338,7 @@ typedef enum http_status_code_
      "proxy-authentication-info", 0)                                          \
   _ (PROXY_AUTHORIZATION, "Proxy-Authorization", "proxy-authorization", 49)   \
   _ (PROXY_STATUS, "Proxy-Status", "proxy-status", 0)                         \
+  _ (PURPOSE, "Purpose", "purpose", 0)                                        \
   _ (RANGE, "Range", "range", 50)                                             \
   _ (REFERER, "Referer", "referer", 51)                                       \
   _ (REFRESH, "Refresh", "refresh", 52)                                       \
@@ -332,15 +351,23 @@ typedef enum http_status_code_
   _ (STRICT_TRANSPORT_SECURITY, "Strict-Transport-Security",                  \
      "strict-transport-security", 56)                                         \
   _ (TE, "TE", "te", 0)                                                       \
+  _ (TIMING_ALLOW_ORIGIN, "Timing-Allow-Origin", "timing-allow-origin", 0)    \
   _ (TRAILER, "Trailer", "trailer", 0)                                        \
   _ (TRANSFER_ENCODING, "Transfer-Encoding", "transfer-encoding", 57)         \
   _ (UPGRADE, "Upgrade", "upgrade", 0)                                        \
+  _ (UPGRADE_INSECURE_REQUESTS, "Upgrade-Insecure-Requests",                  \
+     "upgrade-insecure-requests", 0)                                          \
   _ (USER_AGENT, "User-Agent", "user-agent", 58)                              \
   _ (VARY, "Vary", "vary", 59)                                                \
   _ (VIA, "Via", "via", 60)                                                   \
   _ (WANT_CONTENT_DIGEST, "Want-Content-Digest", "want-content-digest", 0)    \
   _ (WANT_REPR_DIGEST, "Want-Repr-Digest", "want-repr-digest", 0)             \
-  _ (WWW_AUTHENTICATE, "WWW-Authenticate", "www-authenticate", 61)
+  _ (WWW_AUTHENTICATE, "WWW-Authenticate", "www-authenticate", 61)            \
+  _ (X_CONTENT_TYPE_OPTIONS, "X-Content-Type-Options",                        \
+     "x-content-type-options", 0)                                             \
+  _ (X_FORWARDED_FOR, "X-Forwarded-For", "x-forwarded-for", 0)                \
+  _ (X_FRAME_OPTIONS, "X-Frame-Options", "x-frame-options", 0)                \
+  _ (X_XSS_PROTECTION, "X-XSS-Protection", "x-xss-protection", 0)
 
 typedef enum http_header_name_
 {
@@ -1499,6 +1526,8 @@ http_parse_masque_host_port (u8 *path, u32 path_len,
 }
 
 #define HTTP_INVALID_VARINT			 ((u64) ~0)
+#define HTTP_VARINT_MAX				 0x3FFFFFFFFFFFFFFF
+#define HTTP_VARINT_MAX_LEN			 8
 #define HTTP_CAPSULE_HEADER_MAX_SIZE		 8
 #define HTTP_UDP_PROXY_DATAGRAM_CAPSULE_OVERHEAD 5
 #define HTTP_UDP_PAYLOAD_MAX_LEN		 65527
@@ -1514,7 +1543,7 @@ typedef enum http_capsule_type_
 
 /* variable-length integer (RFC9000 section 16) */
 always_inline u64
-_http_decode_varint (u8 **pos, u8 *end)
+http_decode_varint (u8 **pos, u8 *end)
 {
   u8 first_byte, bytes_left, *p;
   u64 value;
@@ -1551,10 +1580,10 @@ _http_decode_varint (u8 **pos, u8 *end)
 }
 
 always_inline u8 *
-_http_encode_varint (u8 *dst, u64 value)
+http_encode_varint (u8 *dst, u64 value)
 {
-  ASSERT (value <= 0x3FFFFFFFFFFFFFFF);
-  if (value <= 0x3f)
+  ASSERT (value <= HTTP_VARINT_MAX);
+  if (value <= 0x3F)
     {
       *dst++ = (u8) value;
       return dst;
@@ -1587,6 +1616,22 @@ _http_encode_varint (u8 *dst, u64 value)
     }
 }
 
+always_inline u8
+http_varint_len (u64 value)
+{
+  if (value > 0x3F)
+    {
+      if (value > 0x3FFF)
+	{
+	  if (value > 0x3FFFFFFF)
+	    return 8;
+	  return 4;
+	}
+      return 2;
+    }
+  return 1;
+}
+
 always_inline int
 _http_parse_capsule (u8 *data, u64 len, u64 *type, u8 *value_offset,
 		     u64 *value_len)
@@ -1595,7 +1640,7 @@ _http_parse_capsule (u8 *data, u64 len, u64 *type, u8 *value_offset,
   u8 *p = data;
   u8 *end = data + len;
 
-  capsule_type = _http_decode_varint (&p, end);
+  capsule_type = http_decode_varint (&p, end);
   if (capsule_type == HTTP_INVALID_VARINT)
     {
       clib_warning ("failed to parse capsule type");
@@ -1608,7 +1653,7 @@ _http_parse_capsule (u8 *data, u64 len, u64 *type, u8 *value_offset,
       return -1;
     }
 
-  capsule_value_len = _http_decode_varint (&p, end);
+  capsule_value_len = http_decode_varint (&p, end);
   if (capsule_value_len == HTTP_INVALID_VARINT)
     {
       clib_warning ("failed to parse capsule length");
@@ -1664,7 +1709,7 @@ http_decap_udp_payload_datagram (u8 *data, u64 len, u8 *payload_offset,
     }
 
   /* context ID field should be zero (RFC9298 section 4) */
-  context_id = _http_decode_varint (&p, end);
+  context_id = http_decode_varint (&p, end);
   if (context_id != 0)
     {
       *payload_len = value_len + value_offset;
@@ -1702,7 +1747,7 @@ http_encap_udp_payload_datagram (u8 *buf, u64 payload_len)
   *buf++ = HTTP_CAPSULE_TYPE_DATAGRAM;
 
   /* capsule length */
-  buf = _http_encode_varint (buf, payload_len + 1);
+  buf = http_encode_varint (buf, payload_len + 1);
 
   /* context ID */
   *buf++ = 0;

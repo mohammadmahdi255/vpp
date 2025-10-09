@@ -414,6 +414,11 @@ I:	iavf
 M:	Damjan Marion <damarion@cisco.com>
 F:	src/plugins/dev_iavf/
 
+Plugin - IGE Device driver
+I:	ige
+M:	Damjan Marion <damarion@cisco.com>
+F:	src/plugins/dev_ige/
+
 Plugin - Amazon Elastic Network Adapter (ENA) device driver
 I:	ena
 M:	Damjan Marion <damarion@cisco.com>
@@ -915,3 +920,8 @@ I:	sflow
 M:	Pim van Pelt <pim@ipng.nl>
 M:	Neil McKee <neil.mckee@inmon.com>
 F:	src/plugins/sflow/
+
+Plugin - Shared Elog
+I:	selog
+M:	Mohammed Hawari <mohammed@hawari.fr>
+F:	src/plugins/selog

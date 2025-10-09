@@ -6,8 +6,11 @@
 #include <vpp/app/version.h>
 #include <http/http.h>
 #include <http/http_header_names.h>
+#include <http/http2/hpack_inlines.h>
 #include <http/http2/hpack.h>
 #include <http/http2/frame.h>
+#include <http/http3/qpack.h>
+#include <http/http3/frame.h>
 
 #define HTTP_TEST_I(_cond, _comment, _args...)                                \
   ({                                                                          \
@@ -845,10 +848,6 @@ http_test_hpack (vlib_main_t *vm)
 {
   vlib_cli_output (vm, "hpack_decode_int");
 
-  static uword (*_hpack_decode_int) (u8 * *pos, u8 * end, u8 prefix_len);
-  _hpack_decode_int =
-    vlib_get_plugin_symbol ("http_plugin.so", "hpack_decode_int");
-
   u8 *pos, *end, *input = 0;
   uword value;
 #define TEST(i, pl, e)                                                        \
@@ -856,7 +855,7 @@ http_test_hpack (vlib_main_t *vm)
   memcpy (input, i, sizeof (i) - 1);                                          \
   pos = input;                                                                \
   end = vec_end (input);                                                      \
-  value = _hpack_decode_int (&pos, end, (u8) pl);                             \
+  value = hpack_decode_int (&pos, end, (u8) pl);                              \
   HTTP_TEST ((value == (uword) e && pos == end),                              \
 	     "%U with prefix length %u is %llu", format_hex_bytes, input,     \
 	     vec_len (input), (u8) pl, value);                                \
@@ -879,7 +878,7 @@ http_test_hpack (vlib_main_t *vm)
   memcpy (input, i, sizeof (i) - 1);                                          \
   pos = input;                                                                \
   end = vec_end (input);                                                      \
-  value = _hpack_decode_int (&pos, end, (u8) pl);                             \
+  value = hpack_decode_int (&pos, end, (u8) pl);                              \
   HTTP_TEST ((value == HPACK_INVALID_INT),                                    \
 	     "%U with prefix length %u should be invalid", format_hex_bytes,  \
 	     input, vec_len (input), (u8) pl);                                \
@@ -896,16 +895,12 @@ http_test_hpack (vlib_main_t *vm)
 
   vlib_cli_output (vm, "hpack_encode_int");
 
-  static u8 *(*_hpack_encode_int) (u8 * dst, uword value, u8 prefix_len);
-  _hpack_encode_int =
-    vlib_get_plugin_symbol ("http_plugin.so", "hpack_encode_int");
-
   u8 *buf = 0;
   u8 *p;
 
 #define TEST(v, pl, e)                                                        \
   vec_validate_init_empty (buf, 15, 0);                                       \
-  p = _hpack_encode_int (buf, v, (u8) pl);                                    \
+  p = hpack_encode_int (buf, v, (u8) pl);                                     \
   HTTP_TEST (((p - buf) == (sizeof (e) - 1) && !memcmp (buf, e, p - buf)),    \
 	     "%llu with prefix length %u is encoded as %U", v, (u8) pl,       \
 	     format_hex_bytes, buf, p - buf);                                 \
@@ -923,14 +918,14 @@ http_test_hpack (vlib_main_t *vm)
 
   vlib_cli_output (vm, "hpack_decode_string");
 
-  static http2_error_t (*_hpack_decode_string) (u8 * *src, u8 * end, u8 * *buf,
+  static hpack_error_t (*_hpack_decode_string) (u8 * *src, u8 * end, u8 * *buf,
 						uword * buf_len);
   _hpack_decode_string =
     vlib_get_plugin_symbol ("http_plugin.so", "hpack_decode_string");
 
   u8 *bp;
   uword blen, len;
-  http2_error_t rv;
+  hpack_error_t rv;
 
 #define TEST(i, e)                                                            \
   vec_validate (input, sizeof (i) - 2);                                       \
@@ -943,7 +938,7 @@ http_test_hpack (vlib_main_t *vm)
   len = vec_len (buf) - blen;                                                 \
   HTTP_TEST ((len == strlen (e) && !memcmp (buf, e, len) &&                   \
 	      pos == vec_end (input) && bp == buf + len &&                    \
-	      rv == HTTP2_ERROR_NO_ERROR),                                    \
+	      rv == HPACK_ERROR_NONE),                                        \
 	     "%U is decoded as %U", format_hex_bytes, input, vec_len (input), \
 	     format_http_bytes, buf, len);                                    \
   vec_free (input);                                                           \
@@ -988,20 +983,20 @@ http_test_hpack (vlib_main_t *vm)
   vec_free (buf);
 
   /* incomplete */
-  N_TEST ("\x87", HTTP2_ERROR_COMPRESSION_ERROR);
-  N_TEST ("\x07priv", HTTP2_ERROR_COMPRESSION_ERROR);
+  N_TEST ("\x87", HPACK_ERROR_COMPRESSION);
+  N_TEST ("\x07priv", HPACK_ERROR_COMPRESSION);
   /* invalid length */
-  N_TEST ("\x7Fprivate", HTTP2_ERROR_COMPRESSION_ERROR);
+  N_TEST ("\x7Fprivate", HPACK_ERROR_COMPRESSION);
   /* invalid EOF */
-  N_TEST ("\x81\x8C", HTTP2_ERROR_COMPRESSION_ERROR);
+  N_TEST ("\x81\x8C", HPACK_ERROR_COMPRESSION);
   N_TEST ("\x98\xDC\x53\xFF\xFF\xFF\xDF\xFF\xFF\xFF\x14\xFF\xFF\xFF\xF7\xFF"
 	  "\xFF\xFF\xC5\x3F\xFF\xFF\xFD\xFF\xFF",
-	  HTTP2_ERROR_COMPRESSION_ERROR);
+	  HPACK_ERROR_COMPRESSION);
   /* not enough space for decoding */
   N_TEST (
     "\x96\xD0\x7A\xBE\x94\x10\x54\xD4\x44\xA8\x20\x05\x95\x04\x0B\x81\x66"
     "\xE0\x82\xA6\x2D\x1B\xFF",
-    HTTP2_ERROR_INTERNAL_ERROR);
+    HPACK_ERROR_UNKNOWN);
 #undef N_TEST
 
   vlib_cli_output (vm, "hpack_encode_string");
@@ -1042,7 +1037,7 @@ http_test_hpack (vlib_main_t *vm)
 
   vlib_cli_output (vm, "hpack_decode_header");
 
-  static http2_error_t (*_hpack_decode_header) (
+  static hpack_error_t (*_hpack_decode_header) (
     u8 * *src, u8 * end, u8 * *buf, uword * buf_len, u32 * name_len,
     u32 * value_len, hpack_dynamic_table_t * dt);
 
@@ -1075,7 +1070,7 @@ http_test_hpack (vlib_main_t *vm)
   rv = _hpack_decode_header (&pos, vec_end (input), &bp, &blen, &name_len,    \
 			     &value_len, &table);                             \
   len = vec_len (buf) - blen;                                                 \
-  HTTP_TEST ((rv == HTTP2_ERROR_NO_ERROR && table.used == dt_size &&          \
+  HTTP_TEST ((rv == HPACK_ERROR_NONE && table.used == dt_size &&              \
 	      name_len == strlen (e_name) && value_len == strlen (e_value) && \
 	      !memcmp (buf, e_name, name_len) &&                              \
 	      !memcmp (buf + name_len, e_value, value_len) &&                 \
@@ -1617,6 +1612,415 @@ http_test_h2_frame (vlib_main_t *vm)
   return 0;
 }
 
+static int
+http_test_qpack (vlib_main_t *vm)
+{
+  vlib_cli_output (vm, "qpack_decode_header");
+
+  static hpack_error_t (*_qpack_decode_header) (
+    u8 * *src, u8 * end, u8 * *buf, uword * buf_len, u32 * name_len,
+    u32 * value_len);
+
+  _qpack_decode_header =
+    vlib_get_plugin_symbol ("http_plugin.so", "qpack_decode_header");
+
+  u8 *pos, *bp, *buf = 0, *input = 0;
+  uword blen;
+  u32 name_len, value_len;
+  hpack_error_t rv;
+
+#define TEST(i, e_name, e_value)                                              \
+  vec_validate (input, sizeof (i) - 2);                                       \
+  memcpy (input, i, sizeof (i) - 1);                                          \
+  pos = input;                                                                \
+  vec_validate_init_empty (buf, 63, 0);                                       \
+  bp = buf;                                                                   \
+  blen = vec_len (buf);                                                       \
+  rv = _qpack_decode_header (&pos, vec_end (input), &bp, &blen, &name_len,    \
+			     &value_len);                                     \
+  HTTP_TEST ((rv == HPACK_ERROR_NONE && name_len == strlen (e_name) &&        \
+	      value_len == strlen (e_value) &&                                \
+	      !memcmp (buf, e_name, name_len) &&                              \
+	      !memcmp (buf + name_len, e_value, value_len) &&                 \
+	      vec_len (buf) == (blen + name_len + value_len) &&               \
+	      pos == vec_end (input) && bp == buf + name_len + value_len),    \
+	     "%U is decoded as '%U: %U'", format_hex_bytes, input,            \
+	     vec_len (input), format_http_bytes, buf, name_len,               \
+	     format_http_bytes, buf + name_len, value_len);                   \
+  vec_free (input);                                                           \
+  vec_free (buf);
+
+  /* literal field line with name reference, static table */
+  TEST ("\x51\x0B\x2F\x69\x6E\x64\x65\x78\x2E\x68\x74\x6D\x6C", ":path",
+	"/index.html");
+  /* indexed field line, static table */
+  TEST ("\xC1", ":path", "/");
+  /* literal field line with literal name */
+  TEST ("\x23\x61\x62\x63\x01\x5A", "abc", "Z");
+
+  vlib_cli_output (vm, "qpack_parse_request");
+
+  static http3_error_t (*_qpack_parse_request) (
+    u8 * src, u32 src_len, u8 * dst, u32 dst_len,
+    hpack_request_control_data_t * control_data, http_field_line_t * *headers,
+    qpack_decoder_ctx_t * decoder_ctx);
+
+  _qpack_parse_request =
+    vlib_get_plugin_symbol ("http_plugin.so", "qpack_parse_request");
+
+  http3_error_t err;
+  http_field_line_t *headers = 0;
+  qpack_decoder_ctx_t decoder_ctx = {};
+  hpack_request_control_data_t req_control_data = {};
+  u8 req[] = { 0x00, 0x00, 0xD1, 0xD7, 0x50, 0x01, 0x61,
+	       0xC1, 0x23, 0x61, 0x62, 0x63, 0x01, 0x5A };
+  u16 parsed_bitmap =
+    HPACK_PSEUDO_HEADER_METHOD_PARSED | HPACK_PSEUDO_HEADER_SCHEME_PARSED |
+    HPACK_PSEUDO_HEADER_PATH_PARSED | HPACK_PSEUDO_HEADER_AUTHORITY_PARSED;
+
+  vec_validate_init_empty (buf, 254, 0);
+  err = _qpack_parse_request (req, 14, buf, vec_len (buf), &req_control_data,
+			      &headers, &decoder_ctx);
+  HTTP_TEST (
+    (err == HTTP3_ERROR_NO_ERROR &&
+     req_control_data.parsed_bitmap == parsed_bitmap &&
+     req_control_data.method == HTTP_REQ_GET &&
+     req_control_data.scheme == HTTP_URL_SCHEME_HTTPS &&
+     req_control_data.path_len == 1 && req_control_data.path[0] == '/' &&
+     req_control_data.authority_len == 1 &&
+     req_control_data.authority[0] == 'a' && vec_len (headers) == 1 &&
+     req_control_data.headers_len == 4 && headers[0].name_len == 3 &&
+     headers[0].value_len == 1 &&
+     !memcmp (req_control_data.headers + headers[0].name_offset, "abc", 3) &&
+     !memcmp (req_control_data.headers + headers[0].value_offset, "Z", 1)),
+    "decoder result: %U", format_http3_error, err);
+
+  vec_free (buf);
+  vec_free (headers);
+  memset (&decoder_ctx, 0, sizeof (decoder_ctx));
+
+  vlib_cli_output (vm, "qpack_parse_response");
+
+  static http3_error_t (*_qpack_parse_response) (
+    u8 * src, u32 src_len, u8 * dst, u32 dst_len,
+    hpack_response_control_data_t * control_data, http_field_line_t * *headers,
+    qpack_decoder_ctx_t * decoder_ctx);
+
+  _qpack_parse_response =
+    vlib_get_plugin_symbol ("http_plugin.so", "qpack_parse_response");
+
+  hpack_response_control_data_t resp_control_data = {};
+  u8 resp[] = { 0x00, 0x00, 0xD9 };
+
+  vec_validate_init_empty (buf, 63, 0);
+  err = _qpack_parse_response (resp, 3, buf, vec_len (buf), &resp_control_data,
+			       &headers, &decoder_ctx);
+  HTTP_TEST (
+    (err == HTTP3_ERROR_NO_ERROR &&
+     resp_control_data.parsed_bitmap == HPACK_PSEUDO_HEADER_STATUS_PARSED &&
+     resp_control_data.sc == HTTP_STATUS_OK && vec_len (headers) == 0),
+    "decoder result: %U", format_http3_error, err);
+  vec_free (buf);
+  vec_free (headers);
+
+  vlib_cli_output (vm, "qpack_encode_header");
+
+  static u8 *(*_qpack_encode_header) (u8 * dst, http_header_name_t name,
+				      const u8 *value, u32 value_len);
+  _qpack_encode_header =
+    vlib_get_plugin_symbol ("http_plugin.so", "qpack_encode_header");
+
+  /* indexed field line, static table */
+  buf = _qpack_encode_header (buf, HTTP_HEADER_CACHE_CONTROL,
+			      (const u8 *) "no-cache", 8);
+  HTTP_TEST ((vec_len (buf) == 1 && buf[0] == 0xE7),
+	     "'cache-control: no-cache' encoded as: %U", format_hex_bytes, buf,
+	     vec_len (buf));
+  vec_free (buf);
+
+  /* literal field line with name reference, static table */
+  u8 expected1[] = "\x56\x96\xD0\x7A\xBE\x94\x10\x54\xD4\x44\xA8\x20\x05\x95"
+		   "\x04\x0B\x81\x66\xE0\x82\xA6\x2D\x1B\xFF";
+  buf = _qpack_encode_header (
+    buf, HTTP_HEADER_DATE, (const u8 *) "Mon, 21 Oct 2013 20:13:21 GMT", 29);
+  HTTP_TEST ((vec_len (buf) == (sizeof (expected1) - 1) &&
+	      !memcmp (buf, expected1, vec_len (buf))),
+	     "'date: Mon, 21 Oct 2013 20:13:21 GMT' encoded as: %U",
+	     format_hex_bytes, buf, vec_len (buf));
+  vec_free (buf);
+
+  /* literal field line with literal name */
+  u8 expected2[] = "\x2F\x01\x20\xC9\x39\x56\x42\x46\x9B\x51\x8D\xC1\xE4\x74"
+		   "\xD7\x41\x6F\x0C\x93\x97\xED\x49\xCC\x9F";
+  buf = _qpack_encode_header (buf, HTTP_HEADER_CACHE_STATUS,
+			      (const u8 *) "ExampleCache; hit", 17);
+  HTTP_TEST ((vec_len (buf) == (sizeof (expected2) - 1) &&
+	      !memcmp (buf, expected2, vec_len (buf))),
+	     "'cache-status: ExampleCache; hit' encoded as: %U",
+	     format_hex_bytes, buf, vec_len (buf));
+  vec_free (buf);
+
+  vlib_cli_output (vm, "qpack_encode_custom_header");
+
+  static u8 *(*_qpack_encode_custom_header) (
+    u8 * dst, const u8 *name, u32 name_len, const u8 *value, u32 value_len);
+  _qpack_encode_custom_header =
+    vlib_get_plugin_symbol ("http_plugin.so", "qpack_encode_custom_header");
+
+  u8 expected3[] = "\x2E\x40\xEA\x93\xC1\x89\x3F\x83\x45\x63\xA7";
+  buf = _qpack_encode_custom_header (buf, (const u8 *) "sandwich", 8,
+				     (const u8 *) "spam", 4);
+  HTTP_TEST ((vec_len (buf) == (sizeof (expected3) - 1) &&
+	      !memcmp (buf, expected3, vec_len (buf))),
+	     "'sandwich: spam' encoded as: %U", format_hex_bytes, buf,
+	     vec_len (buf));
+  vec_free (buf);
+
+  vlib_cli_output (vm, "qpack_serialize_response");
+
+  static void (*_qpack_serialize_response) (
+    u8 * app_headers, u32 app_headers_len,
+    hpack_response_control_data_t * control_data, u8 * *dst);
+  _qpack_serialize_response =
+    vlib_get_plugin_symbol ("http_plugin.so", "qpack_serialize_response");
+
+  u8 *server_name = format (0, "http unit tests");
+  u8 *date = format (0, "Mon, 21 Oct 2013 20:13:21 GMT");
+
+  memset (&resp_control_data, 0, sizeof (resp_control_data));
+  vec_validate_init_empty (buf, 127, 0xFF);
+  vec_reset_length (buf);
+  resp_control_data.sc = HTTP_STATUS_GATEWAY_TIMEOUT;
+  resp_control_data.server_name = server_name;
+  resp_control_data.server_name_len = vec_len (server_name);
+  resp_control_data.date = date;
+  resp_control_data.date_len = vec_len (date);
+  u8 expected4[] =
+    "\x00\x00\x5F\x09\x03\x35\x30\x34\x5F\x4D\x8B\x9D\x29\xAD\x4B\x6A\x32\x54"
+    "\x49\x50\x94\x7F\x56\x96\xD0\x7A\xBE\x94\x10\x54\xD4\x44\xA8\x20\x05\x95"
+    "\x04\x0B\x81\x66\xE0\x82\xA6\x2D\x1B\xFF\xC4";
+  _qpack_serialize_response (0, 0, &resp_control_data, &buf);
+  HTTP_TEST ((vec_len (buf) == (sizeof (expected4) - 1) &&
+	      !memcmp (buf, expected4, vec_len (buf))),
+	     "response encoded as: %U", format_hex_bytes, buf, vec_len (buf));
+  vec_free (buf);
+
+  resp_control_data.sc = HTTP_STATUS_OK;
+  resp_control_data.content_len = 1024;
+  http_headers_ctx_t headers_ctx;
+  u8 *headers_buf = 0;
+  vec_validate_init_empty (headers_buf, 127, 0xFF);
+  http_init_headers_ctx (&headers_ctx, headers_buf, vec_len (headers_buf));
+  http_add_header (&headers_ctx, HTTP_HEADER_CONTENT_TYPE,
+		   http_token_lit ("text/plain"));
+  http_add_header (&headers_ctx, HTTP_HEADER_CACHE_STATUS,
+		   http_token_lit ("ExampleCache; hit"));
+  http_add_custom_header (&headers_ctx, http_token_lit ("sandwich"),
+			  http_token_lit ("spam"));
+  u8 expected5[] =
+    "\x00\x00\xD9\x5F\x4D\x8B\x9D\x29\xAD\x4B\x6A\x32\x54\x49\x50\x94\x7F\x56"
+    "\x96\xD0\x7A\xBE\x94\x10\x54\xD4\x44\xA8\x20\x05\x95\x04\x0B\x81\x66\xE0"
+    "\x82\xA6\x2D\x1B\xFF\x54\x83\x08\x04\xD7\xF5\x2F\x01\x20\xC9\x39\x56\x42"
+    "\x46\x9B\x51\x8D\xC1\xE4\x74\xD7\x41\x6F\x0C\x93\x97\xED\x49\xCC\x9F\x2E"
+    "\x40\xEA\x93\xC1\x89\x3F\x83\x45\x63\xA7";
+  _qpack_serialize_response (headers_buf, headers_ctx.tail_offset,
+			     &resp_control_data, &buf);
+  HTTP_TEST ((vec_len (buf) == (sizeof (expected5) - 1) &&
+	      !memcmp (buf, expected5, vec_len (buf))),
+	     "response encoded as: %U", format_hex_bytes, buf, vec_len (buf));
+  vec_free (headers_buf);
+  vec_free (buf);
+  vec_free (date);
+
+  vlib_cli_output (vm, "qpack_serialize_request");
+
+  static void (*_qpack_serialize_request) (
+    u8 * app_headers, u32 app_headers_len,
+    hpack_request_control_data_t * control_data, u8 * *dst);
+  _qpack_serialize_request =
+    vlib_get_plugin_symbol ("http_plugin.so", "qpack_serialize_request");
+
+  u8 *authority = format (0, "www.example.com");
+  u8 *path = format (0, "/");
+  memset (&req_control_data, 0, sizeof (req_control_data));
+  vec_validate_init_empty (headers_buf, 127, 0xFF);
+  req_control_data.method = HTTP_REQ_GET;
+  req_control_data.parsed_bitmap = HPACK_PSEUDO_HEADER_SCHEME_PARSED;
+  req_control_data.scheme = HTTP_URL_SCHEME_HTTPS;
+  req_control_data.parsed_bitmap |= HPACK_PSEUDO_HEADER_PATH_PARSED;
+  req_control_data.path = path;
+  req_control_data.path_len = vec_len (path);
+  req_control_data.parsed_bitmap |= HPACK_PSEUDO_HEADER_AUTHORITY_PARSED;
+  req_control_data.authority = authority;
+  req_control_data.authority_len = vec_len (authority);
+  req_control_data.user_agent_len = 0;
+  req_control_data.content_len = HPACK_ENCODER_SKIP_CONTENT_LEN;
+  u8 expected6[] = "\x00\x00\xD1\xD7\xC1\x80\x8C\xF1\xE3\xC2\xE5\xF2\x3A\x6B"
+		   "\xA0\xAB\x90\xF4\xFF";
+  _qpack_serialize_request (0, 0, &req_control_data, &buf);
+  HTTP_TEST ((vec_len (buf) == (sizeof (expected6) - 1) &&
+	      !memcmp (buf, expected6, vec_len (buf))),
+	     "request encoded as: %U", format_hex_bytes, buf, vec_len (buf));
+  vec_free (buf);
+  vec_free (authority);
+  vec_free (path);
+
+  authority = format (0, "example.org:123");
+  memset (&req_control_data, 0, sizeof (req_control_data));
+  vec_validate_init_empty (headers_buf, 127, 0xFF);
+  req_control_data.method = HTTP_REQ_CONNECT;
+  req_control_data.parsed_bitmap |= HPACK_PSEUDO_HEADER_AUTHORITY_PARSED;
+  req_control_data.authority = authority;
+  req_control_data.authority_len = vec_len (authority);
+  req_control_data.user_agent = server_name;
+  req_control_data.user_agent_len = vec_len (server_name);
+  req_control_data.content_len = HPACK_ENCODER_SKIP_CONTENT_LEN;
+  vec_validate (headers_buf, 127);
+  http_init_headers_ctx (&headers_ctx, headers_buf, vec_len (headers_buf));
+  http_add_custom_header (&headers_ctx, http_token_lit ("sandwich"),
+			  http_token_lit ("spam"));
+  u8 expected7[] =
+    "\x00\x00\xCF\x80\x8B\x2F\x91\xD3\x5D\x05\x5C\xF6\x4D\x70\x22\x67\x5F\x50"
+    "\x8B\x9D\x29\xAD\x4B\x6A\x32\x54\x49\x50\x94\x7f\x2E\x40\xEA\x93\xC1\x89"
+    "\x3F\x83\x45\x63\xA7";
+  _qpack_serialize_request (headers_buf, headers_ctx.tail_offset,
+			    &req_control_data, &buf);
+  HTTP_TEST ((vec_len (buf) == (sizeof (expected7) - 1) &&
+	      !memcmp (buf, expected7, vec_len (buf))),
+	     "request encoded as: %U", format_hex_bytes, buf, vec_len (buf));
+
+  vec_free (server_name);
+  vec_free (buf);
+  vec_free (authority);
+
+  return 0;
+}
+
+static int
+http_test_h3_frame (vlib_main_t *vm)
+{
+  vlib_cli_output (vm, "http3_frame_header_read");
+
+  static http3_error_t (*_http3_frame_header_read) (
+    u8 * src, u64 src_len, http3_stream_type_t stream_type,
+    http3_frame_header_t * fh);
+  _http3_frame_header_read =
+    vlib_get_plugin_symbol ("http_plugin.so", "http3_frame_header_read");
+
+  http3_error_t rv;
+  http3_frame_header_t fh = {};
+  u8 data[] = {
+    0x00, 0x09, 0x6e, 0x6f, 0x74, 0x20, 0x66, 0x6f, 0x75, 0x6e, 0x64,
+  };
+  rv = _http3_frame_header_read (data, sizeof (data),
+				 HTTP3_STREAM_TYPE_REQUEST, &fh);
+  HTTP_TEST ((rv == HTTP3_ERROR_NO_ERROR && fh.type == HTTP3_FRAME_TYPE_DATA &&
+	      fh.length == 9 && fh.payload[0] == data[2]),
+	     "frame identified as DATA");
+
+  rv = _http3_frame_header_read (data, 1, HTTP3_STREAM_TYPE_REQUEST, &fh);
+  HTTP_TEST ((rv == HTTP3_ERROR_INCOMPLETE), "frame is incomplete (rv=%d)",
+	     rv);
+
+  rv = _http3_frame_header_read (data, sizeof (data),
+				 HTTP3_STREAM_TYPE_CONTROL, &fh);
+  HTTP_TEST ((rv == HTTP3_ERROR_FRAME_UNEXPECTED),
+	     "frame is on wrong stream (rv=0x%04x)", rv);
+
+  vlib_cli_output (vm, "http3_frame_header_write");
+
+  u8 header_buf[HTTP3_FRAME_HEADER_MAX_LEN] = {};
+  u8 header_len =
+    http3_frame_header_write (HTTP3_FRAME_TYPE_DATA, 9, header_buf);
+  HTTP_TEST ((header_len == 2 && !memcmp (header_buf, data, header_len)),
+	     "DATA frame header written: %U", format_http_bytes, header_buf,
+	     header_len);
+
+  vlib_cli_output (vm, "http3_frame_goaway_read");
+
+  static http3_error_t (*_http3_frame_goaway_read) (u8 * payload, u64 len,
+						    u64 * stream_or_push_id);
+  _http3_frame_goaway_read =
+    vlib_get_plugin_symbol ("http_plugin.so", "http3_frame_goaway_read");
+
+  u8 goaway[] = {
+    0x07, 0x02, 0x7B, 0xBD, 0xFE,
+  };
+  u64 stream_id;
+  rv = _http3_frame_header_read (goaway, 4, HTTP3_STREAM_TYPE_CONTROL, &fh);
+  HTTP_TEST ((rv == HTTP3_ERROR_NO_ERROR &&
+	      fh.type == HTTP3_FRAME_TYPE_GOAWAY && fh.length == 2 &&
+	      fh.payload[0] == goaway[2]),
+	     "frame identified as GOAWAY");
+  rv = _http3_frame_goaway_read (fh.payload, fh.length, &stream_id);
+  HTTP_TEST ((rv == HTTP3_ERROR_NO_ERROR && stream_id == 15293),
+	     "GOAWAY stream ID %lu (rv=0x%04x)", stream_id, rv);
+
+  rv = _http3_frame_goaway_read (fh.payload, 1, &stream_id);
+  HTTP_TEST ((rv == HTTP3_ERROR_FRAME_ERROR),
+	     "GOAWAY frame payload is corrupted (rv=0x%04x)", rv);
+
+  rv = _http3_frame_goaway_read (fh.payload, 3, &stream_id);
+  HTTP_TEST ((rv == HTTP3_ERROR_FRAME_ERROR),
+	     "GOAWAY frame payload has extra bytes (rv=0x%04x)", rv);
+
+  vlib_cli_output (vm, "http3_frame_goaway_write");
+  static void (*_http3_frame_goaway_write) (u64 stream_or_push_id, u8 * *dst);
+  _http3_frame_goaway_write =
+    vlib_get_plugin_symbol ("http_plugin.so", "http3_frame_goaway_write");
+
+  u8 *buf = 0;
+  _http3_frame_goaway_write (15293, &buf);
+  HTTP_TEST ((vec_len (buf) == 4 && !memcmp (buf, goaway, 4)),
+	     "GOAWAY frame written: %U", format_hex_bytes, buf, vec_len (buf));
+  vec_reset_length (buf);
+
+  vlib_cli_output (vm, "http3_frame_settings_read");
+
+  static http3_error_t (*_http3_frame_settings_read) (
+    u8 * payload, u64 len, http3_conn_settings_t * settings);
+
+  _http3_frame_settings_read =
+    vlib_get_plugin_symbol ("http_plugin.so", "http3_frame_settings_read");
+
+  http3_conn_settings_t h3_settings = {};
+  u8 settings[] = {
+    0x04, 0x04, 0x07, 0x05, 0x08, 0x01, 0x33, 0x02,
+  };
+  rv = _http3_frame_header_read (settings, 6, HTTP3_STREAM_TYPE_CONTROL, &fh);
+  HTTP_TEST ((rv == HTTP3_ERROR_NO_ERROR &&
+	      fh.type == HTTP3_FRAME_TYPE_SETTINGS && fh.length == 4 &&
+	      fh.payload[0] == settings[2]),
+	     "frame identified as SETTINGS");
+  rv = _http3_frame_settings_read (fh.payload, fh.length, &h3_settings);
+  HTTP_TEST (
+    (rv == HTTP3_ERROR_NO_ERROR && h3_settings.qpack_blocked_streams == 5 &&
+     h3_settings.enable_connect_protocol == 1 &&
+     h3_settings.h3_datagram == 0 && h3_settings.max_field_section_size == 0 &&
+     h3_settings.qpack_max_table_capacity == 0),
+    "SETTINGS frame payload parsed (rv=0x%04x)", rv);
+  rv = _http3_frame_settings_read (fh.payload, 6, &h3_settings);
+  HTTP_TEST ((rv == HTTP3_ERROR_SETTINGS_ERROR),
+	     "invalid setting value (rv=0x%04x)", rv);
+
+  vlib_cli_output (vm, "http3_frame_settings_write");
+
+  static void (*_http3_frame_settings_write) (http3_conn_settings_t * settings,
+					      u8 * *dst);
+  _http3_frame_settings_write =
+    vlib_get_plugin_symbol ("http_plugin.so", "http3_frame_settings_write");
+  h3_settings = http3_default_conn_settings;
+  h3_settings.enable_connect_protocol = 1;
+  h3_settings.qpack_blocked_streams = 5;
+  _http3_frame_settings_write (&h3_settings, &buf);
+  HTTP_TEST ((vec_len (buf) == 6 && !memcmp (buf, settings, 6)),
+	     "SETTINGS frame written: %U", format_hex_bytes, buf,
+	     vec_len (buf));
+
+  vec_free (buf);
+  return 0;
+}
+
 static clib_error_t *
 test_http_command_fn (vlib_main_t *vm, unformat_input_t *input,
 		      vlib_cli_command_t *cmd)
@@ -1638,6 +2042,10 @@ test_http_command_fn (vlib_main_t *vm, unformat_input_t *input,
 	res = http_test_hpack (vm);
       else if (unformat (input, "h2-frame"))
 	res = http_test_h2_frame (vm);
+      else if (unformat (input, "qpack"))
+	res = http_test_qpack (vm);
+      else if (unformat (input, "h3-frame"))
+	res = http_test_h3_frame (vm);
       else if (unformat (input, "all"))
 	{
 	  if ((res = http_test_parse_authority (vm)))
@@ -1653,6 +2061,10 @@ test_http_command_fn (vlib_main_t *vm, unformat_input_t *input,
 	  if ((res = http_test_hpack (vm)))
 	    goto done;
 	  if ((res = http_test_h2_frame (vm)))
+	    goto done;
+	  if ((res = http_test_qpack (vm)))
+	    goto done;
+	  if ((res = http_test_h3_frame (vm)))
 	    goto done;
 	}
       else
