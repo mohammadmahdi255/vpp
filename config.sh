@@ -33,11 +33,13 @@
 
 # echo "send traffic by: tcpreplay -i ${PeerMainInputLinkName} ${file_dir}/${file_name}"
 
+# pcap /home/mahdi255/nemati/pcap/hp-erm-1.cap \
+# pcap /home/mahdi255/nemati/pcap/ipv4frags.pcap \
 
 vppctl packet-generator new \
     limit 49546457546 \
     name fragtest \
-    pcap /home/mahdi255/nemati/pcap/hp-erm-1.cap \
+    pcap /home/mahdi255/nemati/pcap/vlan.pcap \
     node ethernet-detunnel
 
 vppctl packet-generator enable

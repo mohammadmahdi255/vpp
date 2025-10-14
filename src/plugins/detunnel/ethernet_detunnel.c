@@ -6,6 +6,17 @@
 #include <vnet/vnet.h>
 #include <vppinfra/clib.h>
 
+#undef always_inline
+#include <rte_hash.h>
+#include <rte_hash_crc.h>
+
+#if CLIB_DEBUG > 0
+#define always_inline static inline
+#else
+#define always_inline static inline __attribute__ ((__always_inline__))
+#endif
+
+
 #define foreach_ethernet_counter	\
 	_(TOTAL, total)					\
 	_(PROCESSED, processed)			\
@@ -46,84 +57,196 @@ ethernet_detunnel_main_t ethernet_detunnel_main;
 extern ethernet_detunnel_main_t ethernet_detunnel_main;
 #endif
 
-static_always_inline u16 process_buffer(vlib_main_t *vm, vlib_buffer_t *b, ethernet_trace_t *t)
+static_always_inline bool clib_u32x4_is_all_equal(u32 *data, u32 ref)
+{
+#ifdef CLIB_HAVE_VEC128
+	return (bool) u32x4_is_all_equal(*(u32x4u *) data, ref);
+#else
+    return (data[0] == ref) && (data[1] == ref) && (data[2] == ref) && (data[3] == ref);
+#endif
+}
+
+static_always_inline bool process_buffer_4x(vlib_main_t *vm, vlib_node_runtime_t *node,
+		vlib_buffer_t* b[4], u16 next[4])
 {
 	ethernet_detunnel_main_t *edm = &ethernet_detunnel_main;
-	t->sw_if_index = vnet_buffer(b)->sw_if_index[VLIB_RX];
-	t->ethertype = 0;
-	t->next_index = NEXT_NODE_ERROR_DROP;
 
-	if (PREDICT_FALSE(b->flags & VLIB_BUFFER_NEXT_PRESENT))
-		return t->next_index;
+	u32 sw_idx[4] = {
+		vnet_buffer(b[0])->sw_if_index[VLIB_RX],
+		vnet_buffer(b[1])->sw_if_index[VLIB_RX],
+		vnet_buffer(b[2])->sw_if_index[VLIB_RX],
+		vnet_buffer(b[3])->sw_if_index[VLIB_RX]
+	};
 
-	if (PREDICT_FALSE(edm->counter_if_index < t->sw_if_index))
+	if (PREDICT_FALSE(edm->counter_if_index < sw_idx[0] || !clib_u32x4_is_all_equal(sw_idx, sw_idx[0])))
+		return false;
+
+	if (PREDICT_FALSE(b[0]->current_length < sizeof(ethernet_header_t) ||
+			b[1]->current_length < sizeof(ethernet_header_t) ||
+			b[2]->current_length < sizeof(ethernet_header_t) ||
+			b[3]->current_length < sizeof(ethernet_header_t)))
+		return false;
+
+	u16 ethertype[4] = {
+		((ethernet_header_t *) vlib_buffer_get_current(b[0]))->type,
+		((ethernet_header_t *) vlib_buffer_get_current(b[1]))->type,
+		((ethernet_header_t *) vlib_buffer_get_current(b[2]))->type,
+		((ethernet_header_t *) vlib_buffer_get_current(b[3]))->type
+	};
+
+	if (PREDICT_FALSE(ethertype[0] != ethertype[1] || ethertype[0] != ethertype[2] || ethertype[0] != ethertype[3]))
+		return false;
+
+	u32 total_bytes = b[0]->current_length + b[1]->current_length + b[2]->current_length + b[3]->current_length;
+
+	vlib_increment_combined_counter(&edm->counters[ETHERNET_TOTAL], vm->thread_index,
+			sw_idx[0], 4, total_bytes);
+	vlib_increment_combined_counter(&edm->counters[ETHERNET_PROCESSED], vm->thread_index,
+			sw_idx[0], 4, 4 * sizeof(ethernet_header_t));
+
+	vlib_buffer_advance(b[0], sizeof(ethernet_header_t));
+	vlib_buffer_advance(b[1], sizeof(ethernet_header_t));
+	vlib_buffer_advance(b[2], sizeof(ethernet_header_t));
+	vlib_buffer_advance(b[3], sizeof(ethernet_header_t));
+
+	switch (ethertype[0])
 	{
-#define _(id, name) vlib_validate_combined_counter(&edm->counters[ETHERNET_##id], t->sw_if_index);
+		case __bswap_constant_16(ETHERNET_TYPE_VLAN):
+		{
+			next[0] = next[1] = next[2] = next[3] = NEXT_NODE_VLAN_DETUNNEL;
+			break;
+		}
+		case __bswap_constant_16(ETHERNET_TYPE_IP4):
+		{
+			next[0] = next[1] = next[2] = next[3] = NEXT_NODE_ERROR_DROP;
+			break;
+		}
+		case __bswap_constant_16(ETHERNET_TYPE_IP6):
+		{
+			next[0] = next[1] = next[2] = next[3] = NEXT_NODE_ERROR_DROP;
+			break;
+		}
+		default:
+		{
+			vlib_increment_combined_counter(&edm->counters[ETHERNET_DROP], vm->thread_index,
+					sw_idx[0], 4, total_bytes);
+			next[0] = next[1] = next[2] = next[3] = NEXT_NODE_ERROR_DROP;
+			break;
+		}
+	}
+
+	if (PREDICT_FALSE(node->flags & VLIB_NODE_FLAG_TRACE))
+	{
+		if (PREDICT_FALSE(b[0]->flags & VLIB_BUFFER_IS_TRACED))
+		{
+			ethernet_trace_t *t = vlib_add_trace(vm, node, b[0], sizeof(ethernet_trace_t));
+			t->sw_if_index = sw_idx[0];
+			t->ethertype = ethertype[0];
+			t->next_index = next[0];
+		}
+
+		if (PREDICT_FALSE(b[1]->flags & VLIB_BUFFER_IS_TRACED))
+		{
+			ethernet_trace_t *t = vlib_add_trace(vm, node, b[1], sizeof(ethernet_trace_t));
+			t->sw_if_index = sw_idx[1];
+			t->ethertype = ethertype[1];
+			t->next_index = next[1];
+		}
+
+		if (PREDICT_FALSE(b[2]->flags & VLIB_BUFFER_IS_TRACED))
+		{
+			ethernet_trace_t *t = vlib_add_trace(vm, node, b[2], sizeof(ethernet_trace_t));
+			t->sw_if_index = sw_idx[2];
+			t->ethertype = ethertype[2];
+			t->next_index = next[2];
+		}
+
+		if (PREDICT_FALSE(b[3]->flags & VLIB_BUFFER_IS_TRACED))
+		{
+			ethernet_trace_t *t = vlib_add_trace(vm, node, b[3], sizeof(ethernet_trace_t));
+			t->sw_if_index = sw_idx[3];
+			t->ethertype = ethertype[3];
+			t->next_index = next[3];
+		}
+	}
+
+	return true;
+}
+
+static_always_inline void process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, u16 *next)
+{
+	ethernet_detunnel_main_t *edm = &ethernet_detunnel_main;
+
+	u32 sw_idx = vnet_buffer(b)->sw_if_index[VLIB_RX];
+
+	if (PREDICT_FALSE(edm->counter_if_index < sw_idx))
+	{
+#define _(id, name) vlib_validate_combined_counter(&edm->counters[ETHERNET_##id], sw_idx);
 	foreach_ethernet_counter
 #undef _
 
-		for (u32 i = edm->counter_if_index + 1; i <= t->sw_if_index; i++)
+		for (u32 i = edm->counter_if_index + 1; i <= sw_idx; i++)
 		{
 #define _(id, name) vlib_zero_combined_counter(&edm->counters[ETHERNET_##id], i);
 	foreach_ethernet_counter
 #undef _
 		}
 
-		edm->counter_if_index = t->sw_if_index;
+		edm->counter_if_index = sw_idx;
 	}
 
 	vlib_increment_combined_counter(&edm->counters[ETHERNET_TOTAL], vm->thread_index,
-			t->sw_if_index, 1, b->current_length);
+			sw_idx, 1, b->current_length);
 
 	if (PREDICT_FALSE(b->current_length < sizeof(ethernet_header_t)))
 	{
 		vlib_increment_combined_counter(&edm->counters[ETHERNET_FAILED], vm->thread_index,
-				t->sw_if_index, 1, b->current_length);
-		return t->next_index;
+				sw_idx, 1, b->current_length);
+		next[0] = NEXT_NODE_ERROR_DROP;
+		goto trace;
 	}
 
-	ethernet_header_t *eth_header = vlib_buffer_get_current(b);
+	u16 ethertype = ((ethernet_header_t *) vlib_buffer_get_current(b))->type;
 	vlib_buffer_advance(b, sizeof(ethernet_header_t));
 	vlib_increment_combined_counter(&edm->counters[ETHERNET_PROCESSED], vm->thread_index,
-			t->sw_if_index, 1, sizeof(ethernet_header_t));
+			sw_idx, 1, sizeof(ethernet_header_t));
 
-	t->ethertype = ntohs(eth_header->type);
-
-	switch (t->ethertype)
+	switch (ethertype)
 	{
-		case ETHERNET_TYPE_VLAN:
+		case __bswap_constant_16(ETHERNET_TYPE_VLAN):
 		{
-			t->next_index = NEXT_NODE_ERROR_DROP;
+			next[0] = NEXT_NODE_VLAN_DETUNNEL;
 			break;
 		}
-		case ETHERNET_TYPE_IP4:
+		case __bswap_constant_16(ETHERNET_TYPE_IP4):
 		{
-			t->next_index = NEXT_NODE_IP4;
+			next[0] = NEXT_NODE_ERROR_DROP;
 			break;
 		}
-		case ETHERNET_TYPE_IP6:
+		case __bswap_constant_16(ETHERNET_TYPE_IP6):
 		{
-			t->next_index = NEXT_NODE_IP6;
+			next[0] = NEXT_NODE_ERROR_DROP;
 			break;
 		}
 		default:
 		{
 			vlib_increment_combined_counter(&edm->counters[ETHERNET_DROP], vm->thread_index,
-					t->sw_if_index, 1, b->current_length);
-			t->next_index = NEXT_NODE_ERROR_DROP;
+					sw_idx, 1, b->current_length);
+			next[0] = NEXT_NODE_ERROR_DROP;
 			break;
 		}
 	}
 
-	return t->next_index;
-}
-
-static_always_inline void trace_buffer(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, ethernet_trace_t *t)
-{
-	if (PREDICT_FALSE(b->flags & VLIB_BUFFER_IS_TRACED))
+trace:
+	if (PREDICT_FALSE(node->flags & VLIB_NODE_FLAG_TRACE))
 	{
-		ethernet_trace_t *trace = vlib_add_trace(vm, node, b, sizeof(ethernet_trace_t));
-		*trace = *t;
+		if (PREDICT_FALSE(b->flags & VLIB_BUFFER_IS_TRACED))
+		{
+			ethernet_trace_t *t = vlib_add_trace(vm, node, b, sizeof(ethernet_trace_t));
+			t->sw_if_index = sw_idx;
+			t->ethertype = ethertype;
+			t->next_index = next[0];
+		}
 	}
 }
 
@@ -135,7 +258,7 @@ static u8 *format_ethernet_trace(u8 *s, va_list *args)
 	vlib_node_t *CLIB_UNUSED(node) = va_arg(*args, vlib_node_t *);
 	ethernet_trace_t *t = va_arg(*args, ethernet_trace_t *);
 	return format(s, "ethernet: sw_if_index %u ethertype 0x%04x next %u",
-			t->sw_if_index, t->ethertype, t->next_index);
+			t->sw_if_index, ntohs(t->ethertype), t->next_index);
 }
 
 VLIB_REGISTER_NODE (ethernet_detunnel) = {
@@ -165,9 +288,6 @@ VLIB_NODE_FN (ethernet_detunnel) (vlib_main_t *vm, vlib_node_runtime_t *node, vl
 	u32 n_left_from = frame->n_vectors;
 
 	vlib_get_buffers(vm, from, bufs, n_left_from);
-	ethernet_trace_t t[4];
-
-	bool is_trace = node->flags & VLIB_NODE_FLAG_TRACE;
 
 	while (n_left_from >= 4) {
 
@@ -184,17 +304,12 @@ VLIB_NODE_FN (ethernet_detunnel) (vlib_main_t *vm, vlib_node_runtime_t *node, vl
 			vlib_prefetch_buffer_data(b[7], LOAD);
 		}
 
-		next[0] = process_buffer(vm, b[0], &t[0]);
-		next[1] = process_buffer(vm, b[1], &t[1]);
-		next[2] = process_buffer(vm, b[2], &t[2]);
-		next[3] = process_buffer(vm, b[3], &t[3]);
-
-		if (PREDICT_FALSE(is_trace))
+		if (!process_buffer_4x(vm, node, b, next))
 		{
-			trace_buffer(vm, node, b[0], &t[0]);
-			trace_buffer(vm, node, b[1], &t[1]);
-			trace_buffer(vm, node, b[2], &t[2]);
-			trace_buffer(vm, node, b[3], &t[3]);
+			process_buffer_1x(vm, node, b[0], &next[0]);
+			process_buffer_1x(vm, node, b[1], &next[1]);
+			process_buffer_1x(vm, node, b[2], &next[2]);
+			process_buffer_1x(vm, node, b[3], &next[3]);
 		}
 
 		b += 4;
@@ -204,10 +319,7 @@ VLIB_NODE_FN (ethernet_detunnel) (vlib_main_t *vm, vlib_node_runtime_t *node, vl
 
 	while (n_left_from > 0) {
 
-		next[0] = process_buffer(vm, b[0], &t[0]);
-
-		if (PREDICT_FALSE(is_trace))
-			trace_buffer(vm, node, b[0], &t[0]);
+		process_buffer_1x(vm, node, b[0], &next[0]);
 
 		b++;
 		next++;
@@ -228,8 +340,8 @@ static clib_error_t *ethernet_detunnel_init(vlib_main_t *CLIB_UNUSED(vm))
 	vlib_combined_counter_main_t *cm_##n = &edm->counters[ETHERNET_##E];	\
 	cm_##n->name = "ethernet_" #n;											\
 	cm_##n->stat_segment_name = "/detunnel/ethernet/" #n;					\
-	vlib_validate_combined_counter(cm_##n, 0);								\
-	vlib_zero_combined_counter(cm_##n, 0);
+	vlib_validate_combined_counter(cm_##n, 10);								\
+	vlib_zero_combined_counter(cm_##n, 10);
 
 	foreach_ethernet_counter
 #undef _
