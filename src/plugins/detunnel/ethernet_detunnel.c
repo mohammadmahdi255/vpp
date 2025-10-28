@@ -6,21 +6,9 @@
 #include <vnet/vnet.h>
 #include <vppinfra/clib.h>
 
-#undef always_inline
-#include <rte_hash.h>
-#include <rte_hash_crc.h>
-
-#if CLIB_DEBUG > 0
-#define always_inline static inline
-#else
-#define always_inline static inline __attribute__ ((__always_inline__))
-#endif
-
-
 #define foreach_ethernet_counter	\
 	_(TOTAL, total)					\
 	_(PROCESSED, processed)			\
-	_(DROP, drop)					\
 	_(FAILED, failed)
 
 enum
@@ -57,7 +45,7 @@ ethernet_detunnel_main_t ethernet_detunnel_main;
 extern ethernet_detunnel_main_t ethernet_detunnel_main;
 #endif
 
-static_always_inline bool clib_u32x4_is_all_equal(u32 *data, u32 ref)
+static_always_inline bool clib_u32x4_is_all_equal(const u32 *data, u32 ref)
 {
 #ifdef CLIB_HAVE_VEC128
 	return (bool) u32x4_is_all_equal(*(u32x4u *) data, ref);
@@ -66,12 +54,103 @@ static_always_inline bool clib_u32x4_is_all_equal(u32 *data, u32 ref)
 #endif
 }
 
+/* Original switch-case approach */
+static_always_inline u16 get_next_node_1x(u16 ethertype)
+{
+	switch (ethertype)
+	{
+		case __bswap_constant_16(ETHERNET_TYPE_VLAN):
+			return NEXT_NODE_VLAN_DETUNNEL;
+		case __bswap_constant_16(ETHERNET_TYPE_IP4):
+			return NEXT_NODE_IP4;
+		case __bswap_constant_16(ETHERNET_TYPE_IP6):
+			return NEXT_NODE_IP6;
+		default:
+			return NEXT_NODE_ERROR_DROP;
+	}
+}
+
+static_always_inline void get_next_node_4x(const u16 ethertype[4], u16 next[4])
+{
+#ifdef CLIB_HAVE_VEC128
+	/* Load ethertypes into SIMD register */
+	u16x8 eth_vec = u16x8_load_unaligned(ethertype);
+
+	/* Create comparison vectors for each known type */
+	u16x8 vlan_type = u16x8_splat(__bswap_constant_16(ETHERNET_TYPE_VLAN));
+	u16x8 ip4_type  = u16x8_splat(__bswap_constant_16(ETHERNET_TYPE_IP4));
+	u16x8 ip6_type  = u16x8_splat(__bswap_constant_16(ETHERNET_TYPE_IP6));
+
+	/* Compare: result is 0xFFFF for match, 0x0000 for no match */
+	u16x8 is_vlan = eth_vec == vlan_type;
+	u16x8 is_ip4  = eth_vec == ip4_type;
+	u16x8 is_ip6  = eth_vec == ip6_type;
+
+	/* Bitwise select: mask & value = value if mask is 0xFFFF, else 0
+	 * This is the equivalent of: result = mask ? value : 0
+	 * Cost: 1 cycle per AND operation (4 cycles total for 3 types + default)
+	 */
+	u16x8 vlan_next = is_vlan & u16x8_splat(NEXT_NODE_VLAN_DETUNNEL);
+	u16x8 ip4_next  = is_ip4  & u16x8_splat(NEXT_NODE_IP4);
+	u16x8 ip6_next  = is_ip6  & u16x8_splat(NEXT_NODE_IP6);
+
+	/* Combine results: OR works because only one can be non-zero per element
+	 * Cost: 2 cycles for 2 OR operations
+	 */
+	u16x8 result = vlan_next | ip4_next | ip6_next;
+
+	/* Handle default case: if no match (result == 0), set to ERROR_DROP
+	 * Cost: 3 cycles (OR + NOT + AND + OR)
+	 */
+	u16x8 any_match = is_vlan | is_ip4 | is_ip6;
+	u16x8 no_match = ~any_match;
+	result = result | (no_match & u16x8_splat(NEXT_NODE_ERROR_DROP));
+
+	/* Store results back to array */
+	u16x8_store_unaligned(result, next);
+
+	/* Total estimated cost: ~12-15 cycles for 4 lookups (3-4 cycles per lookup)
+	 * vs switch-case: ~16-32 cycles for 4 lookups (4-8 cycles per lookup)
+	 * Speedup: ~1.5-2x faster than switch-case
+	 */
+#else
+	/* Fallback to optimized switch-case */
+	next[0] = get_next_node_1x(ethertype[0]);
+	next[1] = get_next_node_1x(ethertype[1]);
+	next[2] = get_next_node_1x(ethertype[2]);
+	next[3] = get_next_node_1x(ethertype[3]);
+#endif
+}
+
+static_always_inline bool clib_u32x4_is_all_greater_equal(const u32 *data, u32 ref)
+{
+#ifdef CLIB_HAVE_VEC128
+	u32x4 data_vec = u32x4_load_unaligned(data);
+	u32x4 ref_vec = u32x4_splat(ref);
+
+	u32x4 valid = data_vec >= ref_vec;
+	return u32x4_is_all_equal(valid, 0xFFFFFFFF);
+#else
+	return (data[0] >= ref && data[1] >= ref && data[2] >= ref && data[3] >= ref);
+#endif
+}
+
+static_always_inline bool clib_u32x4_sum_elts(const u32 *data)
+{
+#ifdef CLIB_HAVE_VEC128
+	u32x4 data_vec = u32x4_load_unaligned(data);
+	return u32x4_sum_elts(data_vec);
+#else
+	return data[0] + data[1] + data[2] + data[3];
+#endif
+}
+
 static_always_inline bool process_buffer_4x(vlib_main_t *vm, vlib_node_runtime_t *node,
 		vlib_buffer_t* b[4], u16 next[4])
 {
 	ethernet_detunnel_main_t *edm = &ethernet_detunnel_main;
 
-	u32 sw_idx[4] = {
+	const u32 sw_idx[] = {
 		vnet_buffer(b[0])->sw_if_index[VLIB_RX],
 		vnet_buffer(b[1])->sw_if_index[VLIB_RX],
 		vnet_buffer(b[2])->sw_if_index[VLIB_RX],
@@ -81,59 +160,36 @@ static_always_inline bool process_buffer_4x(vlib_main_t *vm, vlib_node_runtime_t
 	if (PREDICT_FALSE(edm->counter_if_index < sw_idx[0] || !clib_u32x4_is_all_equal(sw_idx, sw_idx[0])))
 		return false;
 
-	if (PREDICT_FALSE(b[0]->current_length < sizeof(ethernet_header_t) ||
-			b[1]->current_length < sizeof(ethernet_header_t) ||
-			b[2]->current_length < sizeof(ethernet_header_t) ||
-			b[3]->current_length < sizeof(ethernet_header_t)))
+	const u32 length[] = {
+		b[0]->current_length,
+		b[1]->current_length,
+		b[2]->current_length,
+		b[3]->current_length
+	};
+
+	if(PREDICT_FALSE(!clib_u32x4_is_all_greater_equal(length, sizeof(ethernet_header_t))))
 		return false;
 
-	u16 ethertype[4] = {
+	const u16 ethertype[] = {
 		((ethernet_header_t *) vlib_buffer_get_current(b[0]))->type,
 		((ethernet_header_t *) vlib_buffer_get_current(b[1]))->type,
 		((ethernet_header_t *) vlib_buffer_get_current(b[2]))->type,
 		((ethernet_header_t *) vlib_buffer_get_current(b[3]))->type
 	};
 
-	if (PREDICT_FALSE(ethertype[0] != ethertype[1] || ethertype[0] != ethertype[2] || ethertype[0] != ethertype[3]))
-		return false;
-
-	u32 total_bytes = b[0]->current_length + b[1]->current_length + b[2]->current_length + b[3]->current_length;
-
-	vlib_increment_combined_counter(&edm->counters[ETHERNET_TOTAL], vm->thread_index,
-			sw_idx[0], 4, total_bytes);
-	vlib_increment_combined_counter(&edm->counters[ETHERNET_PROCESSED], vm->thread_index,
-			sw_idx[0], 4, 4 * sizeof(ethernet_header_t));
-
 	vlib_buffer_advance(b[0], sizeof(ethernet_header_t));
 	vlib_buffer_advance(b[1], sizeof(ethernet_header_t));
 	vlib_buffer_advance(b[2], sizeof(ethernet_header_t));
 	vlib_buffer_advance(b[3], sizeof(ethernet_header_t));
 
-	switch (ethertype[0])
-	{
-		case __bswap_constant_16(ETHERNET_TYPE_VLAN):
-		{
-			next[0] = next[1] = next[2] = next[3] = NEXT_NODE_VLAN_DETUNNEL;
-			break;
-		}
-		case __bswap_constant_16(ETHERNET_TYPE_IP4):
-		{
-			next[0] = next[1] = next[2] = next[3] = NEXT_NODE_ERROR_DROP;
-			break;
-		}
-		case __bswap_constant_16(ETHERNET_TYPE_IP6):
-		{
-			next[0] = next[1] = next[2] = next[3] = NEXT_NODE_ERROR_DROP;
-			break;
-		}
-		default:
-		{
-			vlib_increment_combined_counter(&edm->counters[ETHERNET_DROP], vm->thread_index,
-					sw_idx[0], 4, total_bytes);
-			next[0] = next[1] = next[2] = next[3] = NEXT_NODE_ERROR_DROP;
-			break;
-		}
-	}
+	const u32 total_bytes = clib_u32x4_sum_elts(length);
+
+	vlib_increment_combined_counter(&edm->counters[ETHERNET_TOTAL], vm->thread_index,
+			sw_idx[0], sizeof(length), total_bytes);
+	vlib_increment_combined_counter(&edm->counters[ETHERNET_PROCESSED], vm->thread_index,
+			sw_idx[0], 4, 4 * sizeof(ethernet_header_t));
+
+	get_next_node_4x(ethertype, next);
 
 	if (PREDICT_FALSE(node->flags & VLIB_NODE_FLAG_TRACE))
 	{
@@ -176,8 +232,8 @@ static_always_inline bool process_buffer_4x(vlib_main_t *vm, vlib_node_runtime_t
 static_always_inline void process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, u16 *next)
 {
 	ethernet_detunnel_main_t *edm = &ethernet_detunnel_main;
-
 	u32 sw_idx = vnet_buffer(b)->sw_if_index[VLIB_RX];
+	u16 ethertype = 0;
 
 	if (PREDICT_FALSE(edm->counter_if_index < sw_idx))
 	{
@@ -203,41 +259,17 @@ static_always_inline void process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t
 		vlib_increment_combined_counter(&edm->counters[ETHERNET_FAILED], vm->thread_index,
 				sw_idx, 1, b->current_length);
 		next[0] = NEXT_NODE_ERROR_DROP;
-		goto trace;
 	}
-
-	u16 ethertype = ((ethernet_header_t *) vlib_buffer_get_current(b))->type;
-	vlib_buffer_advance(b, sizeof(ethernet_header_t));
-	vlib_increment_combined_counter(&edm->counters[ETHERNET_PROCESSED], vm->thread_index,
-			sw_idx, 1, sizeof(ethernet_header_t));
-
-	switch (ethertype)
+	else
 	{
-		case __bswap_constant_16(ETHERNET_TYPE_VLAN):
-		{
-			next[0] = NEXT_NODE_VLAN_DETUNNEL;
-			break;
-		}
-		case __bswap_constant_16(ETHERNET_TYPE_IP4):
-		{
-			next[0] = NEXT_NODE_ERROR_DROP;
-			break;
-		}
-		case __bswap_constant_16(ETHERNET_TYPE_IP6):
-		{
-			next[0] = NEXT_NODE_ERROR_DROP;
-			break;
-		}
-		default:
-		{
-			vlib_increment_combined_counter(&edm->counters[ETHERNET_DROP], vm->thread_index,
-					sw_idx, 1, b->current_length);
-			next[0] = NEXT_NODE_ERROR_DROP;
-			break;
-		}
+		ethertype = ((ethernet_header_t *) vlib_buffer_get_current(b))->type;
+		vlib_buffer_advance(b, sizeof(ethernet_header_t));
+		vlib_increment_combined_counter(&edm->counters[ETHERNET_PROCESSED], vm->thread_index,
+				sw_idx, 1, sizeof(ethernet_header_t));
+
+		next[0] = get_next_node_1x(ethertype);
 	}
 
-trace:
 	if (PREDICT_FALSE(node->flags & VLIB_NODE_FLAG_TRACE))
 	{
 		if (PREDICT_FALSE(b->flags & VLIB_BUFFER_IS_TRACED))
