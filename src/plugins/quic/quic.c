@@ -179,8 +179,7 @@ quic_connect_stream (session_t * quic_session, session_endpoint_cfg_t * sep)
 
   /*  Find base session to which the user want to attach a stream */
   quic_session_handle = session_handle (quic_session);
-  QUIC_DBG (2, "Connect stream: quic_session_handle 0x%lx",
-	    quic_session_handle);
+  QUIC_DBG (2, "Connect stream: session 0x%lx", quic_session_handle);
 
   if (session_type_transport_proto (quic_session->session_type) !=
       TRANSPORT_PROTO_QUIC)
@@ -279,6 +278,15 @@ quic_connect_stream (session_t * quic_session, session_endpoint_cfg_t * sep)
   return 0;
 }
 
+static_always_inline void
+quic_ctx_set_alpn_protos (quic_ctx_t *ctx, transport_endpt_crypto_cfg_t *ccfg)
+{
+  ctx->alpn_protos[0] = ccfg->alpn_protos[0];
+  ctx->alpn_protos[1] = ccfg->alpn_protos[1];
+  ctx->alpn_protos[2] = ccfg->alpn_protos[2];
+  ctx->alpn_protos[3] = ccfg->alpn_protos[3];
+}
+
 static int
 quic_connect_connection (session_endpoint_cfg_t * sep)
 {
@@ -330,6 +338,7 @@ quic_connect_connection (session_endpoint_cfg_t * sep)
   cargs->sep_ext.ns_index = app->ns_index;
   cargs->sep_ext.transport_flags = TRANSPORT_CFG_F_CONNECTED;
 
+  quic_ctx_set_alpn_protos (ctx, ccfg);
   ctx->crypto_engine = ccfg->crypto_engine;
   ctx->ckpair_index = ccfg->ckpair_index;
   error = quic_eng_crypto_context_acquire (ctx);
@@ -420,10 +429,20 @@ quic_start_listen (u32 quic_listen_session_index,
   lctx->parent_app_id = app_wrk->app_index;
   lctx->udp_session_handle = udp_handle;
   lctx->c_s_index = quic_listen_session_index;
+  lctx->listener_ctx_id = lctx_index;
+  quic_ctx_set_alpn_protos (lctx, ccfg);
   lctx->crypto_engine = ccfg->crypto_engine;
   lctx->ckpair_index = ccfg->ckpair_index;
   if ((rv = quic_eng_crypto_context_acquire (lctx)))
-    return rv;
+    {
+      vnet_unlisten_args_t a = {
+	.handle = udp_handle,
+	.app_index = qm->app_index,
+      };
+      vnet_unlisten (&a);
+      quic_ctx_free (qm, lctx);
+      return rv;
+    }
 
   QUIC_DBG (2, "Listening UDP session 0x%lx",
 	    session_handle (udp_listen_session));
@@ -473,6 +492,35 @@ quic_listener_get (u32 listener_index)
 }
 
 static u8 *
+format_quic_ctx_state (u8 *s, va_list *args)
+{
+  quic_ctx_t *ctx;
+  session_t *as;
+
+  ctx = va_arg (*args, quic_ctx_t *);
+  as = session_get (ctx->c_s_index, ctx->c_thread_index);
+  if (as->session_state == SESSION_STATE_LISTENING)
+    s = format (s, "%s", "LISTEN");
+  else
+    {
+      if (as->session_state == SESSION_STATE_READY)
+	s = format (s, "%s", "ESTABLISHED");
+      else if (as->session_state == SESSION_STATE_ACCEPTING)
+	s = format (s, "%s", "ACCEPTING");
+      else if (as->session_state == SESSION_STATE_CONNECTING)
+	s = format (s, "%s", "CONNECTING");
+      else if (as->session_state >= SESSION_STATE_TRANSPORT_CLOSED)
+	s = format (s, "%s", "CLOSED");
+      else if (as->session_state >= SESSION_STATE_TRANSPORT_CLOSING)
+	s = format (s, "%s", "CLOSING");
+      else
+	s = format (s, "UNHANDLED %u", as->session_state);
+    }
+
+  return s;
+}
+
+static u8 *
 format_quic_ctx (u8 * s, va_list * args)
 {
   quic_ctx_t *ctx = va_arg (*args, quic_ctx_t *);
@@ -495,8 +543,8 @@ format_quic_ctx (u8 * s, va_list * args)
     format (str, " app %d wrk %d", ctx->parent_app_id, ctx->parent_app_wrk_id);
 
   if (verbose == 1)
-    s = format (s, "%-" SESSION_CLI_ID_LEN "s%-" SESSION_CLI_STATE_LEN "d",
-		str, ctx->conn_state);
+    s = format (s, "%-" SESSION_CLI_ID_LEN "s%-" SESSION_CLI_STATE_LEN "U",
+		str, format_quic_ctx_state, ctx);
   else
     s = format (s, "%s\n", str);
   vec_free (str);
@@ -598,7 +646,7 @@ quic_udp_session_connected_callback (u32 quic_app_index, u32 ctx_index,
       if (app_wrk)
 	{
 	  api_context = ctx->c_s_index;
-	  app_worker_connect_notify (app_wrk, 0, SESSION_E_NONE, api_context);
+	  app_worker_connect_notify (app_wrk, 0, err, api_context);
 	}
       return 0;
     }
@@ -810,6 +858,14 @@ quic_get_transport_endpoint (u32 ctx_index, clib_thread_index_t thread_index,
   quic_common_get_transport_endpoint (ctx, tep, is_lcl);
 }
 
+static tls_alpn_proto_t
+quic_get_alpn_selected (u32 ctx_index, clib_thread_index_t thread_index)
+{
+  quic_ctx_t *ctx;
+  ctx = quic_ctx_get (ctx_index, thread_index);
+  return ctx->alpn_selected;
+}
+
 static session_cb_vft_t quic_app_cb_vft = {
   .session_accept_callback = quic_udp_session_accepted_callback,
   .session_disconnect_callback = quic_udp_session_disconnect_callback,
@@ -841,6 +897,7 @@ static transport_proto_vft_t quic_proto = {
   .format_listener = format_quic_listener,
   .get_transport_endpoint = quic_get_transport_endpoint,
   .get_transport_listener_endpoint = quic_get_transport_listener_endpoint,
+  .get_alpn_selected = quic_get_alpn_selected,
   .transport_options = {
     .name = "quic",
     .short_name = "Q",
