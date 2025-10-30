@@ -264,6 +264,7 @@ session_error_t vnet_application_attach (vnet_app_attach_args_t *a);
 session_error_t vnet_application_detach (vnet_app_detach_args_t *a);
 session_error_t vnet_listen (vnet_listen_args_t *a);
 session_error_t vnet_connect (vnet_connect_args_t *a);
+session_error_t vnet_connect_stream (vnet_connect_args_t *a);
 session_error_t vnet_unlisten (vnet_unlisten_args_t *a);
 session_error_t vnet_shutdown_session (vnet_shutdown_args_t *a);
 session_error_t vnet_disconnect_session (vnet_disconnect_args_t *a);
@@ -667,11 +668,11 @@ app_send_dgram_segs_raw (svm_fifo_t *f, app_session_transport_t *at,
   int rv;
 
   if (svm_fifo_max_enqueue_prod (f) < seg_len)
-    return 0;
+    return -1;
 
   rv = svm_fifo_enqueue_segments (f, segs, nsegs, 0 /* allow partial */);
   if (PREDICT_FALSE (rv < 0))
-    return 0;
+    return rv;
 
   if (do_evt)
     {

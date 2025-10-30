@@ -217,6 +217,17 @@ I:	span
 M:	N/A
 F:	src/vnet/span
 
+VNET StateFul Data Plane
+I:      sfdp
+M:      Mohammed Hawari <mohammed@hawari.fr>
+M:      Ole Troan <otroan@employees.org>
+F:      src/vnet/sfdp/
+
+Plugin StateFul Data Plane Services
+I:      sfdp_services
+M:      Mohammed Hawari <mohammed@hawari.fr>
+F:      src/plugins/sfdp_services
+
 Plugin - Crypto - native
 I:	crypto-native
 M:	Damjan Marion <damarion@cisco.com>
@@ -768,6 +779,13 @@ I:	cnat
 M:	Nathan Skrzypczak <nathan.skrzypczak@gmail.com>
 M:	Neale Ranns <neale@graphiant.com>
 F:	src/plugins/cnat
+
+Plugin - NPol
+I:	npol
+M:	Aloys Augustin <aloaugus@cisco.com>
+M:	Nathan Skrzypczak <nathan.skrzypczak@gmail.com>
+M:	Hedi Bouattour <hedibouattour2010@gmail.com>
+F:	src/plugins/npol/
 
 Plugin - Wireguard
 I:	wireguard

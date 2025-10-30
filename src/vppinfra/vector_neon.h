@@ -194,6 +194,12 @@ u32x4_min_scalar (u32x4 v)
   return vminvq_u32 (v);
 }
 
+static_always_inline u32
+u32x4_sum_elts (u32x4 v)
+{
+  return vaddvq_u32 (v);
+}
+
 #define u8x16_word_shift_left(x,n)  vextq_u8(u8x16_splat (0), x, 16 - n)
 #define u8x16_word_shift_right(x,n) vextq_u8(x, u8x16_splat (0), n)
 
@@ -283,6 +289,37 @@ u8x16_store_partial (u8x16 r, u8 *data, uword n)
   else if (n > 0)
     data[0] = r[0];
 }
+
+#ifdef __ARM_FEATURE_CRYPTO
+static_always_inline u64x2
+u64x2_clmul64 (u64x2 a, const int a_hi, u64x2 b, const int b_hi)
+{
+  u64x2 p;
+
+  switch (a_hi + 2 * b_hi)
+    {
+    case 0:
+      p = (u64x2) vmull_p64 ((poly64_t) vget_low_p64 ((poly64x2_t) a),
+			     (poly64_t) vget_low_p64 ((poly64x2_t) b));
+      break;
+    case 1:
+      p = (u64x2) vmull_p64 ((poly64_t) vget_high_p64 ((poly64x2_t) a),
+			     (poly64_t) vget_low_p64 ((poly64x2_t) b));
+      break;
+    case 2:
+      p = (u64x2) vmull_p64 ((poly64_t) vget_low_p64 ((poly64x2_t) a),
+			     (poly64_t) vget_high_p64 ((poly64x2_t) b));
+      break;
+    case 3:
+      p = (u64x2) vmull_high_p64 ((poly64x2_t) a, (poly64x2_t) b);
+      break;
+    default:
+      __builtin_unreachable ();
+    }
+
+  return p;
+}
+#endif
 
 #define CLIB_HAVE_VEC128_MSB_MASK
 

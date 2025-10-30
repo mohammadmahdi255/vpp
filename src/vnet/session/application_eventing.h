@@ -54,6 +54,12 @@ typedef struct app_evt_msg_
   u8 data[0];
 } __clib_packed app_evt_msg_t;
 
+typedef enum app_evt_session_stats_close_reason_
+{
+  APP_EVT_SESSION_STAT_APP_CLOSED,
+  APP_EVT_SESSION_STAT_TRANSPORT_CLOSED,
+} app_evt_session_stats_close_reason_t;
+
 #define foreach_tcp_transport_stat                                            \
   _ (u64, segs_in)                                                            \
   _ (u64, bytes_in)                                                           \
@@ -81,6 +87,7 @@ typedef struct tcp_transport_stats_
   foreach_tcp_transport_stat
 #undef _
     f64 end_ts;
+  app_evt_session_stats_close_reason_t close_reason;
 } __clib_packed tcp_session_stats_t;
 
 #define foreach_udp_transport_stat                                            \
@@ -99,6 +106,7 @@ typedef struct udp_transport_stats_
   foreach_udp_transport_stat
 #undef _
     f64 end_ts;
+  app_evt_session_stats_close_reason_t close_reason;
 } __clib_packed udp_session_stats_t;
 
 typedef struct ct_transport_stats_
@@ -106,6 +114,7 @@ typedef struct ct_transport_stats_
   u8 conn_id[TRANSPORT_CONN_ID_LEN];
   transport_proto_t actual_proto;
   f64 end_ts;
+  app_evt_session_stats_close_reason_t close_reason;
 } __clib_packed ct_session_stats_t;
 
 typedef struct app_evt_collector_cfg_
@@ -206,6 +215,13 @@ typedef struct app_evt_main_
   u32 segment_size; /**< segment size */
   u32 fifo_size;    /**< fifo size */
 } app_evt_main_t;
+
+static inline app_evt_collector_wrk_t *
+app_evt_collector_wrk_get (app_evt_collector_t *c,
+			   clib_thread_index_t thread_index)
+{
+  return &c->wrk[thread_index];
+}
 
 int app_evt_collector_add (app_evt_collector_cfg_t *cfg);
 app_evt_collector_t *app_evt_collector_get (u32 c_index);

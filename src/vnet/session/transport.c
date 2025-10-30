@@ -85,7 +85,7 @@ format_transport_flags (u8 *s, va_list *args)
   transport_connection_flags_t flags;
   int i, last = -1;
 
-  flags = va_arg (*args, transport_connection_flags_t);
+  flags = va_arg (*args, u32);
 
   for (i = 0; i < TRANSPORT_CONNECTION_N_FLAGS; i++)
     if (flags & (1 << i))
@@ -127,7 +127,7 @@ format_transport_connection (u8 * s, va_list * args)
 	s = format (s, "%Upacer: %U\n", format_white_space, indent,
 		    format_transport_pacer, &tc->pacer, tc->thread_index);
       s = format (s, "%Utransport: flags: %U\n", format_white_space, indent,
-		  format_transport_flags, tc->flags);
+		  format_transport_flags, (u32) tc->flags);
     }
   return s;
 }
@@ -367,6 +367,15 @@ transport_connect (transport_proto_t tp, transport_endpoint_cfg_t * tep)
   if (PREDICT_FALSE (!tp_vfts[tp].connect))
     return SESSION_E_TRANSPORT_NO_REG;
   return tp_vfts[tp].connect (tep);
+}
+
+int
+transport_connect_stream (transport_proto_t tp, transport_endpoint_cfg_t *tep,
+			  session_t *stream_session, u32 *conn_index)
+{
+  if (PREDICT_FALSE (!tp_vfts[tp].connect_stream))
+    return SESSION_E_TRANSPORT_NO_REG;
+  return tp_vfts[tp].connect_stream (tep, stream_session, conn_index);
 }
 
 void

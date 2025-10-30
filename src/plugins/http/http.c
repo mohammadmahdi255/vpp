@@ -219,6 +219,7 @@ http_ho_conn_alloc (void)
   pool_get_aligned_safe (hm->ho_conn_pool, hc, CLIB_CACHE_LINE_BYTES);
   clib_memset (hc, 0, sizeof (*hc));
   hc->hc_hc_index = hc - hm->ho_conn_pool;
+  hc->c_thread_index = transport_cl_thread ();
   hc->hc_pa_session_handle = SESSION_INVALID_HANDLE;
   hc->hc_tc_session_handle = SESSION_INVALID_HANDLE;
   hc->timeout = HTTP_CONN_TIMEOUT;
@@ -299,7 +300,7 @@ http_get_app_header_list (http_req_t *req, http_msg_t *msg)
   u8 *app_headers;
   int rv;
 
-  as = session_get_from_handle (req->hr_pa_session_handle);
+  as = session_get (req->c_s_index, req->c_thread_index);
 
   if (msg->data.type == HTTP_MSG_DATA_PTR)
     {
@@ -327,7 +328,7 @@ http_get_app_target (http_req_t *req, http_msg_t *msg)
   u8 *target;
   int rv;
 
-  as = session_get_from_handle (req->hr_pa_session_handle);
+  as = session_get (req->c_s_index, req->c_thread_index);
 
   if (msg->data.type == HTTP_MSG_DATA_PTR)
     {
@@ -370,7 +371,7 @@ http_get_rx_buf (http_conn_t *hc)
 void
 http_req_tx_buffer_init (http_req_t *req, http_msg_t *msg)
 {
-  session_t *as = session_get_from_handle (req->hr_pa_session_handle);
+  session_t *as = session_get (req->c_s_index, req->c_thread_index);
   http_buffer_init (&req->tx_buf, msg_to_buf_type[msg->data.type], as->tx_fifo,
 		    msg->data.body_len);
 }
@@ -418,9 +419,10 @@ http_conn_timeout_cb (void *hc_handlep)
     }
 
   /* in case nothing received on cleartext connection before timeout */
-  if (PREDICT_FALSE (hc->version != HTTP_VERSION_NA))
+  if (PREDICT_TRUE (hc->version != HTTP_VERSION_NA))
     http_vfts[hc->version].transport_close_callback (hc);
-  http_disconnect_transport (hc);
+  if (hc->state != HTTP_CONN_STATE_CLOSED)
+    http_disconnect_transport (hc);
   http_stats_connections_timeout_inc (hs_handle >> 24);
 }
 
@@ -724,7 +726,7 @@ http_ts_cleanup_callback (session_t *ts, session_cleanup_ntf_t ntf)
     http_conn_timer_stop (hc);
 
   /* in case nothing received on cleartext connection */
-  if (PREDICT_FALSE (hc->version != HTTP_VERSION_NA))
+  if (PREDICT_TRUE (hc->version != HTTP_VERSION_NA))
     http_vfts[hc->version].conn_cleanup_callback (hc);
 
   if (!(hc->flags & HTTP_CONN_F_IS_SERVER))
@@ -826,7 +828,6 @@ http_transport_enable (vlib_main_t *vm, u8 is_en)
   vec_validate (hm->wrk, num_threads - 1);
   vec_foreach (wrk, hm->wrk)
     {
-      clib_spinlock_init (&wrk->pending_stream_connects_lock);
       clib_memset (&wrk->stats, 0, sizeof (wrk->stats));
     }
   vec_validate (hm->rx_bufs, num_threads - 1);
@@ -949,7 +950,7 @@ http_connect_connection (session_endpoint_cfg_t *sep)
 }
 
 static int
-http_connect_stream (u64 parent_handle, u32 opaque)
+http_connect_stream (u64 parent_handle, u32 *req_index)
 {
   session_t *hs;
   http_req_handle_t rh;
@@ -983,90 +984,26 @@ http_connect_stream (u64 parent_handle, u32 opaque)
       return -1;
     }
 
-  return http_vfts[rh.version].conn_connect_stream_callback (hc, opaque);
-}
-
-static void
-http_handle_stream_connects_rpc (void *args)
-{
-  clib_thread_index_t thread_index = pointer_to_uword (args);
-  http_worker_t *wrk;
-  u32 n_pending, max_connects, n_connects = 0;
-  http_pending_connect_stream_t *pc;
-
-  wrk = http_worker_get (thread_index);
-
-  clib_spinlock_lock (&wrk->pending_stream_connects_lock);
-
-  n_pending = clib_fifo_elts (wrk->pending_connect_streams);
-  max_connects = clib_min (32, n_pending);
-  vec_validate (wrk->burst_connect_streams, max_connects);
-
-  while (n_connects < max_connects)
-    clib_fifo_sub1 (wrk->pending_connect_streams,
-		    wrk->burst_connect_streams[n_connects++]);
-
-  clib_spinlock_unlock (&wrk->pending_stream_connects_lock);
-
-  n_connects = 0;
-  while (n_connects < max_connects)
-    {
-      pc = &wrk->burst_connect_streams[n_connects++];
-      http_connect_stream (pc->parent_handle, pc->opaque);
-    }
-
-  /* more work to do? */
-  if (max_connects < n_pending)
-    session_send_rpc_evt_to_thread_force (
-      thread_index, http_handle_stream_connects_rpc,
-      uword_to_pointer ((uword) thread_index, void *));
-}
-
-static int
-http_program_connect_stream (session_endpoint_cfg_t *sep)
-{
-  clib_thread_index_t parent_thread_index =
-    session_thread_from_handle (sep->parent_handle);
-  http_worker_t *wrk;
-  u32 n_pending;
-
-  ASSERT (session_vlib_thread_is_cl_thread ());
-
-  /* if we are already on same worker as parent, handle connect */
-  if (parent_thread_index == transport_cl_thread ())
-    return http_connect_stream (sep->parent_handle, sep->opaque);
-
-  /* if not on same worker as parent, queue request */
-  wrk = http_worker_get (parent_thread_index);
-
-  clib_spinlock_lock (&wrk->pending_stream_connects_lock);
-
-  http_pending_connect_stream_t p = { .parent_handle = sep->parent_handle,
-				      .opaque = sep->opaque };
-  clib_fifo_add1 (wrk->pending_connect_streams, p);
-  n_pending = clib_fifo_elts (wrk->pending_connect_streams);
-
-  clib_spinlock_unlock (&wrk->pending_stream_connects_lock);
-
-  if (n_pending == 1)
-    session_send_rpc_evt_to_thread_force (
-      parent_thread_index, http_handle_stream_connects_rpc,
-      uword_to_pointer ((uword) parent_thread_index, void *));
-
-  return 0;
+  return http_vfts[rh.version].conn_connect_stream_callback (hc, req_index);
 }
 
 static int
 http_transport_connect (transport_endpoint_cfg_t *tep)
 {
   session_endpoint_cfg_t *sep = (session_endpoint_cfg_t *) tep;
-  session_t *hs;
 
-  hs = session_get_from_handle_if_valid (sep->parent_handle);
-  if (hs)
-    return http_program_connect_stream (sep);
-  else
-    return http_connect_connection (sep);
+  ASSERT (sep->parent_handle == SESSION_INVALID_HANDLE);
+  return http_connect_connection (sep);
+}
+
+static int
+http_transport_connect_stream (transport_endpoint_cfg_t *tep,
+			       CLIB_UNUSED (session_t *stream_session),
+			       u32 *conn_index)
+{
+  session_endpoint_cfg_t *sep = (session_endpoint_cfg_t *) tep;
+
+  return http_connect_stream (sep->parent_handle, conn_index);
 }
 
 static u32
@@ -1377,26 +1314,36 @@ format_http_transport_listener (u8 *s, va_list *args)
 }
 
 static u8 *
+format_http_ho_conn_id (u8 *s, va_list *args)
+{
+  http_conn_t *ho_hc = va_arg (*args, http_conn_t *);
+
+  s = format (s, "[%d:%d][H] half-open app_wrk %u ts %d:%d",
+	      ho_hc->c_thread_index, ho_hc->c_s_index, ho_hc->hc_pa_wrk_index,
+	      session_thread_from_handle (ho_hc->hc_tc_session_handle),
+	      session_index_from_handle (ho_hc->hc_tc_session_handle));
+
+  return s;
+}
+
+static u8 *
 format_http_transport_half_open (u8 *s, va_list *args)
 {
   u32 ho_index = va_arg (*args, u32);
   u32 __clib_unused thread_index = va_arg (*args, u32);
   u32 __clib_unused verbose = va_arg (*args, u32);
   http_conn_t *ho_hc;
-  session_t *tcp_ho;
 
   ho_hc = http_ho_conn_get (ho_index);
-  tcp_ho = session_get_from_handle_if_valid (ho_hc->hc_tc_session_handle);
 
-  if (tcp_ho)
-    s =
-      format (s, "[%d:%d][H] half-open app_wrk %u ts %d:%d",
-	      ho_hc->c_thread_index, ho_hc->c_s_index, ho_hc->hc_pa_wrk_index,
-	      tcp_ho->thread_index, tcp_ho->session_index);
-  else
-    s =
-      format (s, "[%d:%d][H] half-open app_wrk %u (postponed cleanup)",
-	      ho_hc->c_thread_index, ho_hc->c_s_index, ho_hc->hc_pa_wrk_index);
+  s = format (s, "%-" SESSION_CLI_ID_LEN "U", format_http_ho_conn_id, ho_hc);
+
+  if (verbose)
+    s = format (s, "%-" SESSION_CLI_STATE_LEN "s",
+		(ho_hc->hc_tc_session_handle == SESSION_INVALID_HANDLE) ?
+		  (ho_hc->flags & HTTP_CONN_F_HO_DONE) ? "CLOSED" :
+							 "CLOSED-PNDG" :
+		  "CONNECTING");
 
   return s;
 }
@@ -1431,6 +1378,7 @@ http_transport_cleanup_ho (u32 ho_hc_index)
 static const transport_proto_vft_t http_proto = {
   .enable = http_transport_enable,
   .connect = http_transport_connect,
+  .connect_stream = http_transport_connect_stream,
   .start_listen = http_start_listen,
   .stop_listen = http_stop_listen,
   .half_close = http_transport_shutdown,

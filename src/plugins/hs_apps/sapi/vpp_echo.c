@@ -453,7 +453,6 @@ echo_handle_data (echo_main_t * em, echo_session_t * s, u8 * rx_buf)
 static void *
 echo_data_thread_fn (void *arg)
 {
-  clib_mem_set_thread_index ();	/* First thing to do in client thread */
   echo_main_t *em = &echo_main;
   u32 N = em->n_clients;
   u32 n = (N + em->n_rx_threads - 1) / em->n_rx_threads;
@@ -874,7 +873,6 @@ echo_print_periodic_stats (echo_main_t * em)
 static void *
 echo_mq_thread_fn (void *arg)
 {
-  clib_mem_set_thread_index ();	/* First thing to do in client thread */
   svm_msg_q_msg_t *msg_vec = 0;
   echo_main_t *em = &echo_main;
   session_event_t *e;
@@ -1275,7 +1273,7 @@ vpp_echo_init ()
 {
   /* init memory before proto register themselves */
   echo_main_t *em = &echo_main;
-  clib_mem_init_thread_safe (0, 256 << 20);
+  clib_mem_init (0, 256 << 20);
   clib_memset (em, 0, sizeof (*em));
 }
 

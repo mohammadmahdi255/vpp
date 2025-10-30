@@ -119,6 +119,33 @@ vcl_send_session_connect (vcl_worker_t * wrk, vcl_session_t * s)
     }
 }
 
+static void
+vcl_send_session_connect_stream (vcl_worker_t *wrk, vcl_session_t *s)
+{
+  app_session_evt_t _app_evt, *app_evt = &_app_evt;
+  session_connect_msg_t *mp;
+  svm_msg_q_t *mq;
+
+  mq = vcl_worker_ctrl_mq (wrk);
+  app_alloc_ctrl_evt_to_vpp (mq, app_evt, SESSION_CTRL_EVT_CONNECT_STREAM);
+  mp = (session_connect_msg_t *) app_evt->evt->data;
+  memset (mp, 0, sizeof (*mp));
+  mp->client_index = wrk->api_client_handle;
+  mp->context = s->session_index;
+  mp->wrk_index = wrk->vpp_wrk_index;
+  mp->parent_handle = s->parent_handle;
+  mp->proto = s->session_type;
+  if (s->ext_config)
+    vcl_msg_add_ext_config (s, &mp->ext_config);
+  app_send_ctrl_evt_to_vpp (mq, app_evt);
+
+  if (s->ext_config)
+    {
+      clib_mem_free (s->ext_config);
+      s->ext_config = 0;
+    }
+}
+
 void
 vcl_send_session_unlisten (vcl_worker_t * wrk, vcl_session_t * s)
 {
@@ -1435,13 +1462,11 @@ vcl_api_handle_disconnect (vcl_worker_t *wrk)
   vcl_worker_detach_sessions (wrk);
 }
 
-/*
- * VPPCOM Public API functions
- */
-int
-vppcom_app_create (const char *app_name)
+/* Internal helper function for common VCL app initialization */
+static int
+vppcom_app_init_common (const char *app_name)
 {
-  vppcom_cfg_t *vcl_cfg = &vcm->cfg;
+  vcl_cfg_t *vcl_cfg = &vcm->cfg;
   int rv;
 
   if (vcm->is_init)
@@ -1451,12 +1476,18 @@ vppcom_app_create (const char *app_name)
     }
 
   vcm->is_init = 1;
-  vppcom_cfg (&vcm->cfg);
   vcl_cfg = &vcm->cfg;
 
   vcm->main_cpu = pthread_self ();
   vcm->main_pid = getpid ();
-  vcm->app_name = format (0, "%s", app_name);
+
+  /* Set app name: use provided name if available, otherwise use PID-based name
+   */
+  if (app_name)
+    vcm->app_name = format (0, "%s", app_name);
+  else
+    vcm->app_name = format (0, "vcl_app_%d", vcm->main_pid);
+
   vcl_init_epoll_fns ();
   fifo_segment_main_init (&vcm->segment_main, (uword) ~0,
 			  20 /* timeout in secs */);
@@ -1477,10 +1508,98 @@ vppcom_app_create (const char *app_name)
       return rv;
     }
 
-  VDBG (0, "app_name '%s', my_client_index %d (0x%x)", app_name,
+  /* Debug message shows the actual app name that was set */
+  VDBG (0, "app_name '%s', my_client_index %d (0x%x)", vcm->app_name,
 	vcm->workers[0].api_client_handle, vcm->workers[0].api_client_handle);
 
   return VPPCOM_OK;
+}
+
+/*
+ * VPPCOM Public API functions
+ */
+int
+vppcom_app_create (const char *app_name)
+{
+  /* Initialize VCL config with defaults from environment/config files */
+  vppcom_cfg (&vcm->cfg);
+
+  /* Use common initialization logic */
+  return vppcom_app_init_common (app_name);
+}
+
+/* Helper function to copy user configuration to VCL configuration */
+static void
+vppcom_cfg_apply_user_config (vcl_cfg_t *vcl_cfg, const vppcom_cfg_t *user_cfg)
+{
+  /* Copy basic configuration fields individually to avoid vector corruption */
+  vcl_cfg->heapsize = user_cfg->heapsize;
+  vcl_cfg->max_workers = user_cfg->max_workers;
+  vcl_cfg->segment_baseva = user_cfg->segment_baseva;
+  vcl_cfg->segment_size = user_cfg->segment_size;
+  vcl_cfg->add_segment_size = user_cfg->add_segment_size;
+  vcl_cfg->preallocated_fifo_pairs = user_cfg->preallocated_fifo_pairs;
+  vcl_cfg->rx_fifo_size = user_cfg->rx_fifo_size;
+  vcl_cfg->tx_fifo_size = user_cfg->tx_fifo_size;
+  vcl_cfg->event_queue_size = user_cfg->event_queue_size;
+  vcl_cfg->app_proxy_transport_tcp = user_cfg->app_proxy_transport_tcp;
+  vcl_cfg->app_proxy_transport_udp = user_cfg->app_proxy_transport_udp;
+  vcl_cfg->app_scope_local = user_cfg->app_scope_local;
+  vcl_cfg->app_scope_global = user_cfg->app_scope_global;
+  vcl_cfg->namespace_secret = user_cfg->namespace_secret;
+  vcl_cfg->use_mq_eventfd = user_cfg->use_mq_eventfd;
+  vcl_cfg->app_timeout = user_cfg->app_timeout;
+  vcl_cfg->session_timeout = user_cfg->session_timeout;
+  vcl_cfg->tls_engine = user_cfg->tls_engine;
+  vcl_cfg->mt_wrk_supported = user_cfg->mt_wrk_supported;
+  vcl_cfg->huge_page = user_cfg->huge_page;
+  vcl_cfg->app_original_dst = user_cfg->app_original_dst;
+
+  /* Handle event_log_path */
+  if (user_cfg->event_log_path)
+    vcl_cfg->event_log_path = user_cfg->event_log_path;
+
+  if (user_cfg->namespace_id)
+    vcl_cfg->namespace_id = format (0, "%s", user_cfg->namespace_id);
+
+  if (user_cfg->vpp_bapi_socket_name)
+    vcl_cfg->vpp_bapi_socket_name =
+      format (0, "%s", user_cfg->vpp_bapi_socket_name);
+
+  if (user_cfg->vpp_app_socket_api)
+    vcl_cfg->vpp_app_socket_api =
+      format (0, "%s", user_cfg->vpp_app_socket_api);
+
+  vcm->debug = user_cfg->debug_level;
+}
+
+int
+vppcom_app_create_with_config (vppcom_cfg_t *user_cfg)
+{
+  /* Initialize VCL config with defaults first */
+  vppcom_cfg_init (&vcm->cfg);
+
+  /* Set heapsize from user config before heap initialization */
+  if (user_cfg && user_cfg->heapsize > 0)
+    vcm->cfg.heapsize = user_cfg->heapsize;
+
+  /* Initialize heap before any memory allocation operations */
+  vcl_heap_alloc ();
+
+  /* Apply remaining user-provided configuration */
+  if (user_cfg)
+    {
+      VCFG_DBG (0, "VCL config was provided. Applying user config");
+      vppcom_cfg_apply_user_config (&vcm->cfg, user_cfg);
+    }
+  else
+    VCFG_DBG (0, "VCL config was not provided, using default config");
+
+  /* Determine app name: use provided name if available, otherwise NULL for
+   * PID-based name */
+  const char *app_name =
+    (user_cfg && user_cfg->app_name) ? user_cfg->app_name : NULL;
+  return vppcom_app_init_common (app_name);
 }
 
 void
@@ -2051,19 +2170,15 @@ vppcom_session_stream_connect (uint32_t session_handle,
       return VPPCOM_OK;
     }
 
-  /* Connect to quic session specifics */
-  session->transport.is_ip4 = parent_session->transport.is_ip4;
-  session->transport.rmt_ip.ip4.as_u32 = (uint32_t) 1;
-  session->transport.rmt_port = 0;
   session->parent_handle = parent_session->vpp_handle;
 
   VDBG (0, "session handle %u: connecting to session %u [0x%llx]",
 	session_handle, parent_session_handle, parent_session->vpp_handle);
 
   /*
-   * Send connect request and wait for reply from vpp
+   * Send connect stream request and wait for reply from vpp
    */
-  vcl_send_session_connect (wrk, session);
+  vcl_send_session_connect_stream (wrk, session);
   rv = vppcom_wait_for_session_state_change (session_index, VCL_STATE_READY,
 					     vcm->cfg.session_timeout);
 

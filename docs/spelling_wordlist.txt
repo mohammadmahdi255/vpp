@@ -537,6 +537,8 @@ ipN
 ipsec
 IPsec
 ipsecmb
+ipset
+ipsets
 iptables
 ipv
 iPv
@@ -777,6 +779,7 @@ nodaemon
 noevaluate
 nonaddress
 nosyslog
+npol
 npt
 npt66
 ns
@@ -1033,6 +1036,8 @@ setjmp
 settingupenvironment
 setUp
 setUpClass
+sfdp
+SFDP
 sflow
 sFlow
 sfr
@@ -1058,6 +1063,7 @@ snat
 socketsvr
 socksvr
 sourceNATing
+sp
 spd
 Specialisations
 spinlock

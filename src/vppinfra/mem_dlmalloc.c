@@ -232,7 +232,7 @@ clib_mem_create_heap_internal (void *base, uword size,
     {
       log2_page_sz = clib_mem_log2_page_size_validate (log2_page_sz);
       size = round_pow2 (size, clib_mem_page_bytes (log2_page_sz));
-      base = clib_mem_vm_map_internal (0, log2_page_sz, size, -1, 0,
+      base = clib_mem_vm_map_internal (0, log2_page_sz, size, -1, 0, 0,
 				       "main heap");
 
       if (base == CLIB_MEM_VM_MAP_FAILED)
@@ -267,17 +267,21 @@ clib_mem_create_heap_internal (void *base, uword size,
 /* Initialize CLIB heap based on memory/size given by user.
    Set memory to 0 and CLIB will try to allocate its own heap. */
 static void *
-clib_mem_init_internal (void *base, uword size,
-			clib_mem_page_sz_t log2_page_sz)
+clib_mem_init_internal (clib_mem_init_ex_args_t *a)
 {
   clib_mem_heap_t *h;
+  int i;
 
   clib_mem_main_init ();
 
-  h = clib_mem_create_heap_internal (base, size, log2_page_sz,
-				     1 /*is_locked */ , "main heap");
+  h = clib_mem_create_heap_internal (a->base_addr, a->memory_size,
+				     a->log2_page_sz, 1 /*is_locked */,
+				     "main heap");
 
-  clib_mem_set_heap (h);
+  ASSERT (clib_mem_main.main_heap == 0);
+  clib_mem_main.main_heap = h;
+  for (i = 0; i < CLIB_MAX_MHEAPS; i++)
+    clib_mem_main.active_heap[i] = h;
 
   if (mheap_trace_main.lock == 0)
     {
@@ -295,33 +299,29 @@ clib_mem_init_internal (void *base, uword size,
 __clib_export void *
 clib_mem_init (void *memory, uword memory_size)
 {
-  return clib_mem_init_internal (memory, memory_size,
-				 CLIB_MEM_PAGE_SZ_DEFAULT);
+  return clib_mem_init_internal (&(clib_mem_init_ex_args_t){
+    .base_addr = memory,
+    .memory_size = memory_size,
+    .log2_page_sz = CLIB_MEM_PAGE_SZ_DEFAULT,
+  });
 }
 
 __clib_export void *
-clib_mem_init_with_page_size (uword memory_size,
-			      clib_mem_page_sz_t log2_page_sz)
+clib_mem_init_ex (clib_mem_init_ex_args_t *a)
 {
-  return clib_mem_init_internal (0, memory_size, log2_page_sz);
-}
-
-__clib_export void *
-clib_mem_init_thread_safe (void *memory, uword memory_size)
-{
-  return clib_mem_init_internal (memory, memory_size,
-				 CLIB_MEM_PAGE_SZ_DEFAULT);
+  return clib_mem_init_internal (a);
 }
 
 __clib_export void
 clib_mem_destroy (void)
 {
   mheap_trace_main_t *tm = &mheap_trace_main;
-  clib_mem_heap_t *heap = clib_mem_get_heap ();
+  clib_mem_heap_t *heap = clib_mem_main.main_heap;
 
   if (heap->mspace == tm->current_traced_mheap)
     mheap_trace (heap, 0);
 
+  clib_mem_main.main_heap = 0;
   destroy_mspace (heap->mspace);
   clib_mem_vm_unmap (heap);
 }
@@ -655,7 +655,7 @@ static inline void *
 clib_mem_heap_alloc_inline (void *heap, uword size, uword align,
 			    int os_out_of_memory_on_failure)
 {
-  clib_mem_heap_t *h = heap ? heap : clib_mem_get_per_cpu_heap ();
+  clib_mem_heap_t *h = heap ? heap : clib_mem_get_heap ();
   void *p;
 
   align = clib_max (CLIB_MEM_MIN_ALIGN, align);
@@ -739,7 +739,7 @@ clib_mem_heap_realloc_aligned (void *heap, void *p, uword new_size,
 			       uword align)
 {
   uword old_alloc_size;
-  clib_mem_heap_t *h = heap ? heap : clib_mem_get_per_cpu_heap ();
+  clib_mem_heap_t *h = heap ? heap : clib_mem_get_heap ();
   void *new;
 
   ASSERT (count_set_bits (align) == 1);
@@ -798,7 +798,7 @@ clib_mem_realloc (void *p, uword new_size)
 __clib_export __clib_flatten uword
 clib_mem_heap_is_heap_object (void *heap, void *p)
 {
-  clib_mem_heap_t *h = heap ? heap : clib_mem_get_per_cpu_heap ();
+  clib_mem_heap_t *h = heap ? heap : clib_mem_get_heap ();
   return mspace_is_heap_object (h->mspace, p);
 }
 
@@ -811,7 +811,7 @@ clib_mem_is_heap_object (void *p)
 __clib_export __clib_flatten void
 clib_mem_heap_free (void *heap, void *p)
 {
-  clib_mem_heap_t *h = heap ? heap : clib_mem_get_per_cpu_heap ();
+  clib_mem_heap_t *h = heap ? heap : clib_mem_get_heap ();
   uword size = clib_mem_size (p);
 
   /* Make sure object is in the correct heap. */

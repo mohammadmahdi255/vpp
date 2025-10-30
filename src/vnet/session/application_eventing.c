@@ -120,7 +120,7 @@ app_evt_collector_log_session (app_evt_collector_t *c, session_t *s)
   if (!tc)
     return;
 
-  cwrk = &c->wrk[s->thread_index];
+  cwrk = app_evt_collector_wrk_get (c, s->thread_index);
   chunk = app_evt_buffer_alloc_chunk (&cwrk->buf);
 
   msg = app_evt_buf_chunk_append_uninit (chunk, sizeof (app_evt_msg_t));
@@ -146,6 +146,9 @@ app_evt_collector_log_session (app_evt_collector_t *c, session_t *s)
 	clib_memcpy_fast (tcp_stats->conn_id, tc->opaque_conn_id,
 			  sizeof (tc->opaque_conn_id));
 	tcp_stats->end_ts = transport_time_now (s->thread_index);
+	tcp_stats->close_reason = s->flags & SESSION_F_TPT_INIT_CLOSE ?
+				    APP_EVT_SESSION_STAT_TRANSPORT_CLOSED :
+				    APP_EVT_SESSION_STAT_APP_CLOSED;
 
 #define _(type, name) tcp_stats->name = tcp_conn->name;
 	foreach_tcp_transport_stat
@@ -179,6 +182,9 @@ app_evt_collector_log_session (app_evt_collector_t *c, session_t *s)
 			  sizeof (tc->opaque_conn_id));
 	ct_stats->actual_proto = ct_conn->actual_tp;
 	ct_stats->end_ts = transport_time_now (s->thread_index);
+	ct_stats->close_reason = s->flags & SESSION_F_TPT_INIT_CLOSE ?
+				   APP_EVT_SESSION_STAT_TRANSPORT_CLOSED :
+				   APP_EVT_SESSION_STAT_APP_CLOSED;
       }
       break;
     default:
@@ -210,6 +216,10 @@ app_evt_collect_on_session_cleanup (session_t *s)
 
   app_wrk = app_worker_get (s->app_wrk_index);
   app = application_get (app_wrk->app_index);
+  /* If filtering configured, log only if listener found */
+  if (app->evt_collector_session_filter &&
+      !hash_get (app->evt_collector_session_filter, s->listener_handle))
+    return;
   c = app_evt_collector_get (app->evt_collector_index);
   if (PREDICT_FALSE (!c || !c->is_ready))
     return;
@@ -292,7 +302,7 @@ app_evt_collector_connected_callback (u32 app_index, u32 api_context,
       goto check_map;
     }
 
-  cwrk = &c->wrk[s->thread_index];
+  cwrk = app_evt_collector_wrk_get (c, s->thread_index);
   cwrk->session_handle = session_handle (s);
   s->opaque = c->collector_index << 16 | s->thread_index;
   s->session_state = SESSION_STATE_READY;
@@ -341,7 +351,7 @@ app_evt_collector_disconnect_callback (session_t *s)
   c->is_ready = 0;
   CLIB_SPINLOCK_UNLOCK (c->session_map_lock);
 
-  cwrk = &c->wrk[s->thread_index];
+  cwrk = app_evt_collector_wrk_get (c, s->thread_index);
   cwrk->session_handle = SESSION_INVALID_HANDLE;
 
   /* Worker session disconnected, try to reconnect */
@@ -518,7 +528,7 @@ app_evt_collector_enable_command_fn (vlib_main_t *vm, unformat_input_t *input,
   u8 *collector_uri = 0, is_enable = 0, is_add = 1;
   app_evt_main_t *alm = &app_evt_main;
   clib_error_t *error = 0;
-  u32 app_index = ~0;
+  u32 app_index = ~0, ls_index = ~0;
   u64 tmp64 = 0;
 
   if (!unformat_user (input, unformat_line_input, line_input))
@@ -543,7 +553,9 @@ app_evt_collector_enable_command_fn (vlib_main_t *vm, unformat_input_t *input,
 	alm->segment_size = tmp64;
       else if (unformat (line_input, "uri %s", &collector_uri))
 	vec_add1 (collector_uri, 0);
-      else if (unformat (line_input, "app %d", &app_index))
+      else if (unformat (line_input, "app %U", unformat_app_index, &app_index))
+	;
+      else if (unformat (line_input, "listener %u", &ls_index))
 	;
       else if (unformat (line_input, "add"))
 	;
@@ -605,11 +617,20 @@ app_evt_collector_enable_command_fn (vlib_main_t *vm, unformat_input_t *input,
 	}
       if (!is_add)
 	{
+	  if (ls_index != ~0)
+	    {
+	      hash_unset (app->evt_collector_session_filter, ls_index);
+	      goto done;
+	    }
 	  app->evt_collector_index = APP_INVALID_INDEX;
 	  app->cb_fns.app_evt_callback = 0;
+	  hash_free (app->evt_collector_session_filter);
 	  goto done;
 	}
       app->cb_fns.app_evt_callback = app_evt_collector_get_cb_fn ();
+      /* listeners are allocated on main thread, so it's enough to use index */
+      if (ls_index != ~0)
+	hash_set (app->evt_collector_session_filter, ls_index, 1);
     }
 
 done:
@@ -621,7 +642,8 @@ done:
 VLIB_CLI_COMMAND (app_evt_collector_command, static) = {
   .path = "app evt-collector",
   .short_help = "app evt-collector [enable] [segment-size <nn>[k|m]] "
-		"[fifo-size <nn>[k|m]] [add|del] [uri <uri>] [app <index>] ",
+		"[fifo-size <nn>[k|m]] [add|del] [uri <uri>] [app <index> "
+		"[listener <index>]] ",
   .function = app_evt_collector_enable_command_fn,
 };
 
@@ -662,16 +684,29 @@ static clib_error_t *
 show_app_evt_collector_command_fn (vlib_main_t *vm, unformat_input_t *input,
 				   vlib_cli_command_t *cmd)
 {
-  unformat_input_t _line_input, *line_input = &_line_input;
   app_evt_main_t *alm = &app_evt_main;
   clib_error_t *error = 0;
   app_evt_collector_t *c;
+  u8 do_listeners = 0;
+  u32 app_index = ~0, val;
+  application_t *app = 0;
+  session_handle_t lsh;
+  session_t *ls;
 
-  if (unformat_user (input, unformat_line_input, line_input))
+  while (unformat_check_input (input) != UNFORMAT_END_OF_INPUT)
     {
-      error = clib_error_return (0, "unknown input `%U'",
-				 format_unformat_error, line_input);
-      goto done;
+      if (unformat (input, "app %U", unformat_app_index, &app_index))
+	;
+      else if (unformat (input, "listeners-filter"))
+	{
+	  do_listeners = 1;
+	}
+      else
+	{
+	  error = clib_error_return (0, "unknown input `%U'",
+				     format_unformat_error, input);
+	  goto done;
+	}
     }
 
   if (alm->app_index == APP_INVALID_INDEX)
@@ -680,6 +715,29 @@ show_app_evt_collector_command_fn (vlib_main_t *vm, unformat_input_t *input,
       goto done;
     }
 
+  if (app_index != ~0)
+    {
+      app = application_get (app_index);
+      if (!app)
+	{
+	  error = clib_error_return (0, "Invalid app index %u", app_index);
+	  goto done;
+	}
+    }
+  if (do_listeners)
+    {
+      if (!app)
+	{
+	  error =
+	    clib_error_return (0, "app index required to show listeners");
+	  goto done;
+	}
+      hash_foreach (lsh, val, app->evt_collector_session_filter, ({
+		      ls = listen_session_get_from_handle (lsh);
+		      vlib_cli_output (vm, "%U", format_session, ls);
+		    }));
+      goto done;
+    }
   vlib_cli_output (vm, "app evt-collector app-index: %u", alm->app_index);
   vlib_cli_output (vm, " fifo size %U segment size %U", format_memory_size,
 		   alm->fifo_size, format_memory_size, alm->segment_size);
@@ -692,6 +750,6 @@ done:
 
 VLIB_CLI_COMMAND (show_app_evt_collector_command, static) = {
   .path = "show app evt-collector",
-  .short_help = "show app evt-collector",
+  .short_help = "show app evt-collector [app <app> listeners-filter]",
   .function = show_app_evt_collector_command_fn,
 };

@@ -132,7 +132,7 @@ typedef struct application_
   u32 app_index;
 
   /** Flags */
-  u32 flags;
+  app_options_flags_t flags;
 
   /** Callbacks: shoulder-taps for the server/client */
   session_cb_vft_t cb_fns;
@@ -169,6 +169,9 @@ typedef struct application_
 
   /** collector index, if any */
   u32 evt_collector_index;
+
+  /* collector session filter, if any */
+  uword *evt_collector_session_filter;
 
   /** app crypto state */
   app_crypto_ctx_t crypto_ctx;
@@ -347,6 +350,8 @@ int app_worker_own_session (app_worker_t * app_wrk, session_t * s);
 void app_worker_free (app_worker_t * app_wrk);
 int app_worker_connect_session (app_worker_t *app, session_endpoint_cfg_t *sep,
 				session_handle_t *rsh);
+int app_worker_connect_stream (app_worker_t *app, session_endpoint_cfg_t *sep,
+			       session_handle_t *rsh);
 session_error_t app_worker_start_listen (app_worker_t *app_wrk,
 					 app_listener_t *lstnr);
 int app_worker_stop_listen (app_worker_t * app_wrk, app_listener_t * al);
@@ -411,6 +416,7 @@ void app_worker_del_detached_sm (app_worker_t * app_wrk, u32 sm_index);
 u8 *format_app_worker (u8 * s, va_list * args);
 u8 *format_app_worker_listener (u8 *s, va_list *args);
 u8 *format_crypto_context (u8 * s, va_list * args);
+uword unformat_app_index (unformat_input_t *input, va_list *args);
 void app_worker_format_connects (app_worker_t * app_wrk, int verbose);
 session_error_t vnet_app_worker_add_del (vnet_app_worker_add_del_args_t *a);
 

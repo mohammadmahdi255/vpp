@@ -114,6 +114,10 @@ typedef struct clib_mem_heap_t clib_mem_heap_t;
 
 typedef struct
 {
+  /* main and active heap */
+  clib_mem_heap_t *main_heap;
+  clib_mem_heap_t *active_heap[CLIB_MAX_MHEAPS];
+
   /* log2 system page size */
   clib_mem_page_sz_t log2_page_sz;
 
@@ -125,12 +129,6 @@ typedef struct
 
   /* bitmap of available numa nodes */
   u32 numa_node_bitmap;
-
-  /* per CPU heaps */
-  void *per_cpu_mheaps[CLIB_MAX_MHEAPS];
-
-  /* per NUMA heaps */
-  void *per_numa_mheaps[CLIB_MAX_NUMAS];
 
   /* memory maps */
   clib_mem_vm_map_hdr_t *first_map, *last_map;
@@ -161,59 +159,6 @@ clib_mem_unpoison (const void volatile *p, uword s)
 #ifdef CLIB_SANITIZE_ADDR
   ASAN_UNPOISON_MEMORY_REGION (p, s);
 #endif
-}
-
-always_inline clib_mem_heap_t *
-clib_mem_get_per_cpu_heap (void)
-{
-  int cpu = os_get_thread_index ();
-  return clib_mem_main.per_cpu_mheaps[cpu];
-}
-
-always_inline void *
-clib_mem_set_per_cpu_heap (void *new_heap)
-{
-  int cpu = os_get_thread_index ();
-  void *old = clib_mem_main.per_cpu_mheaps[cpu];
-  clib_mem_main.per_cpu_mheaps[cpu] = new_heap;
-  return old;
-}
-
-always_inline void *
-clib_mem_get_per_numa_heap (u32 numa_id)
-{
-  ASSERT (numa_id < ARRAY_LEN (clib_mem_main.per_numa_mheaps));
-  return clib_mem_main.per_numa_mheaps[numa_id];
-}
-
-always_inline void *
-clib_mem_set_per_numa_heap (void *new_heap)
-{
-  int numa = os_get_numa_index ();
-  void *old = clib_mem_main.per_numa_mheaps[numa];
-  clib_mem_main.per_numa_mheaps[numa] = new_heap;
-  return old;
-}
-
-always_inline void
-clib_mem_set_thread_index (void)
-{
-  /*
-   * Find an unused slot in the per-cpu-mheaps array,
-   * and grab it for this thread. We need to be able to
-   * push/pop the thread heap without affecting other thread(s).
-   */
-  int i;
-  if (__os_thread_index != 0)
-    return;
-  for (i = 0; i < ARRAY_LEN (clib_mem_main.per_cpu_mheaps); i++)
-    if (clib_atomic_bool_cmp_and_swap (&clib_mem_main.per_cpu_mheaps[i],
-				       0, clib_mem_main.per_cpu_mheaps[0]))
-      {
-	os_set_thread_index (i);
-	break;
-      }
-  ASSERT (__os_thread_index > 0);
 }
 
 /* Memory allocator which calls os_out_of_memory() when it fails */
@@ -260,13 +205,17 @@ void clib_mem_free_s (void *p);
 always_inline clib_mem_heap_t *
 clib_mem_get_heap (void)
 {
-  return clib_mem_get_per_cpu_heap ();
+  int cpu = os_get_thread_index ();
+  return clib_mem_main.active_heap[cpu];
 }
 
 always_inline clib_mem_heap_t *
 clib_mem_set_heap (clib_mem_heap_t * heap)
 {
-  return clib_mem_set_per_cpu_heap (heap);
+  int cpu = os_get_thread_index ();
+  clib_mem_heap_t *old_heap = clib_mem_main.active_heap[cpu];
+  clib_mem_main.active_heap[cpu] = heap;
+  return old_heap;
 }
 
 void clib_mem_destroy_heap (clib_mem_heap_t * heap);
@@ -275,9 +224,14 @@ clib_mem_heap_t *clib_mem_create_heap (void *base, uword size, int is_locked,
 
 void clib_mem_main_init ();
 void *clib_mem_init (void *base, uword size);
-void *clib_mem_init_with_page_size (uword memory_size,
-				    clib_mem_page_sz_t log2_page_sz);
-void *clib_mem_init_thread_safe (void *memory, uword memory_size);
+
+typedef struct
+{
+  void *base_addr;
+  uword memory_size;
+  clib_mem_page_sz_t log2_page_sz;
+} clib_mem_init_ex_args_t;
+void *clib_mem_init_ex (clib_mem_init_ex_args_t *args);
 
 void clib_mem_exit (void);
 
@@ -366,7 +320,8 @@ clib_mem_vm_free (void *addr, uword size)
 }
 
 void *clib_mem_vm_map_internal (void *base, clib_mem_page_sz_t log2_page_sz,
-				uword size, int fd, uword offset, char *name);
+				uword size, int fd, u8 log2_align,
+				uword offset, char *name);
 
 void *clib_mem_vm_map (void *start, uword size,
 		       clib_mem_page_sz_t log2_page_size, char *fmt, ...);
@@ -411,8 +366,7 @@ clib_mem_get_default_hugepage_size (void)
 int clib_mem_vm_create_fd (clib_mem_page_sz_t log2_page_size, char *fmt, ...);
 uword clib_mem_get_fd_page_size (int fd);
 clib_mem_page_sz_t clib_mem_get_fd_log2_page_size (int fd);
-uword clib_mem_vm_reserve (uword start, uword size,
-			   clib_mem_page_sz_t log2_page_sz);
+uword clib_mem_vm_reserve (uword start, uword size, u8 log2_align);
 u64 *clib_mem_vm_get_paddr (void *mem, clib_mem_page_sz_t log2_page_size,
 			    int n_pages);
 void clib_mem_destroy (void);
