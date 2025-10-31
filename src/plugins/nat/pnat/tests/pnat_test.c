@@ -280,7 +280,7 @@ static void add_translation(rule_t *r) {
     ruletomatch(&r->match, &match);
     ruletorewrite(&r->rewrite, &rewrite);
 
-    int rv = pnat_binding_add(&match, &rewrite, &r->index);
+    int CLIB_UNUSED(rv) = pnat_binding_add(&match, &rewrite, &r->index);
     assert(rv == 0);
 
     rv = pnat_binding_attach(0, PNAT_IP4_INPUT, r->index);
@@ -288,7 +288,7 @@ static void add_translation(rule_t *r) {
 }
 
 static void del_translation(rule_t *r) {
-    int rv = pnat_binding_detach(0, PNAT_IP4_INPUT, r->index);
+    int CLIB_UNUSED(rv) = pnat_binding_detach(0, PNAT_IP4_INPUT, r->index);
     assert(rv == 0);
 
     rv = pnat_binding_del(r->index);
@@ -380,7 +380,7 @@ static void test_table(test_t *t, int no_tests) {
 }
 
 void test_performance(void) {
-    pnat_main_t *pm = &pnat_main;
+    __clib_unused pnat_main_t *pm = &pnat_main;
     int i;
     vlib_main_t *vm = vlib_get_first_main();
 
@@ -426,7 +426,7 @@ void test_performance(void) {
 }
 
 void test_packets(void) {
-    pnat_main_t *pm = &pnat_main;
+    __clib_unused pnat_main_t *pm = &pnat_main;
     int i;
     for (i = 0; i < sizeof(rules) / sizeof(rules[0]); i++) {
         add_translation(&rules[i]);
@@ -512,7 +512,7 @@ void test_api(void) {
 void test_checksum(void) {
     int i;
     vlib_main_t *vm = vlib_get_first_main();
-    pnat_main_t *pm = &pnat_main;
+    __clib_unused pnat_main_t *pm = &pnat_main;
 
     test_t test = {
         .name = "checksum",

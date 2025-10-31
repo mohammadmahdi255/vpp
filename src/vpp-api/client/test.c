@@ -136,7 +136,7 @@ test_stats (void)
   clib_mem_trace_enable_disable(1);
   clib_mem_trace (1);
 
-  int rv = stat_segment_connect (STAT_SEGMENT_SOCKET_FILE);
+  __clib_unused int rv = stat_segment_connect (STAT_SEGMENT_SOCKET_FILE);
   assert(rv == 0);
 
   u32 *dir;

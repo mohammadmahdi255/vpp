@@ -41,8 +41,30 @@ typedef struct {
 
 #ifndef CLIB_MARCH_VARIANT
 ethernet_detunnel_main_t ethernet_detunnel_main;
+
+#ifdef CLIB_HAVE_VEC128
+u16x8 vlan_type_vec;
+u16x8 ip4_type_vec;
+u16x8 ip6_type_vec;
+u16x8 vlan_next_vec;
+u16x8 ip4_next_vec;
+u16x8 ip6_next_vec;
+u16x8 drop_next_vec;
+#endif
+
 #else
 extern ethernet_detunnel_main_t ethernet_detunnel_main;
+
+#ifdef CLIB_HAVE_VEC128
+extern u16x8 vlan_type_vec;
+extern u16x8 ip4_type_vec;
+extern u16x8 ip6_type_vec;
+extern u16x8 vlan_next_vec;
+extern u16x8 ip4_next_vec;
+extern u16x8 ip6_next_vec;
+extern u16x8 drop_next_vec;
+#endif
+
 #endif
 
 static_always_inline bool clib_u32x4_is_all_equal(const u32 *data, u32 ref)
@@ -73,46 +95,22 @@ static_always_inline u16 get_next_node_1x(u16 ethertype)
 static_always_inline void get_next_node_4x(const u16 ethertype[4], u16 next[4])
 {
 #ifdef CLIB_HAVE_VEC128
-	/* Load ethertypes into SIMD register */
-	u16x8 eth_vec = u16x8_load_unaligned(ethertype);
+	u16x8 eth_type_vec = u16x8_load_unaligned(ethertype);
 
-	/* Create comparison vectors for each known type */
-	u16x8 vlan_type = u16x8_splat(__bswap_constant_16(ETHERNET_TYPE_VLAN));
-	u16x8 ip4_type  = u16x8_splat(__bswap_constant_16(ETHERNET_TYPE_IP4));
-	u16x8 ip6_type  = u16x8_splat(__bswap_constant_16(ETHERNET_TYPE_IP6));
+	u16x8 vlan_mask = (eth_type_vec == vlan_type_vec);
+	u16x8 ip4_mask = (eth_type_vec == ip4_type_vec);
+	u16x8 ip6_mask = (eth_type_vec == ip6_type_vec);
+	u16x8 drop_mask = ~(vlan_mask | ip4_mask | ip6_mask);
 
-	/* Compare: result is 0xFFFF for match, 0x0000 for no match */
-	u16x8 is_vlan = eth_vec == vlan_type;
-	u16x8 is_ip4  = eth_vec == ip4_type;
-	u16x8 is_ip6  = eth_vec == ip6_type;
+	u16x8 vlan_next = vlan_mask & vlan_next_vec;
+	u16x8 ip4_next = ip4_mask & ip4_next_vec;
+	u16x8 ip6_next = ip6_mask & ip6_next_vec;
+	u16x8 drop_next = drop_mask & drop_next_vec;
 
-	/* Bitwise select: mask & value = value if mask is 0xFFFF, else 0
-	 * This is the equivalent of: result = mask ? value : 0
-	 * Cost: 1 cycle per AND operation (4 cycles total for 3 types + default)
-	 */
-	u16x8 vlan_next = is_vlan & u16x8_splat(NEXT_NODE_VLAN_DETUNNEL);
-	u16x8 ip4_next  = is_ip4  & u16x8_splat(NEXT_NODE_IP4);
-	u16x8 ip6_next  = is_ip6  & u16x8_splat(NEXT_NODE_IP6);
-
-	/* Combine results: OR works because only one can be non-zero per element
-	 * Cost: 2 cycles for 2 OR operations
-	 */
-	u16x8 result = vlan_next | ip4_next | ip6_next;
-
-	/* Handle default case: if no match (result == 0), set to ERROR_DROP
-	 * Cost: 3 cycles (OR + NOT + AND + OR)
-	 */
-	u16x8 any_match = is_vlan | is_ip4 | is_ip6;
-	u16x8 no_match = ~any_match;
-	result = result | (no_match & u16x8_splat(NEXT_NODE_ERROR_DROP));
+	u16x8 result = vlan_next | ip4_next | ip6_next | drop_next;
 
 	/* Store results back to array */
 	u16x8_store_unaligned(result, next);
-
-	/* Total estimated cost: ~12-15 cycles for 4 lookups (3-4 cycles per lookup)
-	 * vs switch-case: ~16-32 cycles for 4 lookups (4-8 cycles per lookup)
-	 * Speedup: ~1.5-2x faster than switch-case
-	 */
 #else
 	/* Fallback to optimized switch-case */
 	next[0] = get_next_node_1x(ethertype[0]);
@@ -377,6 +375,17 @@ static clib_error_t *ethernet_detunnel_init(vlib_main_t *CLIB_UNUSED(vm))
 
 	foreach_ethernet_counter
 #undef _
+
+#ifdef CLIB_HAVE_VEC128
+	vlan_type_vec = u16x8_splat(__bswap_constant_16(ETHERNET_TYPE_VLAN));
+	ip4_type_vec = u16x8_splat(__bswap_constant_16(ETHERNET_TYPE_IP4));
+	ip6_type_vec = u16x8_splat(__bswap_constant_16(ETHERNET_TYPE_IP6));
+
+	vlan_next_vec = u16x8_splat(NEXT_NODE_VLAN_DETUNNEL);
+	ip4_next_vec = u16x8_splat(NEXT_NODE_IP4);
+	ip6_next_vec = u16x8_splat(NEXT_NODE_IP6);
+	drop_next_vec = u16x8_splat(NEXT_NODE_ERROR_DROP);
+#endif
 
 	return 0;
 }
