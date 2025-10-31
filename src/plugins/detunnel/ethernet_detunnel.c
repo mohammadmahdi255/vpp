@@ -67,12 +67,15 @@ extern u16x8 drop_next_vec;
 
 #endif
 
-static_always_inline bool clib_u32x4_is_all_equal(const u32 *data, u32 ref)
+static_always_inline bool clib_u32x8_is_all_equal(const u32 data[8], u32 ref)
 {
-#ifdef CLIB_HAVE_VEC128
-	return (bool) u32x4_is_all_equal(*(u32x4u *) data, ref);
+#ifdef CLIB_HAVE_VEC256
+	return (bool) u32x8_is_all_equal(*(u32x8u *) data, ref);
+#elif defined(CLIB_HAVE_VEC128)
+	return (bool) u32x4_is_all_equal(*(u32x4u *) &data[0], ref) && u32x4_is_all_equal(*(u32x4u *) &data[4], ref);
 #else
-    return (data[0] == ref) && (data[1] == ref) && (data[2] == ref) && (data[3] == ref);
+    return (data[0] == ref) && (data[1] == ref) && (data[2] == ref) && (data[3] == ref) &&
+			(data[4] == ref) && (data[5] == ref) && (data[6] == ref) && (data[7] == ref) ;
 #endif
 }
 
@@ -92,7 +95,7 @@ static_always_inline u16 get_next_node_1x(u16 ethertype)
 	}
 }
 
-static_always_inline void get_next_node_4x(const u16 ethertype[4], u16 next[4])
+static_always_inline void get_next_node_8x(const u16 ethertype[8], u16 next[8])
 {
 #ifdef CLIB_HAVE_VEC128
 	u16x8 eth_type_vec = u16x8_load_unaligned(ethertype);
@@ -117,34 +120,38 @@ static_always_inline void get_next_node_4x(const u16 ethertype[4], u16 next[4])
 	next[1] = get_next_node_1x(ethertype[1]);
 	next[2] = get_next_node_1x(ethertype[2]);
 	next[3] = get_next_node_1x(ethertype[3]);
+	next[4] = get_next_node_1x(ethertype[4]);
+	next[5] = get_next_node_1x(ethertype[5]);
+	next[6] = get_next_node_1x(ethertype[6]);
+	next[7] = get_next_node_1x(ethertype[7]);
 #endif
 }
 
-static_always_inline bool clib_u32x4_is_all_greater_equal(const u32 *data, u32 ref)
+static_always_inline bool clib_u32x8_is_all_greater_equal(const u32 *data, u32 ref)
 {
-#ifdef CLIB_HAVE_VEC128
-	u32x4 data_vec = u32x4_load_unaligned(data);
-	u32x4 ref_vec = u32x4_splat(ref);
+#ifdef CLIB_HAVE_VEC256
+	u32x8u data_vec = u32x8_load_unaligned(data);
+	u32x8u ref_vec = u32x8_splat(ref);
 
-	u32x4 valid = data_vec >= ref_vec;
-	return u32x4_is_all_equal(valid, 0xFFFFFFFF);
+	u32x8u valid = data_vec >= ref_vec;
+	return u32x8_is_all_equal(valid, 0xFFFFFFFF);
 #else
 	return (data[0] >= ref && data[1] >= ref && data[2] >= ref && data[3] >= ref);
 #endif
 }
 
-static_always_inline bool clib_u32x4_sum_elts(const u32 *data)
+static_always_inline bool clib_u32x8_sum_elts(const u32 *data)
 {
-#ifdef CLIB_HAVE_VEC128
-	u32x4 data_vec = u32x4_load_unaligned(data);
-	return u32x4_sum_elts(data_vec);
+#ifdef CLIB_HAVE_VEC256
+	u32x8u data_vec = u32x8_load_unaligned(data);
+	return u32x8_sum_elts(data_vec);
 #else
 	return data[0] + data[1] + data[2] + data[3];
 #endif
 }
 
-static_always_inline bool process_buffer_4x(vlib_main_t *vm, vlib_node_runtime_t *node,
-		vlib_buffer_t* b[4], u16 next[4])
+static_always_inline bool process_buffer_8x(vlib_main_t *vm, vlib_node_runtime_t *node,
+		vlib_buffer_t* b[8], u16 next[8])
 {
 	ethernet_detunnel_main_t *edm = &ethernet_detunnel_main;
 
@@ -152,42 +159,58 @@ static_always_inline bool process_buffer_4x(vlib_main_t *vm, vlib_node_runtime_t
 		vnet_buffer(b[0])->sw_if_index[VLIB_RX],
 		vnet_buffer(b[1])->sw_if_index[VLIB_RX],
 		vnet_buffer(b[2])->sw_if_index[VLIB_RX],
-		vnet_buffer(b[3])->sw_if_index[VLIB_RX]
+		vnet_buffer(b[3])->sw_if_index[VLIB_RX],
+		vnet_buffer(b[4])->sw_if_index[VLIB_RX],
+		vnet_buffer(b[5])->sw_if_index[VLIB_RX],
+		vnet_buffer(b[6])->sw_if_index[VLIB_RX],
+		vnet_buffer(b[7])->sw_if_index[VLIB_RX]
 	};
 
-	if (PREDICT_FALSE(edm->counter_if_index < sw_idx[0] || !clib_u32x4_is_all_equal(sw_idx, sw_idx[0])))
+	if (PREDICT_FALSE(edm->counter_if_index < sw_idx[0] || !clib_u32x8_is_all_equal(sw_idx, sw_idx[0])))
 		return false;
 
 	const u32 length[] = {
 		b[0]->current_length,
 		b[1]->current_length,
 		b[2]->current_length,
-		b[3]->current_length
+		b[3]->current_length,
+		b[4]->current_length,
+		b[5]->current_length,
+		b[6]->current_length,
+		b[7]->current_length
 	};
 
-	if(PREDICT_FALSE(!clib_u32x4_is_all_greater_equal(length, sizeof(ethernet_header_t))))
+	if(PREDICT_FALSE(!clib_u32x8_is_all_greater_equal(length, sizeof(ethernet_header_t))))
 		return false;
 
 	const u16 ethertype[] = {
 		((ethernet_header_t *) vlib_buffer_get_current(b[0]))->type,
 		((ethernet_header_t *) vlib_buffer_get_current(b[1]))->type,
 		((ethernet_header_t *) vlib_buffer_get_current(b[2]))->type,
-		((ethernet_header_t *) vlib_buffer_get_current(b[3]))->type
+		((ethernet_header_t *) vlib_buffer_get_current(b[3]))->type,
+		((ethernet_header_t *) vlib_buffer_get_current(b[4]))->type,
+		((ethernet_header_t *) vlib_buffer_get_current(b[5]))->type,
+		((ethernet_header_t *) vlib_buffer_get_current(b[6]))->type,
+		((ethernet_header_t *) vlib_buffer_get_current(b[7]))->type,
 	};
 
 	vlib_buffer_advance(b[0], sizeof(ethernet_header_t));
 	vlib_buffer_advance(b[1], sizeof(ethernet_header_t));
 	vlib_buffer_advance(b[2], sizeof(ethernet_header_t));
 	vlib_buffer_advance(b[3], sizeof(ethernet_header_t));
+	vlib_buffer_advance(b[4], sizeof(ethernet_header_t));
+	vlib_buffer_advance(b[5], sizeof(ethernet_header_t));
+	vlib_buffer_advance(b[6], sizeof(ethernet_header_t));
+	vlib_buffer_advance(b[7], sizeof(ethernet_header_t));
 
-	const u32 total_bytes = clib_u32x4_sum_elts(length);
+	const u32 total_bytes = clib_u32x8_sum_elts(length);
 
 	vlib_increment_combined_counter(&edm->counters[ETHERNET_TOTAL], vm->thread_index,
 			sw_idx[0], sizeof(length), total_bytes);
 	vlib_increment_combined_counter(&edm->counters[ETHERNET_PROCESSED], vm->thread_index,
 			sw_idx[0], 4, 4 * sizeof(ethernet_header_t));
 
-	get_next_node_4x(ethertype, next);
+	get_next_node_8x(ethertype, next);
 
 	if (PREDICT_FALSE(node->flags & VLIB_NODE_FLAG_TRACE))
 	{
@@ -221,6 +244,38 @@ static_always_inline bool process_buffer_4x(vlib_main_t *vm, vlib_node_runtime_t
 			t->sw_if_index = sw_idx[3];
 			t->ethertype = ethertype[3];
 			t->next_index = next[3];
+		}
+
+		if (PREDICT_FALSE(b[4]->flags & VLIB_BUFFER_IS_TRACED))
+		{
+			ethernet_trace_t *t = vlib_add_trace(vm, node, b[4], sizeof(ethernet_trace_t));
+			t->sw_if_index = sw_idx[4];
+			t->ethertype = ethertype[4];
+			t->next_index = next[4];
+		}
+
+		if (PREDICT_FALSE(b[5]->flags & VLIB_BUFFER_IS_TRACED))
+		{
+			ethernet_trace_t *t = vlib_add_trace(vm, node, b[5], sizeof(ethernet_trace_t));
+			t->sw_if_index = sw_idx[5];
+			t->ethertype = ethertype[5];
+			t->next_index = next[5];
+		}
+
+		if (PREDICT_FALSE(b[6]->flags & VLIB_BUFFER_IS_TRACED))
+		{
+			ethernet_trace_t *t = vlib_add_trace(vm, node, b[6], sizeof(ethernet_trace_t));
+			t->sw_if_index = sw_idx[6];
+			t->ethertype = ethertype[6];
+			t->next_index = next[6];
+		}
+
+		if (PREDICT_FALSE(b[7]->flags & VLIB_BUFFER_IS_TRACED))
+		{
+			ethernet_trace_t *t = vlib_add_trace(vm, node, b[7], sizeof(ethernet_trace_t));
+			t->sw_if_index = sw_idx[7];
+			t->ethertype = ethertype[7];
+			t->next_index = next[7];
 		}
 	}
 
@@ -319,32 +374,44 @@ VLIB_NODE_FN (ethernet_detunnel) (vlib_main_t *vm, vlib_node_runtime_t *node, vl
 
 	vlib_get_buffers(vm, from, bufs, n_left_from);
 
-	while (n_left_from >= 4) {
+	while (n_left_from >= 8) {
 
-		if (n_left_from >= 8)
+		if (n_left_from >= 16)
 		{
-			vlib_prefetch_buffer_header(b[4], LOAD);
-			vlib_prefetch_buffer_header(b[5], LOAD);
-			vlib_prefetch_buffer_header(b[6], LOAD);
-			vlib_prefetch_buffer_header(b[7], LOAD);
+			vlib_prefetch_buffer_header(b[8], LOAD);
+			vlib_prefetch_buffer_header(b[9], LOAD);
+			vlib_prefetch_buffer_header(b[10], LOAD);
+			vlib_prefetch_buffer_header(b[11], LOAD);
+			vlib_prefetch_buffer_header(b[12], LOAD);
+			vlib_prefetch_buffer_header(b[13], LOAD);
+			vlib_prefetch_buffer_header(b[14], LOAD);
+			vlib_prefetch_buffer_header(b[15], LOAD);
 
-			vlib_prefetch_buffer_data(b[4], LOAD);
-			vlib_prefetch_buffer_data(b[5], LOAD);
-			vlib_prefetch_buffer_data(b[6], LOAD);
-			vlib_prefetch_buffer_data(b[7], LOAD);
+			vlib_prefetch_buffer_data(b[8], LOAD);
+			vlib_prefetch_buffer_data(b[9], LOAD);
+			vlib_prefetch_buffer_data(b[10], LOAD);
+			vlib_prefetch_buffer_data(b[11], LOAD);
+			vlib_prefetch_buffer_data(b[12], LOAD);
+			vlib_prefetch_buffer_data(b[13], LOAD);
+			vlib_prefetch_buffer_data(b[14], LOAD);
+			vlib_prefetch_buffer_data(b[15], LOAD);
 		}
 
-		if (!process_buffer_4x(vm, node, b, next))
+		if (!process_buffer_8x(vm, node, b, next))
 		{
 			process_buffer_1x(vm, node, b[0], &next[0]);
 			process_buffer_1x(vm, node, b[1], &next[1]);
 			process_buffer_1x(vm, node, b[2], &next[2]);
 			process_buffer_1x(vm, node, b[3], &next[3]);
+			process_buffer_1x(vm, node, b[4], &next[4]);
+			process_buffer_1x(vm, node, b[5], &next[5]);
+			process_buffer_1x(vm, node, b[6], &next[6]);
+			process_buffer_1x(vm, node, b[7], &next[7]);
 		}
 
-		b += 4;
-		next += 4;
-		n_left_from -= 4;
+		b += 8;
+		next += 8;
+		n_left_from -= 8;
 	}
 
 	while (n_left_from > 0) {
