@@ -6,25 +6,30 @@
 #include <vnet/vnet.h>
 #include <vppinfra/clib.h>
 
-#define foreach_ethernet_counter	\
-	_(TOTAL, total)					\
-	_(PROCESSED, processed)			\
+#define foreach_ethernet_detunnel_counter		\
+	_(TOTAL, total)								\
+	_(PROCESSED, processed)						\
 	_(FAILED, failed)
+
+#define foreach_ethernet_detunnel_next_node		\
+	_(ERROR_DROP, "error-drop")					\
+	_(VLAN_DETUNNEL, "vlan-detunnel")			\
+	_(IP4_DETUNNEL, "ip4-drop")					\
+	_(IP6_DETUNNEL, "ip6-drop")
 
 enum
 {
 #define _(id, name) ETHERNET_##id,
-	foreach_ethernet_counter
+	foreach_ethernet_detunnel_counter
 #undef _
 	ETHERNET_COUNTER_N,
 };
 
 enum
 {
-	NEXT_NODE_ERROR_DROP,
-	NEXT_NODE_VLAN_DETUNNEL,
-	NEXT_NODE_IP4,
-	NEXT_NODE_IP6,
+#define _(id, name) NEXT_NODE_##id,
+	foreach_ethernet_detunnel_next_node
+#undef _
 	NEXT_NODE_N,
 };
 
@@ -37,35 +42,36 @@ typedef struct {
 typedef struct {
 	u32 counter_if_index;
 	vlib_combined_counter_main_t counters[ETHERNET_COUNTER_N];
+
+#ifdef CLIB_HAVE_VEC128
+	u16x8 vlan_type_vec;
+	u16x8 ip4_type_vec;
+	u16x8 ip6_type_vec;
+	u16x8 vlan_next_vec;
+	u16x8 ip4_next_vec;
+	u16x8 ip6_next_vec;
+	u16x8 drop_next_vec;
+#endif
+
 } ethernet_detunnel_main_t;
 
 #ifndef CLIB_MARCH_VARIANT
 ethernet_detunnel_main_t ethernet_detunnel_main;
-
-#ifdef CLIB_HAVE_VEC128
-u16x8 vlan_type_vec;
-u16x8 ip4_type_vec;
-u16x8 ip6_type_vec;
-u16x8 vlan_next_vec;
-u16x8 ip4_next_vec;
-u16x8 ip6_next_vec;
-u16x8 drop_next_vec;
-#endif
-
 #else
 extern ethernet_detunnel_main_t ethernet_detunnel_main;
-
-#ifdef CLIB_HAVE_VEC128
-extern u16x8 vlan_type_vec;
-extern u16x8 ip4_type_vec;
-extern u16x8 ip6_type_vec;
-extern u16x8 vlan_next_vec;
-extern u16x8 ip4_next_vec;
-extern u16x8 ip6_next_vec;
-extern u16x8 drop_next_vec;
 #endif
 
-#endif
+static_always_inline void add_trace(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b,
+          u32 sw_if_index, u16 ethertype, u16 next_index)
+{
+	if (PREDICT_FALSE((node->flags & VLIB_NODE_FLAG_TRACE) &&
+	                  (b->flags & VLIB_BUFFER_IS_TRACED))) {
+		ethernet_trace_t *t = vlib_add_trace(vm, node, b, sizeof(*t));
+		t->sw_if_index = sw_if_index;
+		t->ethertype = ethertype;
+		t->next_index = next_index;
+	}
+}
 
 static_always_inline bool clib_u32x8_is_all_equal(const u32 data[8], u32 ref)
 {
@@ -74,8 +80,10 @@ static_always_inline bool clib_u32x8_is_all_equal(const u32 data[8], u32 ref)
 #elif defined(CLIB_HAVE_VEC128)
 	return (bool) u32x4_is_all_equal(*(u32x4u *) &data[0], ref) && u32x4_is_all_equal(*(u32x4u *) &data[4], ref);
 #else
-    return (data[0] == ref) && (data[1] == ref) && (data[2] == ref) && (data[3] == ref) &&
-			(data[4] == ref) && (data[5] == ref) && (data[6] == ref) && (data[7] == ref) ;
+    for (int i = 0; i < 8; i++)
+		if (data[i] != ref)
+			return false;
+	return true;
 #endif
 }
 
@@ -87,9 +95,9 @@ static_always_inline u16 get_next_node_1x(u16 ethertype)
 		case __bswap_constant_16(ETHERNET_TYPE_VLAN):
 			return NEXT_NODE_VLAN_DETUNNEL;
 		case __bswap_constant_16(ETHERNET_TYPE_IP4):
-			return NEXT_NODE_IP4;
+			return NEXT_NODE_IP4_DETUNNEL;
 		case __bswap_constant_16(ETHERNET_TYPE_IP6):
-			return NEXT_NODE_IP6;
+			return NEXT_NODE_IP6_DETUNNEL;
 		default:
 			return NEXT_NODE_ERROR_DROP;
 	}
@@ -98,32 +106,23 @@ static_always_inline u16 get_next_node_1x(u16 ethertype)
 static_always_inline void get_next_node_8x(const u16 ethertype[8], u16 next[8])
 {
 #ifdef CLIB_HAVE_VEC128
+	ethernet_detunnel_main_t *edm = &ethernet_detunnel_main;
 	u16x8 eth_type_vec = u16x8_load_unaligned(ethertype);
 
-	u16x8 vlan_mask = (eth_type_vec == vlan_type_vec);
-	u16x8 ip4_mask = (eth_type_vec == ip4_type_vec);
-	u16x8 ip6_mask = (eth_type_vec == ip6_type_vec);
-	u16x8 drop_mask = ~(vlan_mask | ip4_mask | ip6_mask);
+	u16x8 vlan_mask_vec = (eth_type_vec == edm->vlan_type_vec);
+	u16x8 ip4_mask_vec = (eth_type_vec == edm->ip4_type_vec);
+	u16x8 ip6_mask_vec = (eth_type_vec == edm->ip6_type_vec);
+	u16x8 drop_mask_vec = ~(vlan_mask_vec | ip4_mask_vec | ip6_mask_vec);
 
-	u16x8 vlan_next = vlan_mask & vlan_next_vec;
-	u16x8 ip4_next = ip4_mask & ip4_next_vec;
-	u16x8 ip6_next = ip6_mask & ip6_next_vec;
-	u16x8 drop_next = drop_mask & drop_next_vec;
+	u16x8 result = (vlan_mask_vec & edm->vlan_next_vec) |
+	               (ip4_mask_vec & edm->ip4_next_vec) |
+	               (ip6_mask_vec & edm->ip6_next_vec) |
+	               (drop_mask_vec & edm->drop_next_vec);
 
-	u16x8 result = vlan_next | ip4_next | ip6_next | drop_next;
-
-	/* Store results back to array */
 	u16x8_store_unaligned(result, next);
 #else
-	/* Fallback to optimized switch-case */
-	next[0] = get_next_node_1x(ethertype[0]);
-	next[1] = get_next_node_1x(ethertype[1]);
-	next[2] = get_next_node_1x(ethertype[2]);
-	next[3] = get_next_node_1x(ethertype[3]);
-	next[4] = get_next_node_1x(ethertype[4]);
-	next[5] = get_next_node_1x(ethertype[5]);
-	next[6] = get_next_node_1x(ethertype[6]);
-	next[7] = get_next_node_1x(ethertype[7]);
+	for (int i = 0; i < 8; i++)
+		next[i] = get_next_node_1x(ethertype[i]);
 #endif
 }
 
@@ -194,14 +193,8 @@ static_always_inline bool process_buffer_8x(vlib_main_t *vm, vlib_node_runtime_t
 		((ethernet_header_t *) vlib_buffer_get_current(b[7]))->type,
 	};
 
-	vlib_buffer_advance(b[0], sizeof(ethernet_header_t));
-	vlib_buffer_advance(b[1], sizeof(ethernet_header_t));
-	vlib_buffer_advance(b[2], sizeof(ethernet_header_t));
-	vlib_buffer_advance(b[3], sizeof(ethernet_header_t));
-	vlib_buffer_advance(b[4], sizeof(ethernet_header_t));
-	vlib_buffer_advance(b[5], sizeof(ethernet_header_t));
-	vlib_buffer_advance(b[6], sizeof(ethernet_header_t));
-	vlib_buffer_advance(b[7], sizeof(ethernet_header_t));
+	for (int i = 0; i < 8; i++)
+		vlib_buffer_advance(b[i], sizeof(ethernet_header_t));
 
 	const u32 total_bytes = clib_u32x8_sum_elts(length);
 
@@ -214,69 +207,8 @@ static_always_inline bool process_buffer_8x(vlib_main_t *vm, vlib_node_runtime_t
 
 	if (PREDICT_FALSE(node->flags & VLIB_NODE_FLAG_TRACE))
 	{
-		if (PREDICT_FALSE(b[0]->flags & VLIB_BUFFER_IS_TRACED))
-		{
-			ethernet_trace_t *t = vlib_add_trace(vm, node, b[0], sizeof(ethernet_trace_t));
-			t->sw_if_index = sw_idx[0];
-			t->ethertype = ethertype[0];
-			t->next_index = next[0];
-		}
-
-		if (PREDICT_FALSE(b[1]->flags & VLIB_BUFFER_IS_TRACED))
-		{
-			ethernet_trace_t *t = vlib_add_trace(vm, node, b[1], sizeof(ethernet_trace_t));
-			t->sw_if_index = sw_idx[1];
-			t->ethertype = ethertype[1];
-			t->next_index = next[1];
-		}
-
-		if (PREDICT_FALSE(b[2]->flags & VLIB_BUFFER_IS_TRACED))
-		{
-			ethernet_trace_t *t = vlib_add_trace(vm, node, b[2], sizeof(ethernet_trace_t));
-			t->sw_if_index = sw_idx[2];
-			t->ethertype = ethertype[2];
-			t->next_index = next[2];
-		}
-
-		if (PREDICT_FALSE(b[3]->flags & VLIB_BUFFER_IS_TRACED))
-		{
-			ethernet_trace_t *t = vlib_add_trace(vm, node, b[3], sizeof(ethernet_trace_t));
-			t->sw_if_index = sw_idx[3];
-			t->ethertype = ethertype[3];
-			t->next_index = next[3];
-		}
-
-		if (PREDICT_FALSE(b[4]->flags & VLIB_BUFFER_IS_TRACED))
-		{
-			ethernet_trace_t *t = vlib_add_trace(vm, node, b[4], sizeof(ethernet_trace_t));
-			t->sw_if_index = sw_idx[4];
-			t->ethertype = ethertype[4];
-			t->next_index = next[4];
-		}
-
-		if (PREDICT_FALSE(b[5]->flags & VLIB_BUFFER_IS_TRACED))
-		{
-			ethernet_trace_t *t = vlib_add_trace(vm, node, b[5], sizeof(ethernet_trace_t));
-			t->sw_if_index = sw_idx[5];
-			t->ethertype = ethertype[5];
-			t->next_index = next[5];
-		}
-
-		if (PREDICT_FALSE(b[6]->flags & VLIB_BUFFER_IS_TRACED))
-		{
-			ethernet_trace_t *t = vlib_add_trace(vm, node, b[6], sizeof(ethernet_trace_t));
-			t->sw_if_index = sw_idx[6];
-			t->ethertype = ethertype[6];
-			t->next_index = next[6];
-		}
-
-		if (PREDICT_FALSE(b[7]->flags & VLIB_BUFFER_IS_TRACED))
-		{
-			ethernet_trace_t *t = vlib_add_trace(vm, node, b[7], sizeof(ethernet_trace_t));
-			t->sw_if_index = sw_idx[7];
-			t->ethertype = ethertype[7];
-			t->next_index = next[7];
-		}
+		for (int i = 0; i < 8; i++)
+			add_trace(vm, node, b[i], sw_idx[i], ethertype[i], next[i]);
 	}
 
 	return true;
@@ -291,13 +223,13 @@ static_always_inline void process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t
 	if (PREDICT_FALSE(edm->counter_if_index < sw_idx))
 	{
 #define _(id, name) vlib_validate_combined_counter(&edm->counters[ETHERNET_##id], sw_idx);
-	foreach_ethernet_counter
+	foreach_ethernet_detunnel_counter
 #undef _
 
 		for (u32 i = edm->counter_if_index + 1; i <= sw_idx; i++)
 		{
 #define _(id, name) vlib_zero_combined_counter(&edm->counters[ETHERNET_##id], i);
-	foreach_ethernet_counter
+	foreach_ethernet_detunnel_counter
 #undef _
 		}
 
@@ -325,13 +257,7 @@ static_always_inline void process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t
 
 	if (PREDICT_FALSE(node->flags & VLIB_NODE_FLAG_TRACE))
 	{
-		if (PREDICT_FALSE(b->flags & VLIB_BUFFER_IS_TRACED))
-		{
-			ethernet_trace_t *t = vlib_add_trace(vm, node, b, sizeof(ethernet_trace_t));
-			t->sw_if_index = sw_idx;
-			t->ethertype = ethertype;
-			t->next_index = next[0];
-		}
+		add_trace(vm, node, b, sw_idx, ethertype, next[0]);
 	}
 }
 
@@ -353,10 +279,9 @@ VLIB_REGISTER_NODE (ethernet_detunnel) = {
 	.type = VLIB_NODE_TYPE_INTERNAL,
 	.n_next_nodes = NEXT_NODE_N,
 	.next_nodes = {
-		[NEXT_NODE_ERROR_DROP] = "error-drop",
-		[NEXT_NODE_VLAN_DETUNNEL] = "vlan-detunnel",
-		[NEXT_NODE_IP4] = "ip4-drop",
-		[NEXT_NODE_IP6] = "ip6-drop",
+#define _(id, name) [NEXT_NODE_##id] = (name),
+	foreach_ethernet_detunnel_next_node
+#undef _
 	},
 };
 
@@ -440,18 +365,18 @@ static clib_error_t *ethernet_detunnel_init(vlib_main_t *CLIB_UNUSED(vm))
 	vlib_validate_combined_counter(cm_##n, 10);								\
 	vlib_zero_combined_counter(cm_##n, 10);
 
-	foreach_ethernet_counter
+	foreach_ethernet_detunnel_counter
 #undef _
 
 #ifdef CLIB_HAVE_VEC128
-	vlan_type_vec = u16x8_splat(__bswap_constant_16(ETHERNET_TYPE_VLAN));
-	ip4_type_vec = u16x8_splat(__bswap_constant_16(ETHERNET_TYPE_IP4));
-	ip6_type_vec = u16x8_splat(__bswap_constant_16(ETHERNET_TYPE_IP6));
+	edm->vlan_type_vec = u16x8_splat(__bswap_constant_16(ETHERNET_TYPE_VLAN));
+	edm->ip4_type_vec = u16x8_splat(__bswap_constant_16(ETHERNET_TYPE_IP4));
+	edm->ip6_type_vec = u16x8_splat(__bswap_constant_16(ETHERNET_TYPE_IP6));
 
-	vlan_next_vec = u16x8_splat(NEXT_NODE_VLAN_DETUNNEL);
-	ip4_next_vec = u16x8_splat(NEXT_NODE_IP4);
-	ip6_next_vec = u16x8_splat(NEXT_NODE_IP6);
-	drop_next_vec = u16x8_splat(NEXT_NODE_ERROR_DROP);
+	edm->vlan_next_vec = u16x8_splat(NEXT_NODE_VLAN_DETUNNEL);
+	edm->ip4_next_vec = u16x8_splat(NEXT_NODE_IP4_DETUNNEL);
+	edm->ip6_next_vec = u16x8_splat(NEXT_NODE_IP6_DETUNNEL);
+	edm->drop_next_vec = u16x8_splat(NEXT_NODE_ERROR_DROP);
 #endif
 
 	return 0;
