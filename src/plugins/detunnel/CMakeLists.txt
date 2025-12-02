@@ -5,8 +5,6 @@ include_directories(
 	${DPDK_INCLUDE_DIRS}
 )
 
-message(${DPDK_INCLUDE_DIRS})
-
 link_directories(
 	${DPDK_LIBRARY_DIRS}
 )

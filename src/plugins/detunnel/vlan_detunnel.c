@@ -6,27 +6,21 @@
 #include <vnet/vnet.h>
 #include <vppinfra/clib.h>
 
-#define foreach_vlan_counter		\
-	_(TOTAL, total)					\
-	_(PROCESSED, processed)			\
-	_(DROP, drop)					\
-	_(FAILED, failed)
+#include "detunnel.h"
 
 enum
 {
 #define _(id, name) VLAN_##id,
-	foreach_vlan_counter
+	foreach_detunnel_counter
 #undef _
 	VLAN_COUNTER_N,
 };
 
 enum
 {
-	NEXT_NODE_ERROR_DROP,
-	NEXT_NODE_VLAN_DETUNNEL,
-	NEXT_NODE_IP4,
-	NEXT_NODE_IP6,
-    NEXT_NODE_MPLS,
+#define _(id, name) NEXT_NODE_##id,
+	foreach_detunnel_next_node
+#undef _
 	NEXT_NODE_N,
 };
 
@@ -110,7 +104,7 @@ static_always_inline bool process_buffer_4x(vlib_main_t *vm, vlib_buffer_t* b[4]
 		}
 		default:
 		{
-			vlib_increment_combined_counter(&vdm->counters[VLAN_DROP], vm->thread_index,
+			vlib_increment_combined_counter(&vdm->counters[VLAN_FAILED], vm->thread_index,
 					sw_if_index0, 4, total_bytes);
 			next[0] = next[1] = next[2] = next[3] = NEXT_NODE_ERROR_DROP;
 			break;
@@ -130,13 +124,13 @@ static_always_inline u16 process_buffer_1x(vlib_main_t *vm, vlib_buffer_t *b, vl
 	if (PREDICT_FALSE(vdm->counter_if_index < t->sw_if_index))
 	{
 #define _(id, name) vlib_validate_combined_counter(&vdm->counters[VLAN_##id], t->sw_if_index);
-	foreach_vlan_counter
+	foreach_detunnel_counter
 #undef _
 
 		for (u32 i = vdm->counter_if_index + 1; i <= t->sw_if_index; i++)
 		{
 #define _(id, name) vlib_zero_combined_counter(&vdm->counters[VLAN_##id], i);
-	foreach_vlan_counter
+	foreach_detunnel_counter
 #undef _
 		}
 
@@ -184,7 +178,7 @@ static_always_inline u16 process_buffer_1x(vlib_main_t *vm, vlib_buffer_t *b, vl
 		}
 		default:
 		{
-			vlib_increment_combined_counter(&vdm->counters[VLAN_DROP], vm->thread_index,
+			vlib_increment_combined_counter(&vdm->counters[VLAN_FAILED], vm->thread_index,
 					t->sw_if_index, 1, b->current_length);
 			t->next_index = NEXT_NODE_ERROR_DROP;
 			break;
@@ -309,7 +303,7 @@ static clib_error_t *vlan_detunnel_init(vlib_main_t *CLIB_UNUSED(vm))
 	vlib_validate_combined_counter(cm_##n, 10);								\
 	vlib_zero_combined_counter(cm_##n, 0);
 
-	foreach_vlan_counter
+	foreach_detunnel_counter
 #undef _
 
     return 0;
