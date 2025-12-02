@@ -12,7 +12,7 @@
 enum
 {
 #define _(id, name) ETHERNET_##id,
-	foreach_ethernet_detunnel_counter
+	foreach_detunnel_counter
 #undef _
 	ETHERNET_COUNTER_N,
 };
@@ -20,7 +20,7 @@ enum
 enum
 {
 #define _(id, name) NEXT_NODE_##id,
-	foreach_ethernet_detunnel_next_node
+	foreach_detunnel_next_node
 #undef _
 	NEXT_NODE_N,
 };
@@ -191,7 +191,7 @@ VLIB_REGISTER_NODE (ethernet_detunnel) = {
 	.n_next_nodes = NEXT_NODE_N,
 	.next_nodes = {
 #define _(id, name) [NEXT_NODE_##id] = (name),
-	foreach_ethernet_detunnel_next_node
+	foreach_detunnel_next_node
 #undef _
 	},
 };
@@ -219,13 +219,13 @@ VLIB_NODE_FN (ethernet_detunnel) (vlib_main_t *vm, vlib_node_runtime_t *node, vl
 	if (PREDICT_FALSE(edm->counter_if_index < max_sw_if_index))
 	{
 #define _(id, name) vlib_validate_combined_counter(&edm->counters[ETHERNET_##id], max_sw_if_index);
-	foreach_ethernet_detunnel_counter
+	foreach_detunnel_counter
 #undef _
 
 		for (u32 i = edm->counter_if_index + 1; i <= max_sw_if_index; i++)
 		{
 #define _(id, name) vlib_zero_combined_counter(&edm->counters[ETHERNET_##id], i);
-	foreach_ethernet_detunnel_counter
+	foreach_detunnel_counter
 #undef _
 		}
 
@@ -288,7 +288,7 @@ static clib_error_t *ethernet_detunnel_init(vlib_main_t *CLIB_UNUSED(vm))
 	vlib_validate_combined_counter(cm_##n, edm->counter_if_index);			\
 	vlib_zero_combined_counter(cm_##n, edm->counter_if_index);
 
-	foreach_ethernet_detunnel_counter
+	foreach_detunnel_counter
 #undef _
 
 	return 0;

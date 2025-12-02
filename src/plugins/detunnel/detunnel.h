@@ -1,14 +1,14 @@
 #include "vppinfra/types.h"
 
-#define foreach_ethernet_detunnel_counter		\
-	_(TOTAL, total)								\
-	_(PROCESSED, processed)						\
+#define foreach_detunnel_counter	\
+	_(TOTAL, total)					\
+	_(PROCESSED, processed)			\
 	_(FAILED, failed)
 
-#define foreach_ethernet_detunnel_next_node		\
-	_(ERROR_DROP, "error-drop")					\
-	_(VLAN_DETUNNEL, "vlan-detunnel")			\
-	_(IP4_DETUNNEL, "ip4-drop")					\
+#define foreach_detunnel_next_node		\
+	_(ERROR_DROP, "error-drop")			\
+	_(VLAN_DETUNNEL, "vlan-detunnel")	\
+	_(IP4_DETUNNEL, "ip4-drop")			\
 	_(IP6_DETUNNEL, "ip6-drop")
 
 

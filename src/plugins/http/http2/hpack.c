@@ -311,6 +311,9 @@ hpack_decode_header (u8 **src, u8 *end, u8 **buf, uword *buf_len,
   http_token_t name, value;
   hpack_error_t rv;
 
+  value.base = NULL;
+  value.len = 0;
+
   ASSERT (*src < end);
   p = *src;
 
