@@ -45,8 +45,8 @@ extern ethernet_detunnel_main_t ethernet_detunnel_main;
 static_always_inline void add_trace(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b,
           u32 sw_if_index, u16 ethertype, u16 next_index)
 {
-	if (PREDICT_FALSE((node->flags & VLIB_NODE_FLAG_TRACE) &&
-	                  (b->flags & VLIB_BUFFER_IS_TRACED))) {
+	if (PREDICT_FALSE((node->flags & VLIB_NODE_FLAG_TRACE) && (b->flags & VLIB_BUFFER_IS_TRACED)))
+	{
 		ethernet_trace_t *t = vlib_add_trace(vm, node, b, sizeof(*t));
 		t->sw_if_index = sw_if_index;
 		t->ethertype = ethertype;
@@ -54,7 +54,6 @@ static_always_inline void add_trace(vlib_main_t *vm, vlib_node_runtime_t *node, 
 	}
 }
 
-/* Original switch-case approach */
 static_always_inline u16 get_next_node_1x(u16 ethertype)
 {
 	switch (ethertype)
@@ -73,19 +72,16 @@ static_always_inline u16 get_next_node_1x(u16 ethertype)
 static_always_inline bool process_buffer_4x(vlib_main_t *vm, vlib_node_runtime_t *node,
 		vlib_buffer_t* b[4], u16 next[4])
 {
-	/* Phase 1: Load all sw_if_index values (uses Load ports 2,3) */
 	const u32 sw_idx0 = vnet_buffer(b[0])->sw_if_index[VLIB_RX];
 	const u32 sw_idx1 = vnet_buffer(b[1])->sw_if_index[VLIB_RX];
 	const u32 sw_idx2 = vnet_buffer(b[2])->sw_if_index[VLIB_RX];
 	const u32 sw_idx3 = vnet_buffer(b[3])->sw_if_index[VLIB_RX];
 
-	/* Phase 2: Load all lengths (batched loads, better scheduling) */
 	const u32 len0 = b[0]->current_length;
 	const u32 len1 = b[1]->current_length;
 	const u32 len2 = b[2]->current_length;
 	const u32 len3 = b[3]->current_length;
 
-	/* Find minimum length (reduces comparison chain from 4 to 3 ops) */
 	u32 min_len = len0;
 	min_len = clib_min(min_len, len1);
 	min_len = clib_min(min_len, len2);
@@ -104,13 +100,11 @@ static_always_inline bool process_buffer_4x(vlib_main_t *vm, vlib_node_runtime_t
 	vlib_buffer_advance(b[2], sizeof(ethernet_header_t));
 	vlib_buffer_advance(b[3], sizeof(ethernet_header_t));
 
-	/* Phase 6: Determine next nodes (batched ALU ops) */
 	next[0] = get_next_node_1x(eth0->type);
 	next[1] = get_next_node_1x(eth1->type);
 	next[2] = get_next_node_1x(eth2->type);
 	next[3] = get_next_node_1x(eth3->type);
 
-	/* Phase 7: Update counters (atomic ops at end) */
 	ethernet_detunnel_main_t *edm = &ethernet_detunnel_main;
 	vlib_increment_combined_counter(&edm->counters[ETHERNET_TOTAL],
 		vm->thread_index, sw_idx0, 1, len0);
@@ -129,7 +123,6 @@ static_always_inline bool process_buffer_4x(vlib_main_t *vm, vlib_node_runtime_t
 	vlib_increment_combined_counter(&edm->counters[ETHERNET_PROCESSED],
 		vm->thread_index, sw_idx3, 1, sizeof(ethernet_header_t));
 
-	/* Phase 8: Trace if needed (rarely executed) */
 	if (PREDICT_FALSE(node->flags & VLIB_NODE_FLAG_TRACE))
 	{
 		add_trace(vm, node, b[0], sw_idx0, eth0->type, next[0]);
@@ -232,7 +225,8 @@ VLIB_NODE_FN (ethernet_detunnel) (vlib_main_t *vm, vlib_node_runtime_t *node, vl
 		edm->counter_if_index = max_sw_if_index;
 	}
 
-	while (n_left_from >= 4) {
+	while (n_left_from >= 4)
+	{
 
 		if (n_left_from >= 8)
 		{
@@ -260,8 +254,8 @@ VLIB_NODE_FN (ethernet_detunnel) (vlib_main_t *vm, vlib_node_runtime_t *node, vl
 		n_left_from -= 4;
 	}
 
-	while (n_left_from > 0) {
-
+	while (n_left_from > 0)
+	{
 		process_buffer_1x(vm, node, b[0], &next[0]);
 
 		b++;
