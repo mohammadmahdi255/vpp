@@ -8,7 +8,7 @@
 #define foreach_detunnel_next_node		\
 	_(ERROR_DROP, "error-drop")			\
 	_(VLAN_DETUNNEL, "vlan-detunnel")	\
-	_(IP4_DETUNNEL, "ip4-drop")			\
+	_(IP4_DETUNNEL, "ipv4-detunnel")			\
 	_(IP6_DETUNNEL, "ip6-drop")
 
 
