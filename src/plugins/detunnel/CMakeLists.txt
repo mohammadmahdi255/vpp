@@ -13,11 +13,13 @@ add_vpp_plugin(detunnel
 	SOURCES
 		detunnel.c
 		ethernet_detunnel.c
+		ipv4_detunnel.c
 		plugin.c
 		vlan_detunnel.c
 
 	MULTIARCH_SOURCES
-        ethernet_detunnel.c
+		ethernet_detunnel.c
+		ipv4_detunnel.c
 		vlan_detunnel.c
 
 	LINK_FLAGS
