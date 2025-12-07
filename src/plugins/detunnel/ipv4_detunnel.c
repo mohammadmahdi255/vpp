@@ -103,23 +103,23 @@ static_always_inline bool process_buffer_4x(vlib_main_t *vm, vlib_node_runtime_t
 	next[2] = get_next_node_1x(eth2->type);
 	next[3] = get_next_node_1x(eth3->type);
 
-	ipv4_detunnel_main_t *idm = &ipv4_detunnel_main;
-	vlib_increment_combined_counter(&idm->counters[IPV4_TOTAL],
-		vm->thread_index, sw_idx0, 1, len0);
-	vlib_increment_combined_counter(&idm->counters[IPV4_PROCESSED],
-		vm->thread_index, sw_idx0, 1, sizeof(ethernet_header_t));
-	vlib_increment_combined_counter(&idm->counters[IPV4_TOTAL],
-		vm->thread_index, sw_idx1, 1, len1);
-	vlib_increment_combined_counter(&idm->counters[IPV4_PROCESSED],
-		vm->thread_index, sw_idx1, 1, sizeof(ethernet_header_t));
-	vlib_increment_combined_counter(&idm->counters[IPV4_TOTAL],
-		vm->thread_index, sw_idx2, 1, len2);
-	vlib_increment_combined_counter(&idm->counters[IPV4_PROCESSED],
-		vm->thread_index, sw_idx2, 1, sizeof(ethernet_header_t));
-	vlib_increment_combined_counter(&idm->counters[IPV4_TOTAL],
-		vm->thread_index, sw_idx3, 1, len3);
-	vlib_increment_combined_counter(&idm->counters[IPV4_PROCESSED],
-		vm->thread_index, sw_idx3, 1, sizeof(ethernet_header_t));
+	// ipv4_detunnel_main_t *idm = &ipv4_detunnel_main;
+	// vlib_increment_combined_counter(&idm->counters[IPV4_TOTAL],
+	// 	vm->thread_index, sw_idx0, 1, len0);
+	// vlib_increment_combined_counter(&idm->counters[IPV4_PROCESSED],
+	// 	vm->thread_index, sw_idx0, 1, sizeof(ethernet_header_t));
+	// vlib_increment_combined_counter(&idm->counters[IPV4_TOTAL],
+	// 	vm->thread_index, sw_idx1, 1, len1);
+	// vlib_increment_combined_counter(&idm->counters[IPV4_PROCESSED],
+	// 	vm->thread_index, sw_idx1, 1, sizeof(ethernet_header_t));
+	// vlib_increment_combined_counter(&idm->counters[IPV4_TOTAL],
+	// 	vm->thread_index, sw_idx2, 1, len2);
+	// vlib_increment_combined_counter(&idm->counters[IPV4_PROCESSED],
+	// 	vm->thread_index, sw_idx2, 1, sizeof(ethernet_header_t));
+	// vlib_increment_combined_counter(&idm->counters[IPV4_TOTAL],
+	// 	vm->thread_index, sw_idx3, 1, len3);
+	// vlib_increment_combined_counter(&idm->counters[IPV4_PROCESSED],
+	// 	vm->thread_index, sw_idx3, 1, sizeof(ethernet_header_t));
 
 	if (PREDICT_FALSE(node->flags & VLIB_NODE_FLAG_TRACE))
 	{
@@ -134,11 +134,11 @@ static_always_inline bool process_buffer_4x(vlib_main_t *vm, vlib_node_runtime_t
 
 static_always_inline void process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, u16 *next)
 {
-	ipv4_detunnel_main_t *idm = &ipv4_detunnel_main;
+	// ipv4_detunnel_main_t *idm = &ipv4_detunnel_main;
 	u32 sw_idx = vnet_buffer(b)->sw_if_index[VLIB_RX];
 
-	vlib_increment_combined_counter(&idm->counters[IPV4_TOTAL], vm->thread_index,
-			sw_idx, 1, b->current_length);
+	// vlib_increment_combined_counter(&idm->counters[IPV4_TOTAL], vm->thread_index,
+	// 		sw_idx, 1, b->current_length);
 
     const ip4_header_t *ip4_header = vlib_buffer_get_current(b);
     const u16 ip4_header_len = clib_max(ip4_header_bytes(ip4_header), sizeof(ip4_header_t));
@@ -147,8 +147,8 @@ static_always_inline void process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t
 
 	if (PREDICT_FALSE(ip4_payload_len < ip4_header_len || ip4_padding_len < 0))
 	{
-		vlib_increment_combined_counter(&idm->counters[IPV4_FAILED], vm->thread_index,
-				sw_idx, 1, b->current_length);
+		// vlib_increment_combined_counter(&idm->counters[IPV4_FAILED], vm->thread_index,
+		// 		sw_idx, 1, b->current_length);
 		next[0] = NEXT_NODE_ERROR_DROP;
 
 		if (PREDICT_FALSE(node->flags & VLIB_NODE_FLAG_TRACE))
@@ -159,8 +159,8 @@ static_always_inline void process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t
 
     b->current_length -= ip4_padding_len;
 	vlib_buffer_advance(b, ip4_header_len);
-	vlib_increment_combined_counter(&idm->counters[IPV4_PROCESSED], vm->thread_index,
-			sw_idx, 1, ip4_header_len);
+	// vlib_increment_combined_counter(&idm->counters[IPV4_PROCESSED], vm->thread_index,
+	// 		sw_idx, 1, ip4_header_len);
 
 	next[0] = get_next_node_1x(ip4_header->protocol);
 
