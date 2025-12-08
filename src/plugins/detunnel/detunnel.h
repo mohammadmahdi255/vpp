@@ -11,7 +11,7 @@
 	_(FAILED, failed)
 
 #define foreach_detunnel_next_node		\
-	_(ERROR_DROP, "error-drop")			\
+	_(ERROR_DROP, "drop")			\
 	_(VLAN_DETUNNEL, "vlan-detunnel")	\
 	_(IP4_DETUNNEL, "ipv4-detunnel")	\
 	_(IP6_DETUNNEL, "ip6-drop")
@@ -24,7 +24,6 @@
 	_(ip4_next)						\
 	_(ip6_next)						\
 	_(drop_next)
-
 
 #if defined(CLIB_HAVE_VEC512)
 #define SIMD_VEC(name)		name##_u16x32
@@ -48,6 +47,14 @@
 #define SIMD_LOAD			u16x8_load_unaligned
 #define SIMD_STORE			u16x8_store_unaligned
 #endif
+
+enum
+{
+#define _(id, name) NEXT_NODE_##id,
+	foreach_detunnel_next_node
+#undef _
+	NEXT_NODE_N,
+};
 
 extern void set_next_node(u16 next[VLIB_FRAME_SIZE], u16 len);
 

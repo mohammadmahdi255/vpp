@@ -21,14 +21,6 @@ foreach_next_node_field
 #undef _
 #endif
 
-enum
-{
-#define _(id, name) NEXT_NODE_##id,
-	foreach_detunnel_next_node
-#undef _
-	NEXT_NODE_N,
-};
-
 #define STR(x) #x
 #define XSTR(x) STR(x)
 
@@ -47,7 +39,7 @@ CLIB_MARCH_FN (detunnel_init, clib_error_t *, vlib_main_t *CLIB_UNUSED(vm))
 	return 0;
 }
 
-void CLIB_MULTIARCH_FN (set_next_node) (u16 next[VLIB_FRAME_SIZE], u16 len)
+CLIB_MARCH_FN (set_next_node, void, u16 next[VLIB_FRAME_SIZE], u16 len)
 {
 	for (u16 i = 0; i < len; i += SIMD_SIZE)
 	{
@@ -65,6 +57,13 @@ void CLIB_MULTIARCH_FN (set_next_node) (u16 next[VLIB_FRAME_SIZE], u16 len)
 		SIMD_STORE(result, next + i);
 	}
 }
+
+#ifndef CLIB_MARCH_VARIANT
+void set_next_node(u16 next[VLIB_FRAME_SIZE], u16 len)
+{
+	CLIB_MARCH_FN_SELECT (set_next_node) (next, len);
+}
+#endif
 
 static_always_inline clib_error_t *detunnel_worker_init(vlib_main_t *vm)
 {

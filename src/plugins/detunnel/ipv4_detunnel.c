@@ -19,14 +19,6 @@ enum
 	IPV4_COUNTER_N,
 };
 
-enum
-{
-#define _(id, name) NEXT_NODE_##id,
-	foreach_detunnel_next_node
-#undef _
-	NEXT_NODE_N,
-};
-
 typedef struct {
 	u32 sw_if_index;
 	u16 ethertype;
