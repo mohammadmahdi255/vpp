@@ -1,4 +1,9 @@
-#include "vppinfra/types.h"
+#ifndef DETUNNEL_H_
+#define DETUNNEL_H_
+
+#include <vlib/vlib.h>
+
+#include <vppinfra/types.h>
 
 #define foreach_detunnel_counter	\
 	_(TOTAL, total)					\
@@ -19,6 +24,7 @@
 	_(ip4_next)						\
 	_(ip6_next)						\
 	_(drop_next)
+
 
 #if defined(CLIB_HAVE_VEC512)
 #define SIMD_VEC(name)		name##_u16x32
@@ -43,6 +49,7 @@
 #define SIMD_STORE			u16x8_store_unaligned
 #endif
 
+extern void set_next_node(u16 next[VLIB_FRAME_SIZE], u16 len);
 
 /*
 #define foreach_detunnel_protocol			\
@@ -66,3 +73,5 @@
 // {
 // 	// vlib_combined_counter_main_t stat[DETUNNEL_STATISTICS_N];
 // } detunnel_main_t;
+
+#endif

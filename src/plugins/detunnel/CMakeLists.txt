@@ -18,6 +18,7 @@ add_vpp_plugin(detunnel
 		vlan_detunnel.c
 
 	MULTIARCH_SOURCES
+		detunnel.c
 		ethernet_detunnel.c
 		ipv4_detunnel.c
 		vlan_detunnel.c
