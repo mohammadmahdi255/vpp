@@ -40,7 +40,7 @@
 vppctl packet-generator new \
     limit 49546457546 \
     name fragtest \
-    pcap /home/mahdi255/nemati/pcap/ipv4frags.pcap \
+    pcap /home/user/Desktop/vpp/vlan2.pcap \
     node ethernet-detunnel
 
 vppctl packet-generator enable
