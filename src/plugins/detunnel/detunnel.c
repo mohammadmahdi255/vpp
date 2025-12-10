@@ -1,7 +1,24 @@
 
 #include "detunnel.h"
+#include "vnet/ip/ip_packet.h"
 
 #include <vnet/ethernet/ethernet.h>
+
+#define foreach_ethertype	\
+	_(vlan_ethertype)		\
+	_(ip4_ethertype)		\
+	_(ip6_ethertype)
+
+#define foreach_ip_protocol	\
+	_(tcp_protocol)			\
+	_(udp_protocol)
+
+#define foreach_next_node 	\
+	_(vlan_next)			\
+	_(ip4_next)				\
+	_(ip6_next)				\
+	_(udp_next)				\
+	_(drop_next)
 
 #ifndef CLIB_MARCH_VARIANT
 #define _(name)						\
@@ -9,15 +26,19 @@
 		u16x16 name##_u16x16;		\
 		u16x8 name##_u16x8;
 
-foreach_next_node_field
+foreach_ethertype
+foreach_ip_protocol
+foreach_next_node
 #undef _
 #else
-#define _(name)						\
-		extern u16x32 name##_u16x32;		\
-		extern u16x16 name##_u16x16;		\
+#define _(name)							\
+		extern u16x32 name##_u16x32;	\
+		extern u16x16 name##_u16x16;	\
 		extern u16x8 name##_u16x8;
 
-foreach_next_node_field
+foreach_ethertype
+foreach_ip_protocol
+foreach_next_node
 #undef _
 #endif
 
@@ -27,9 +48,12 @@ foreach_next_node_field
 CLIB_MARCH_FN (detunnel_init, clib_error_t *, vlib_main_t *CLIB_UNUSED(vm))
 {
 	clib_warning("size: %lu %s", SIMD_SIZE, XSTR(SIMD_TYPE));
-	SIMD_VEC(vlan_type) = SIMD_SPLAT(clib_host_to_net_u16(ETHERNET_TYPE_VLAN));
-	SIMD_VEC(ip4_type) = SIMD_SPLAT(clib_host_to_net_u16(ETHERNET_TYPE_IP4));
-	SIMD_VEC(ip6_type) = SIMD_SPLAT(clib_host_to_net_u16(ETHERNET_TYPE_IP6));
+	SIMD_VEC(vlan_ethertype) = SIMD_SPLAT(clib_host_to_net_u16(ETHERNET_TYPE_VLAN));
+	SIMD_VEC(ip4_ethertype) = SIMD_SPLAT(clib_host_to_net_u16(ETHERNET_TYPE_IP4));
+	SIMD_VEC(ip6_ethertype) = SIMD_SPLAT(clib_host_to_net_u16(ETHERNET_TYPE_IP6));
+
+	SIMD_VEC(tcp_protocol) = SIMD_SPLAT(IP_PROTOCOL_TCP);
+	SIMD_VEC(udp_protocol) = SIMD_SPLAT(IP_PROTOCOL_UDP);
 
 	SIMD_VEC(drop_next) = SIMD_SPLAT(NEXT_NODE_ERROR_DROP);
 	SIMD_VEC(vlan_next) = SIMD_SPLAT(NEXT_NODE_VLAN_DETUNNEL);
@@ -39,29 +63,52 @@ CLIB_MARCH_FN (detunnel_init, clib_error_t *, vlib_main_t *CLIB_UNUSED(vm))
 	return 0;
 }
 
-CLIB_MARCH_FN (set_next_node, void, u16 next[VLIB_FRAME_SIZE], u16 len)
+CLIB_MARCH_FN (ethertype_to_next, void, u16 next[VLIB_FRAME_SIZE], u16 len)
 {
 	for (u16 i = 0; i < len; i += SIMD_SIZE)
 	{
-		SIMD_TYPE eth_type = SIMD_LOAD(next + i);
-		SIMD_TYPE vlan_mask = (eth_type == SIMD_VEC(vlan_type));
-		SIMD_TYPE ip4_mask = (eth_type == SIMD_VEC(ip4_type));
-		SIMD_TYPE ip6_mask = (eth_type == SIMD_VEC(ip6_type));
-		SIMD_TYPE drop_mask = ~(vlan_mask | ip4_mask | ip6_mask);
+		SIMD_TYPE ethertype_vec = SIMD_LOAD(next + i);
+		SIMD_TYPE vlan_mask_vec = (ethertype_vec == SIMD_VEC(vlan_ethertype));
+		SIMD_TYPE ip4_mask_vec = (ethertype_vec == SIMD_VEC(ip4_ethertype));
+		SIMD_TYPE ip6_mask_vec = (ethertype_vec == SIMD_VEC(ip6_ethertype));
+		SIMD_TYPE drop_mask_vec = ~(vlan_mask_vec | ip4_mask_vec | ip6_mask_vec);
 
-		SIMD_TYPE result = (vlan_mask & SIMD_VEC(vlan_next)) |
-				(ip4_mask & SIMD_VEC(ip4_next)) |
-				(ip6_mask & SIMD_VEC(ip6_next)) |
-				(drop_mask & SIMD_VEC(drop_next));
+		SIMD_TYPE result = (vlan_mask_vec & SIMD_VEC(vlan_next)) |
+				(ip4_mask_vec & SIMD_VEC(ip4_next)) |
+				(ip6_mask_vec & SIMD_VEC(ip6_next)) |
+				(drop_mask_vec & SIMD_VEC(drop_next));
 
 		SIMD_STORE(result, next + i);
 	}
 }
 
-#ifndef CLIB_MARCH_VARIANT
-void set_next_node(u16 next[VLIB_FRAME_SIZE], u16 len)
+CLIB_MARCH_FN (ip_protocol_to_next, void, u16 ip_protocol[VLIB_FRAME_SIZE], u16 nexts[VLIB_FRAME_SIZE], u16 len)
 {
-	CLIB_MARCH_FN_SELECT (set_next_node) (next, len);
+	for (u16 i = 0; i < len; i += SIMD_SIZE)
+	{
+		SIMD_TYPE ip_protocol_vec = SIMD_LOAD(ip_protocol + i);
+		SIMD_TYPE tcp_mask_vec = (ip_protocol_vec == SIMD_VEC(tcp_protocol));
+		SIMD_TYPE udp_mask_vec = (ip_protocol_vec == SIMD_VEC(udp_protocol));
+		SIMD_TYPE drop_mask = ~(tcp_mask_vec | udp_mask_vec);
+
+		SIMD_TYPE result = (tcp_mask_vec & SIMD_VEC(drop_next)) |
+				(udp_mask_vec & SIMD_VEC(drop_next)) |
+				(drop_mask & SIMD_VEC(drop_next));
+
+		SIMD_STORE(result, nexts + i);
+	}
+}
+
+
+#ifndef CLIB_MARCH_VARIANT
+void ethertype_to_next(u16 next[VLIB_FRAME_SIZE], u16 len)
+{
+	CLIB_MARCH_FN_SELECT (ethertype_to_next) (next, len);
+}
+
+void ip_protocol_to_next(u16 ip_protocol[VLIB_FRAME_SIZE], u16 nexts[VLIB_FRAME_SIZE], u16 len)
+{
+	CLIB_MARCH_FN_SELECT (ip_protocol_to_next) (ip_protocol, nexts, len);
 }
 #endif
 
