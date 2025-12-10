@@ -16,15 +16,6 @@
 	_(IP4_DETUNNEL, "ipv4-detunnel")	\
 	_(IP6_DETUNNEL, "ip6-drop")
 
-#define foreach_next_node_field 	\
-	_(vlan_type)					\
-	_(ip4_type)						\
-	_(ip6_type)						\
-	_(vlan_next)					\
-	_(ip4_next)						\
-	_(ip6_next)						\
-	_(drop_next)
-
 #if defined(CLIB_HAVE_VEC512)
 #define SIMD_VEC(name)		name##_u16x32
 #define SIMD_TYPE			u16x32
@@ -56,7 +47,8 @@ enum
 	NEXT_NODE_N,
 };
 
-extern void set_next_node(u16 next[VLIB_FRAME_SIZE], u16 len);
+extern void ethertype_to_next(u16 next[VLIB_FRAME_SIZE], u16 len);
+extern void ip_protocol_to_next(u16 ip_protocol[VLIB_FRAME_SIZE], u16 nexts[VLIB_FRAME_SIZE], u16 len);
 
 /*
 #define foreach_detunnel_protocol			\

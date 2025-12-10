@@ -258,7 +258,7 @@ VLIB_NODE_FN (vlan_detunnel) (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_f
 		n_left_from--;
 	}
 
-	set_next_node(nexts, frame->n_vectors);
+	ethertype_to_next(nexts, frame->n_vectors);
 
 	vlib_buffer_enqueue_to_next(vm, node, from, nexts, frame->n_vectors);
 
