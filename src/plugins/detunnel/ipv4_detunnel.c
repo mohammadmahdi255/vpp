@@ -20,12 +20,6 @@ enum
 };
 
 typedef struct {
-	u32 sw_if_index;
-	u8 ip_protocol;
-	u16 next_index;
-} __clib_packed ipv4_trace_t;
-
-typedef struct {
 	u32 counter_if_index;
 	vlib_combined_counter_main_t counters[IPV4_COUNTER_N];
 } __clib_packed ipv4_detunnel_main_t;
@@ -48,7 +42,7 @@ static_always_inline u16 get_next_node_1x(u8 protocol)
 }
 
 static_always_inline bool process_buffer_4x(vlib_main_t *vm, vlib_node_runtime_t *node,
-		vlib_buffer_t* b[4], u16 next[4])
+		vlib_buffer_t* b[4], u16 nexts[4])
 {
 	// const u32 sw_idx0 = vnet_buffer(b[0])->sw_if_index[VLIB_RX];
 	// const u32 sw_idx1 = vnet_buffer(b[1])->sw_if_index[VLIB_RX];
@@ -78,10 +72,10 @@ static_always_inline bool process_buffer_4x(vlib_main_t *vm, vlib_node_runtime_t
 	vlib_buffer_advance(b[2], sizeof(ethernet_header_t));
 	vlib_buffer_advance(b[3], sizeof(ethernet_header_t));
 
-	next[0] = get_next_node_1x(eth0->type);
-	next[1] = get_next_node_1x(eth1->type);
-	next[2] = get_next_node_1x(eth2->type);
-	next[3] = get_next_node_1x(eth3->type);
+	nexts[0] = get_next_node_1x(eth0->type);
+	nexts[1] = get_next_node_1x(eth1->type);
+	nexts[2] = get_next_node_1x(eth2->type);
+	nexts[3] = get_next_node_1x(eth3->type);
 
 	// ipv4_detunnel_main_t *idm = &ipv4_detunnel_main;
 	// vlib_increment_combined_counter(&idm->counters[IPV4_TOTAL],
@@ -114,11 +108,11 @@ static_always_inline bool process_buffer_4x(vlib_main_t *vm, vlib_node_runtime_t
 
 static_always_inline void process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, u16 *next)
 {
-	// ipv4_detunnel_main_t *idm = &ipv4_detunnel_main;
-	// u32 sw_idx = vnet_buffer(b)->sw_if_index[VLIB_RX];
+	ipv4_detunnel_main_t *idm = &ipv4_detunnel_main;
+	u32 sw_idx = vnet_buffer(b)->sw_if_index[VLIB_RX];
 
-	// vlib_increment_combined_counter(&idm->counters[IPV4_TOTAL], vm->thread_index,
-	// 		sw_idx, 1, b->current_length);
+	vlib_increment_combined_counter(&idm->counters[IPV4_TOTAL], vm->thread_index,
+			sw_idx, 1, b->current_length);
 
     const ip4_header_t *ip4_header = vlib_buffer_get_current(b);
     const u16 ip4_header_len = clib_max(ip4_header_bytes(ip4_header), sizeof(ip4_header_t));
@@ -127,16 +121,23 @@ static_always_inline void process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t
 
 	if (PREDICT_FALSE(ip4_payload_len < ip4_header_len || ip4_padding_len < 0))
 	{
-		// vlib_increment_combined_counter(&idm->counters[IPV4_FAILED], vm->thread_index,
-		// 		sw_idx, 1, b->current_length);
+		vlib_increment_combined_counter(&idm->counters[IPV4_FAILED], vm->thread_index,
+				sw_idx, 1, b->current_length);
 		next[0] = NEXT_NODE_ERROR_DROP;
 		return;
 	}
 
     b->current_length -= ip4_padding_len;
 	vlib_buffer_advance(b, ip4_header_len);
-	// vlib_increment_combined_counter(&idm->counters[IPV4_PROCESSED], vm->thread_index,
-	// 		sw_idx, 1, ip4_header_len);
+	vlib_increment_combined_counter(&idm->counters[IPV4_PROCESSED], vm->thread_index,
+			sw_idx, 1, ip4_header_len);
+
+	if (PREDICT_FALSE(b->flags & VLIB_BUFFER_IS_TRACED))
+	{
+		detunnel_trace_t *t = vlib_add_trace(vm, node, b, sizeof (detunnel_trace_t));
+		t->sw_if_index = vnet_buffer(b)->sw_if_index[VLIB_RX];
+		t->next_protocol = ip4_header->protocol;
+	}
 
 	next[0] = ip4_header->protocol;
 }
@@ -147,9 +148,8 @@ static u8 *format_ipv4_trace(u8 *s, va_list *args)
 {
 	vlib_main_t *CLIB_UNUSED(vm)   = va_arg(*args, vlib_main_t *);
 	vlib_node_t *CLIB_UNUSED(node) = va_arg(*args, vlib_node_t *);
-	ipv4_trace_t *t = va_arg(*args, ipv4_trace_t *);
-	return format(s, "ipv4: sw_if_index %u ip protocol 0x%04x next %u",
-			t->sw_if_index, t->ip_protocol);
+	detunnel_trace_t *t = va_arg(*args, detunnel_trace_t *);
+	return format(s, "ipv4-detunnel: if index %u next protocol 0x%04x", t->sw_if_index, t->next_protocol);
 }
 
 VLIB_REGISTER_NODE (ipv4_detunnel) = {
@@ -170,11 +170,10 @@ VLIB_REGISTER_NODE (ipv4_detunnel) = {
 VLIB_NODE_FN (ipv4_detunnel) (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_frame_t *frame)
 {
 	vlib_buffer_t *bufs[VLIB_FRAME_SIZE];
-	u16 ip_protocols[VLIB_FRAME_SIZE];
 	u16 nexts[VLIB_FRAME_SIZE];
+	u16 *next = nexts;
 
 	vlib_buffer_t **b = bufs;
-	u16 *ip_protocol = ip_protocols;
 
 	u32 *from = vlib_frame_vector_args(frame);
 	u32 n_left_from = frame->n_vectors;
@@ -221,42 +220,28 @@ VLIB_NODE_FN (ipv4_detunnel) (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_f
 
 		// if (!process_buffer_4x(vm, node, b, next))
 		// {
-			process_buffer_1x(vm, node, b[0], &ip_protocol[0]);
-			process_buffer_1x(vm, node, b[1], &ip_protocol[1]);
-			process_buffer_1x(vm, node, b[2], &ip_protocol[2]);
-			process_buffer_1x(vm, node, b[3], &ip_protocol[3]);
+			process_buffer_1x(vm, node, b[0], &next[0]);
+			process_buffer_1x(vm, node, b[1], &next[1]);
+			process_buffer_1x(vm, node, b[2], &next[2]);
+			process_buffer_1x(vm, node, b[3], &next[3]);
 		// }
 
 		b += 4;
-		ip_protocol += 4;
+		next += 4;
 		n_left_from -= 4;
 	}
 
 	while (n_left_from > 0)
 	{
-		process_buffer_1x(vm, node, b[0], &ip_protocol[0]);
+		process_buffer_1x(vm, node, b[0], &next[0]);
 
 		b++;
-		ip_protocol++;
+		next++;
 		n_left_from--;
 	}
 
-	ip_protocol_to_next(ip_protocols, nexts, frame->n_vectors);
+	ip_protocol_to_next(nexts, frame->n_vectors);
 	vlib_buffer_enqueue_to_next(vm, node, from, nexts, frame->n_vectors);
-
-	if (PREDICT_FALSE(node->flags & VLIB_NODE_FLAG_TRACE))
-	{
-		for (u32 i = 0; i < frame->n_vectors; i++)
-		{
-			if (PREDICT_FALSE(bufs[i]->flags & VLIB_BUFFER_IS_TRACED))
-			{
-				ipv4_trace_t *t = vlib_add_trace (vm, node, bufs[i], sizeof (ipv4_trace_t));
-				t->sw_if_index = vnet_buffer (bufs[i])->sw_if_index[VLIB_RX];
-				t->ip_protocol = ip_protocols[i];
-				t->next_index = nexts[i];
-			}
-		}
-	}
 
 	return frame->n_vectors;
 }

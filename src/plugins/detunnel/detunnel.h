@@ -47,8 +47,15 @@ enum
 	NEXT_NODE_N,
 };
 
-extern void ethertype_to_next(u16 next[VLIB_FRAME_SIZE], u16 len);
-extern void ip_protocol_to_next(u16 ip_protocol[VLIB_FRAME_SIZE], u16 nexts[VLIB_FRAME_SIZE], u16 len);
+typedef struct {
+	char *name;
+	u32 sw_if_index;
+	u16 next_protocol;
+} __clib_packed detunnel_trace_t;
+
+extern void ethertype_to_next(u16 *next, u16 len);
+extern void ip_protocol_to_next(u16 *nexts, u16 len);
+extern u8 *format_detunnel_trace(u8 *s, va_list *args);
 
 /*
 #define foreach_detunnel_protocol			\
