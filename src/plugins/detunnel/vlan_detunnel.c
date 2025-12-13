@@ -99,23 +99,23 @@ static_always_inline bool process_buffer_4x(vlib_main_t *vm, vlib_node_runtime_t
 	next[2] = vlan2->type;
 	next[3] = vlan3->type;
 
-	// vlan_detunnel_main_t *vdm = &vlan_detunnel_main;
-	// vlib_increment_combined_counter(&vdm->counters[VLAN_TOTAL],
-	// 	vm->thread_index, sw_idx0, 1, len0);
-	// vlib_increment_combined_counter(&vdm->counters[VLAN_PROCESSED],
-	// 	vm->thread_index, sw_idx0, 1, sizeof(vlan_header_t));
-	// vlib_increment_combined_counter(&vdm->counters[VLAN_TOTAL],
-	// 	vm->thread_index, sw_idx1, 1, len1);
-	// vlib_increment_combined_counter(&vdm->counters[VLAN_PROCESSED],
-	// 	vm->thread_index, sw_idx1, 1, sizeof(vlan_header_t));
-	// vlib_increment_combined_counter(&vdm->counters[VLAN_TOTAL],
-	// 	vm->thread_index, sw_idx2, 1, len2);
-	// vlib_increment_combined_counter(&vdm->counters[VLAN_PROCESSED],
-	// 	vm->thread_index, sw_idx2, 1, sizeof(vlan_header_t));
-	// vlib_increment_combined_counter(&vdm->counters[VLAN_TOTAL],
-	// 	vm->thread_index, sw_idx3, 1, len3);
-	// vlib_increment_combined_counter(&vdm->counters[VLAN_PROCESSED],
-	// 	vm->thread_index, sw_idx3, 1, sizeof(vlan_header_t));
+	vlan_detunnel_main_t *vdm = &vlan_detunnel_main;
+	vlib_increment_combined_counter(&vdm->counters[VLAN_TOTAL],
+		vm->thread_index, sw_idx0, 1, len0);
+	vlib_increment_combined_counter(&vdm->counters[VLAN_PROCESSED],
+		vm->thread_index, sw_idx0, 1, sizeof(vlan_header_t));
+	vlib_increment_combined_counter(&vdm->counters[VLAN_TOTAL],
+		vm->thread_index, sw_idx1, 1, len1);
+	vlib_increment_combined_counter(&vdm->counters[VLAN_PROCESSED],
+		vm->thread_index, sw_idx1, 1, sizeof(vlan_header_t));
+	vlib_increment_combined_counter(&vdm->counters[VLAN_TOTAL],
+		vm->thread_index, sw_idx2, 1, len2);
+	vlib_increment_combined_counter(&vdm->counters[VLAN_PROCESSED],
+		vm->thread_index, sw_idx2, 1, sizeof(vlan_header_t));
+	vlib_increment_combined_counter(&vdm->counters[VLAN_TOTAL],
+		vm->thread_index, sw_idx3, 1, len3);
+	vlib_increment_combined_counter(&vdm->counters[VLAN_PROCESSED],
+		vm->thread_index, sw_idx3, 1, sizeof(vlan_header_t));
 
 	if (PREDICT_FALSE(node->flags & VLIB_NODE_FLAG_TRACE))
 	{
@@ -130,16 +130,16 @@ static_always_inline bool process_buffer_4x(vlib_main_t *vm, vlib_node_runtime_t
 
 static_always_inline void process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, u16 *next)
 {
-	// vlan_detunnel_main_t *vdm = &vlan_detunnel_main;
+	vlan_detunnel_main_t *vdm = &vlan_detunnel_main;
 	u32 sw_idx = vnet_buffer(b)->sw_if_index[VLIB_RX];
 
-	// vlib_increment_combined_counter(&vdm->counters[VLAN_TOTAL], vm->thread_index,
-	// 		sw_idx, 1, b->current_length);
+	vlib_increment_combined_counter(&vdm->counters[VLAN_TOTAL], vm->thread_index,
+			sw_idx, 1, b->current_length);
 
 	if (PREDICT_FALSE(b->current_length < sizeof(vlan_header_t)))
 	{
-		// vlib_increment_combined_counter(&vdm->counters[VLAN_FAILED], vm->thread_index,
-		// 		sw_idx, 1, b->current_length);
+		vlib_increment_combined_counter(&vdm->counters[VLAN_FAILED], vm->thread_index,
+				sw_idx, 1, b->current_length);
 		next[0] = NEXT_NODE_ERROR_DROP;
 
 		if (PREDICT_FALSE(node->flags & VLIB_NODE_FLAG_TRACE))
@@ -150,10 +150,10 @@ static_always_inline void process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t
 
 	const vlan_header_t *vlan = vlib_buffer_get_current(b);
 	vlib_buffer_advance(b, sizeof(vlan_header_t));
-	// vlib_increment_combined_counter(&vdm->counters[VLAN_PROCESSED], vm->thread_index,
-	// 		sw_idx, 1, sizeof(vlan_header_t));
+	vlib_increment_combined_counter(&vdm->counters[VLAN_PROCESSED], vm->thread_index,
+			sw_idx, 1, sizeof(vlan_header_t));
 
-	next[0] = get_next_node_1x(vlan->type);
+	next[0] = vlan->type;
 
 	if (PREDICT_FALSE(node->flags & VLIB_NODE_FLAG_TRACE))
 		add_trace(vm, node, b, sw_idx, vlan->type, next[0]);

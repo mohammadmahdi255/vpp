@@ -63,7 +63,7 @@ CLIB_MARCH_FN (detunnel_init, clib_error_t *, vlib_main_t *CLIB_UNUSED(vm))
 	return 0;
 }
 
-CLIB_MARCH_FN (ethertype_to_next, void, u16 next[VLIB_FRAME_SIZE], u16 len)
+CLIB_MARCH_FN (ethertype_to_next, void, u16 *next, u16 len)
 {
 	for (u16 i = 0; i < len; i += SIMD_SIZE)
 	{
@@ -82,11 +82,11 @@ CLIB_MARCH_FN (ethertype_to_next, void, u16 next[VLIB_FRAME_SIZE], u16 len)
 	}
 }
 
-CLIB_MARCH_FN (ip_protocol_to_next, void, u16 ip_protocol[VLIB_FRAME_SIZE], u16 nexts[VLIB_FRAME_SIZE], u16 len)
+CLIB_MARCH_FN (ip_protocol_to_next, void, u16 *nexts, u16 len)
 {
 	for (u16 i = 0; i < len; i += SIMD_SIZE)
 	{
-		SIMD_TYPE ip_protocol_vec = SIMD_LOAD(ip_protocol + i);
+		SIMD_TYPE ip_protocol_vec = SIMD_LOAD(nexts + i);
 		SIMD_TYPE tcp_mask_vec = (ip_protocol_vec == SIMD_VEC(tcp_protocol));
 		SIMD_TYPE udp_mask_vec = (ip_protocol_vec == SIMD_VEC(udp_protocol));
 		SIMD_TYPE drop_mask = ~(tcp_mask_vec | udp_mask_vec);
@@ -99,16 +99,23 @@ CLIB_MARCH_FN (ip_protocol_to_next, void, u16 ip_protocol[VLIB_FRAME_SIZE], u16 
 	}
 }
 
-
 #ifndef CLIB_MARCH_VARIANT
-void ethertype_to_next(u16 next[VLIB_FRAME_SIZE], u16 len)
+void ethertype_to_next(u16 *next, u16 len)
 {
 	CLIB_MARCH_FN_SELECT (ethertype_to_next) (next, len);
 }
 
-void ip_protocol_to_next(u16 ip_protocol[VLIB_FRAME_SIZE], u16 nexts[VLIB_FRAME_SIZE], u16 len)
+void ip_protocol_to_next(u16 *nexts, u16 len)
 {
-	CLIB_MARCH_FN_SELECT (ip_protocol_to_next) (ip_protocol, nexts, len);
+	CLIB_MARCH_FN_SELECT (ip_protocol_to_next) (nexts, len);
+}
+
+u8 *format_detunnel_trace(u8 *s, va_list *args)
+{
+	vlib_main_t *CLIB_UNUSED(vm)   = va_arg(*args, vlib_main_t *);
+	vlib_node_t *CLIB_UNUSED(node) = va_arg(*args, vlib_node_t *);
+	detunnel_trace_t *t = va_arg(*args, detunnel_trace_t *);
+	return format(s, "%s: if index %u next protocol 0x%04x", t->name, t->sw_if_index, t->next_protocol);
 }
 #endif
 
