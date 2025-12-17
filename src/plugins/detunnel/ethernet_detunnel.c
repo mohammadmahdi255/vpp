@@ -19,13 +19,14 @@ enum
 	ETHERNET_COUNTER_N,
 };
 
-typedef struct {
+typedef struct
+{
+	ethernet_header_t eth;
 	u32 sw_if_index;
-	u16 ethertype;
-	u16 next_index;
 } ethernet_trace_t;
 
-typedef struct {
+typedef struct
+{
 	u32 counter_if_index;
 	vlib_combined_counter_main_t counters[ETHERNET_COUNTER_N];
 } __clib_packed ethernet_detunnel_main_t;
@@ -34,14 +35,13 @@ extern ethernet_detunnel_main_t ethernet_detunnel_main;
 extern vlib_node_registration_t ethernet_detunnel;
 
 static_always_inline void add_trace(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b,
-          u32 sw_if_index, u16 ethertype)
+        const ethernet_header_t *eth)
 {
 	if (PREDICT_FALSE((node->flags & VLIB_NODE_FLAG_TRACE) && (b->flags & VLIB_BUFFER_IS_TRACED)))
 	{
-		detunnel_trace_t *t = vlib_add_trace(vm, node, b, sizeof(detunnel_trace_t));
-		t->name = ethernet_detunnel.name;
-		t->sw_if_index = sw_if_index;
-		t->next_protocol = clib_net_to_host_u16(ethertype);
+		ethernet_trace_t *t = vlib_add_trace(vm, node, b, sizeof(ethernet_trace_t));
+		t->eth = *eth;
+		t->sw_if_index = vnet_buffer(b)->sw_if_index[VLIB_RX];
 	}
 }
 
@@ -101,10 +101,10 @@ static_always_inline bool process_buffer_4x(vlib_main_t *vm, vlib_node_runtime_t
 
 	if (PREDICT_FALSE(node->flags & VLIB_NODE_FLAG_TRACE))
 	{
-		add_trace(vm, node, b[0], sw_idx0, eth0->type);
-		add_trace(vm, node, b[1], sw_idx1, eth1->type);
-		add_trace(vm, node, b[2], sw_idx2, eth2->type);
-		add_trace(vm, node, b[3], sw_idx3, eth3->type);
+		add_trace(vm, node, b[0], eth0);
+		add_trace(vm, node, b[1], eth1);
+		add_trace(vm, node, b[2], eth2);
+		add_trace(vm, node, b[3], eth3);
 	}
 
 	return true;
@@ -123,10 +123,6 @@ static_always_inline void process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t
 		vlib_increment_combined_counter(&edm->counters[ETHERNET_FAILED], vm->thread_index,
 				sw_idx, 1, b->current_length);
 		next[0] = NEXT_NODE_ERROR_DROP;
-
-		if (PREDICT_FALSE(node->flags & VLIB_NODE_FLAG_TRACE))
-			add_trace(vm, node, b, sw_idx, 0);
-
 		return;
 	}
 
@@ -138,7 +134,7 @@ static_always_inline void process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t
 	next[0] = eth->type;
 
 	if (PREDICT_FALSE(node->flags & VLIB_NODE_FLAG_TRACE))
-		add_trace(vm, node, b, sw_idx, eth->type);
+		add_trace(vm, node, b, eth);
 }
 
 VLIB_NODE_FN (ethernet_detunnel) (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_frame_t *frame)
@@ -223,10 +219,19 @@ VLIB_NODE_FN (ethernet_detunnel) (vlib_main_t *vm, vlib_node_runtime_t *node, vl
 #ifndef CLIB_MARCH_VARIANT
 ethernet_detunnel_main_t ethernet_detunnel_main;
 
+static u8 *format_ethernet_detunnel_trace(u8 *s, va_list *args)
+{
+	vlib_main_t *CLIB_UNUSED(vm)   = va_arg(*args, vlib_main_t *);
+	vlib_node_t *CLIB_UNUSED(node) = va_arg(*args, vlib_node_t *);
+	ethernet_trace_t *t = va_arg(*args, ethernet_trace_t *);
+	return format(s, "ethernet detunnel: if index %u src %U dst ethertype 0x%04x",
+			t->sw_if_index, format_ethernet_address, t->eth.src_address, t->eth.dst_address, t->eth.type);
+}
+
 VLIB_REGISTER_NODE (ethernet_detunnel) = {
 	.name = "ethernet-detunnel",
 	.vector_size = sizeof(u32),
-	.format_trace = format_detunnel_trace,
+	.format_trace = format_ethernet_detunnel_trace,
 	.type = VLIB_NODE_TYPE_INTERNAL,
 	.n_next_nodes = NEXT_NODE_N,
 	.next_nodes = {
