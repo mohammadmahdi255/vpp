@@ -16,52 +16,47 @@ enum
 	VLAN_COUNTER_N,
 };
 
+typedef ethernet_vlan_header_t vlan_header_t;
 
-typedef struct {
+typedef struct
+{
+	vlan_header_t vlan;
 	u32 sw_if_index;
-	u16 ethertype;
-	u16 next_index;
 } vlan_trace_t;
 
-typedef struct {
+typedef struct
+{
 	u32 counter_if_index;
 	vlib_combined_counter_main_t counters[VLAN_COUNTER_N];
 } vlan_detunnel_main_t;
 
-typedef ethernet_vlan_header_t vlan_header_t;
-
-#ifndef CLIB_MARCH_VARIANT
-vlan_detunnel_main_t vlan_detunnel_main;
-#else
 extern vlan_detunnel_main_t vlan_detunnel_main;
-#endif
 
 static_always_inline void add_trace(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b,
-          u32 sw_if_index, u16 ethertype, u16 next_index)
+        const vlan_header_t *vlan)
 {
 	if (PREDICT_FALSE((node->flags & VLIB_NODE_FLAG_TRACE) && (b->flags & VLIB_BUFFER_IS_TRACED)))
 	{
 		vlan_trace_t *t = vlib_add_trace(vm, node, b, sizeof(*t));
-		t->sw_if_index = sw_if_index;
-		t->ethertype = ethertype;
-		t->next_index = next_index;
+		t->vlan = *vlan;
+		t->sw_if_index = vnet_buffer(b)->sw_if_index[VLIB_RX];
 	}
 }
 
-static_always_inline u16 get_next_node_1x(u16 ethertype)
-{
-	switch (ethertype)
-	{
-		case __bswap_constant_16(ETHERNET_TYPE_VLAN):
-			return NEXT_NODE_VLAN_DETUNNEL;
-		case __bswap_constant_16(ETHERNET_TYPE_IP4):
-			return NEXT_NODE_IP4_DETUNNEL;
-		case __bswap_constant_16(ETHERNET_TYPE_IP6):
-			return NEXT_NODE_IP6_DETUNNEL;
-		default:
-			return NEXT_NODE_ERROR_DROP;
-	}
-}
+// static_always_inline u16 get_next_node_1x(u16 ethertype)
+// {
+// 	switch (ethertype)
+// 	{
+// 		case __bswap_constant_16(ETHERNET_TYPE_VLAN):
+// 			return NEXT_NODE_VLAN_DETUNNEL;
+// 		case __bswap_constant_16(ETHERNET_TYPE_IP4):
+// 			return NEXT_NODE_IP4_DETUNNEL;
+// 		case __bswap_constant_16(ETHERNET_TYPE_IP6):
+// 			return NEXT_NODE_IP6_DETUNNEL;
+// 		default:
+// 			return NEXT_NODE_ERROR_DROP;
+// 	}
+// }
 
 static_always_inline bool process_buffer_4x(vlib_main_t *vm, vlib_node_runtime_t *node,
 		vlib_buffer_t* b[4], u16 next[4])
@@ -119,10 +114,10 @@ static_always_inline bool process_buffer_4x(vlib_main_t *vm, vlib_node_runtime_t
 
 	if (PREDICT_FALSE(node->flags & VLIB_NODE_FLAG_TRACE))
 	{
-		add_trace(vm, node, b[0], sw_idx0, vlan0->type, next[0]);
-		add_trace(vm, node, b[1], sw_idx1, vlan1->type, next[1]);
-		add_trace(vm, node, b[2], sw_idx2, vlan2->type, next[2]);
-		add_trace(vm, node, b[3], sw_idx3, vlan3->type, next[3]);
+		add_trace(vm, node, b[0], vlan0);
+		add_trace(vm, node, b[1], vlan1);
+		add_trace(vm, node, b[2], vlan2);
+		add_trace(vm, node, b[3], vlan3);
 	}
 
 	return true;
@@ -141,10 +136,6 @@ static_always_inline void process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t
 		vlib_increment_combined_counter(&vdm->counters[VLAN_FAILED], vm->thread_index,
 				sw_idx, 1, b->current_length);
 		next[0] = NEXT_NODE_ERROR_DROP;
-
-		if (PREDICT_FALSE(node->flags & VLIB_NODE_FLAG_TRACE))
-			add_trace(vm, node, b, sw_idx, 0, next[0]);
-
 		return;
 	}
 
@@ -156,35 +147,8 @@ static_always_inline void process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t
 	next[0] = vlan->type;
 
 	if (PREDICT_FALSE(node->flags & VLIB_NODE_FLAG_TRACE))
-		add_trace(vm, node, b, sw_idx, vlan->type, next[0]);
+		add_trace(vm, node, b, vlan);
 }
-
-#ifndef CLIB_MARCH_VARIANT
-
-static u8 *format_vlan_trace(u8 *s, va_list *args)
-{
-	vlib_main_t *CLIB_UNUSED(vm)   = va_arg(*args, vlib_main_t *);
-	vlib_node_t *CLIB_UNUSED(node) = va_arg(*args, vlib_node_t *);
-	vlan_trace_t *t = va_arg(*args, vlan_trace_t *);
-	return format(s, "vlan: sw_if_index %u ethertype 0x%04x next %u",
-			t->sw_if_index, clib_net_to_host_u16(t->ethertype), t->next_index);
-}
-
-/* Register node */
-VLIB_REGISTER_NODE (vlan_detunnel) = {
-	.name = "vlan-detunnel",
-	.vector_size = sizeof(u32),
-	.format_trace = format_vlan_trace,
-	.type = VLIB_NODE_TYPE_INTERNAL,
-	.n_next_nodes = NEXT_NODE_N,
-	.next_nodes = {
-#define _(id, name) [NEXT_NODE_##id] = (name),
-	foreach_detunnel_next_node
-#undef _
-	},
-};
-
-#endif
 
 VLIB_NODE_FN (vlan_detunnel) (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_frame_t *frame)
 {
@@ -264,6 +228,33 @@ VLIB_NODE_FN (vlan_detunnel) (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_f
 
 	return frame->n_vectors;
 }
+
+#ifndef CLIB_MARCH_VARIANT
+vlan_detunnel_main_t vlan_detunnel_main;
+
+static u8 *format_vlan_trace(u8 *s, va_list *args)
+{
+	vlib_main_t *CLIB_UNUSED(vm)   = va_arg(*args, vlib_main_t *);
+	vlib_node_t *CLIB_UNUSED(node) = va_arg(*args, vlib_node_t *);
+	vlan_trace_t *t = va_arg(*args, vlan_trace_t *);
+	return format(s, "vlan detunnel: if index %u priority_cfi_and_id %u ethertype 0x%04x",
+			t->sw_if_index, t->vlan.priority_cfi_and_id, t->vlan.type);
+}
+
+/* Register node */
+VLIB_REGISTER_NODE (vlan_detunnel) = {
+	.name = "vlan-detunnel",
+	.vector_size = sizeof(u32),
+	.format_trace = format_vlan_trace,
+	.type = VLIB_NODE_TYPE_INTERNAL,
+	.n_next_nodes = NEXT_NODE_N,
+	.next_nodes = {
+#define _(id, name) [NEXT_NODE_##id] = (name),
+	foreach_detunnel_next_node
+#undef _
+	},
+};
+#endif
 
 static clib_error_t *vlan_detunnel_init(vlib_main_t *CLIB_UNUSED(vm))
 {

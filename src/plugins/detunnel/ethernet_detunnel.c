@@ -224,8 +224,9 @@ static u8 *format_ethernet_detunnel_trace(u8 *s, va_list *args)
 	vlib_main_t *CLIB_UNUSED(vm)   = va_arg(*args, vlib_main_t *);
 	vlib_node_t *CLIB_UNUSED(node) = va_arg(*args, vlib_node_t *);
 	ethernet_trace_t *t = va_arg(*args, ethernet_trace_t *);
-	return format(s, "ethernet detunnel: if index %u src %U dst ethertype 0x%04x",
-			t->sw_if_index, format_ethernet_address, t->eth.src_address, t->eth.dst_address, t->eth.type);
+	return format(s, "ethernet detunnel: if index %u src %U dst %U ethertype 0x%04x",
+			t->sw_if_index, format_ethernet_address, t->eth.src_address,
+			format_ethernet_address, t->eth.dst_address, t->eth.type);
 }
 
 VLIB_REGISTER_NODE (ethernet_detunnel) = {
@@ -242,7 +243,7 @@ VLIB_REGISTER_NODE (ethernet_detunnel) = {
 };
 #endif
 
-CLIB_MARCH_FN (ethernet_detunnel_init, clib_error_t *, vlib_main_t *CLIB_UNUSED(vm))
+static clib_error_t *ethernet_detunnel_init(vlib_main_t *CLIB_UNUSED(vm))
 {
 	ethernet_detunnel_main_t *edm = &ethernet_detunnel_main;
 	vnet_main_t *vnm = vnet_get_main();
@@ -260,11 +261,6 @@ CLIB_MARCH_FN (ethernet_detunnel_init, clib_error_t *, vlib_main_t *CLIB_UNUSED(
 #undef _
 
 	return 0;
-}
-
-static clib_error_t *ethernet_detunnel_init(vlib_main_t *vm)
-{
-	return CLIB_MARCH_FN_SELECT (ethernet_detunnel_init) (vm);
 }
 
 VLIB_INIT_FUNCTION (ethernet_detunnel_init);

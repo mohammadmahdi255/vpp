@@ -30,81 +30,81 @@ ipv4_detunnel_main_t ipv4_detunnel_main;
 extern ipv4_detunnel_main_t ipv4_detunnel_main;
 #endif
 
-static_always_inline u16 get_next_node_1x(u8 protocol)
-{
-	switch (protocol)
-	{
-		case IP_PROTOCOL_TCP:
-		case IP_PROTOCOL_UDP:
-		default:
-			return NEXT_NODE_ERROR_DROP;
-	}
-}
+// static_always_inline u16 get_next_node_1x(u8 protocol)
+// {
+// 	switch (protocol)
+// 	{
+// 		case IP_PROTOCOL_TCP:
+// 		case IP_PROTOCOL_UDP:
+// 		default:
+// 			return NEXT_NODE_ERROR_DROP;
+// 	}
+// }
 
-static_always_inline bool process_buffer_4x(vlib_main_t *vm, vlib_node_runtime_t *node,
-		vlib_buffer_t* b[4], u16 nexts[4])
-{
-	// const u32 sw_idx0 = vnet_buffer(b[0])->sw_if_index[VLIB_RX];
-	// const u32 sw_idx1 = vnet_buffer(b[1])->sw_if_index[VLIB_RX];
-	// const u32 sw_idx2 = vnet_buffer(b[2])->sw_if_index[VLIB_RX];
-	// const u32 sw_idx3 = vnet_buffer(b[3])->sw_if_index[VLIB_RX];
+// static_always_inline bool process_buffer_4x(vlib_main_t *vm, vlib_node_runtime_t *node,
+// 		vlib_buffer_t* b[4], u16 nexts[4])
+// {
+// 	// const u32 sw_idx0 = vnet_buffer(b[0])->sw_if_index[VLIB_RX];
+// 	// const u32 sw_idx1 = vnet_buffer(b[1])->sw_if_index[VLIB_RX];
+// 	// const u32 sw_idx2 = vnet_buffer(b[2])->sw_if_index[VLIB_RX];
+// 	// const u32 sw_idx3 = vnet_buffer(b[3])->sw_if_index[VLIB_RX];
 
-	const u32 len0 = b[0]->current_length;
-	const u32 len1 = b[1]->current_length;
-	const u32 len2 = b[2]->current_length;
-	const u32 len3 = b[3]->current_length;
+// 	const u32 len0 = b[0]->current_length;
+// 	const u32 len1 = b[1]->current_length;
+// 	const u32 len2 = b[2]->current_length;
+// 	const u32 len3 = b[3]->current_length;
 
-	u32 min_len = len0;
-	min_len = clib_min(min_len, len1);
-	min_len = clib_min(min_len, len2);
-	min_len = clib_min(min_len, len3);
+// 	u32 min_len = len0;
+// 	min_len = clib_min(min_len, len1);
+// 	min_len = clib_min(min_len, len2);
+// 	min_len = clib_min(min_len, len3);
 
-	if (PREDICT_FALSE(min_len < sizeof(ethernet_header_t)))
-		return false;
+// 	if (PREDICT_FALSE(min_len < sizeof(ethernet_header_t)))
+// 		return false;
 
-	const ethernet_header_t *eth0 = vlib_buffer_get_current(b[0]);
-	const ethernet_header_t *eth1 = vlib_buffer_get_current(b[1]);
-	const ethernet_header_t *eth2 = vlib_buffer_get_current(b[2]);
-	const ethernet_header_t *eth3 = vlib_buffer_get_current(b[3]);
+// 	const ethernet_header_t *eth0 = vlib_buffer_get_current(b[0]);
+// 	const ethernet_header_t *eth1 = vlib_buffer_get_current(b[1]);
+// 	const ethernet_header_t *eth2 = vlib_buffer_get_current(b[2]);
+// 	const ethernet_header_t *eth3 = vlib_buffer_get_current(b[3]);
 
-	vlib_buffer_advance(b[0], sizeof(ethernet_header_t));
-	vlib_buffer_advance(b[1], sizeof(ethernet_header_t));
-	vlib_buffer_advance(b[2], sizeof(ethernet_header_t));
-	vlib_buffer_advance(b[3], sizeof(ethernet_header_t));
+// 	vlib_buffer_advance(b[0], sizeof(ethernet_header_t));
+// 	vlib_buffer_advance(b[1], sizeof(ethernet_header_t));
+// 	vlib_buffer_advance(b[2], sizeof(ethernet_header_t));
+// 	vlib_buffer_advance(b[3], sizeof(ethernet_header_t));
 
-	nexts[0] = get_next_node_1x(eth0->type);
-	nexts[1] = get_next_node_1x(eth1->type);
-	nexts[2] = get_next_node_1x(eth2->type);
-	nexts[3] = get_next_node_1x(eth3->type);
+// 	nexts[0] = get_next_node_1x(eth0->type);
+// 	nexts[1] = get_next_node_1x(eth1->type);
+// 	nexts[2] = get_next_node_1x(eth2->type);
+// 	nexts[3] = get_next_node_1x(eth3->type);
 
-	// ipv4_detunnel_main_t *idm = &ipv4_detunnel_main;
-	// vlib_increment_combined_counter(&idm->counters[IPV4_TOTAL],
-	// 	vm->thread_index, sw_idx0, 1, len0);
-	// vlib_increment_combined_counter(&idm->counters[IPV4_PROCESSED],
-	// 	vm->thread_index, sw_idx0, 1, sizeof(ethernet_header_t));
-	// vlib_increment_combined_counter(&idm->counters[IPV4_TOTAL],
-	// 	vm->thread_index, sw_idx1, 1, len1);
-	// vlib_increment_combined_counter(&idm->counters[IPV4_PROCESSED],
-	// 	vm->thread_index, sw_idx1, 1, sizeof(ethernet_header_t));
-	// vlib_increment_combined_counter(&idm->counters[IPV4_TOTAL],
-	// 	vm->thread_index, sw_idx2, 1, len2);
-	// vlib_increment_combined_counter(&idm->counters[IPV4_PROCESSED],
-	// 	vm->thread_index, sw_idx2, 1, sizeof(ethernet_header_t));
-	// vlib_increment_combined_counter(&idm->counters[IPV4_TOTAL],
-	// 	vm->thread_index, sw_idx3, 1, len3);
-	// vlib_increment_combined_counter(&idm->counters[IPV4_PROCESSED],
-	// 	vm->thread_index, sw_idx3, 1, sizeof(ethernet_header_t));
+// 	// ipv4_detunnel_main_t *idm = &ipv4_detunnel_main;
+// 	// vlib_increment_combined_counter(&idm->counters[IPV4_TOTAL],
+// 	// 	vm->thread_index, sw_idx0, 1, len0);
+// 	// vlib_increment_combined_counter(&idm->counters[IPV4_PROCESSED],
+// 	// 	vm->thread_index, sw_idx0, 1, sizeof(ethernet_header_t));
+// 	// vlib_increment_combined_counter(&idm->counters[IPV4_TOTAL],
+// 	// 	vm->thread_index, sw_idx1, 1, len1);
+// 	// vlib_increment_combined_counter(&idm->counters[IPV4_PROCESSED],
+// 	// 	vm->thread_index, sw_idx1, 1, sizeof(ethernet_header_t));
+// 	// vlib_increment_combined_counter(&idm->counters[IPV4_TOTAL],
+// 	// 	vm->thread_index, sw_idx2, 1, len2);
+// 	// vlib_increment_combined_counter(&idm->counters[IPV4_PROCESSED],
+// 	// 	vm->thread_index, sw_idx2, 1, sizeof(ethernet_header_t));
+// 	// vlib_increment_combined_counter(&idm->counters[IPV4_TOTAL],
+// 	// 	vm->thread_index, sw_idx3, 1, len3);
+// 	// vlib_increment_combined_counter(&idm->counters[IPV4_PROCESSED],
+// 	// 	vm->thread_index, sw_idx3, 1, sizeof(ethernet_header_t));
 
-	// if (PREDICT_FALSE(node->flags & VLIB_NODE_FLAG_TRACE))
-	// {
-	// 	add_trace(vm, node, b[0], sw_idx0, eth0->type);
-	// 	add_trace(vm, node, b[1], sw_idx1, eth1->type);
-	// 	add_trace(vm, node, b[2], sw_idx2, eth2->type);
-	// 	add_trace(vm, node, b[3], sw_idx3, eth3->type);
-	// }
+// 	// if (PREDICT_FALSE(node->flags & VLIB_NODE_FLAG_TRACE))
+// 	// {
+// 	// 	add_trace(vm, node, b[0], sw_idx0, eth0->type);
+// 	// 	add_trace(vm, node, b[1], sw_idx1, eth1->type);
+// 	// 	add_trace(vm, node, b[2], sw_idx2, eth2->type);
+// 	// 	add_trace(vm, node, b[3], sw_idx3, eth3->type);
+// 	// }
 
-	return true;
-}
+// 	return true;
+// }
 
 static_always_inline void process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, u16 *next)
 {
