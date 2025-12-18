@@ -180,8 +180,6 @@ DPDK_MESON_ARGS = \
 	--libdir lib \
 	--prefix $(dpdk_install_dir) \
 	-Dtests=false \
-	-Dc_args="-I$(dpdk_root_dir)/$(dpdk_install_dir)/include" \
-	-Dc_link_args="-L$(dpdk_root_dir)/$(dpdk_install_dir)/lib" \
 	-Denable_driver_sdk=true \
 	"-Ddisable_drivers=$(DPDK_DRIVERS_DISABLED)" \
 	"-Ddisable_libs=$(DPDK_LIBS_DISABLED)" \
