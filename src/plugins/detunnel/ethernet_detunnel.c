@@ -187,7 +187,7 @@ VLIB_NODE_FN (ethernet_detunnel) (vlib_main_t *vm, vlib_node_runtime_t *node, vl
 			vlib_prefetch_buffer_data(b[7], LOAD);
 		}
 
-		if (!process_buffer_4x(vm, node, b, next))
+		if (PREDICT_FALSE(!process_buffer_4x(vm, node, b, next)))
 		{
 			process_buffer_1x(vm, node, b[0], &next[0]);
 			process_buffer_1x(vm, node, b[1], &next[1]);
@@ -230,7 +230,7 @@ static u8 *format_ethernet_detunnel_trace(u8 *s, va_list *args)
 }
 
 VLIB_REGISTER_NODE (ethernet_detunnel) = {
-	.name = "ethernet-detunnel",
+	.name = "ethernet detunnel",
 	.vector_size = sizeof(u32),
 	.format_trace = format_ethernet_detunnel_trace,
 	.type = VLIB_NODE_TYPE_INTERNAL,
