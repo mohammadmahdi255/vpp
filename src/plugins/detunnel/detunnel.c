@@ -43,11 +43,10 @@ foreach_next_node
 #endif
 
 #define STR(x) #x
-#define XSTR(x) STR(x)
 
 CLIB_MARCH_FN (detunnel_init, clib_error_t *, vlib_main_t *CLIB_UNUSED(vm))
 {
-	clib_warning("size: %lu %s", SIMD_SIZE, XSTR(SIMD_TYPE));
+	clib_warning("size: %lu %s", SIMD_SIZE, STR(SIMD_TYPE));
 	SIMD_VEC(vlan_ethertype) = SIMD_SPLAT(clib_host_to_net_u16(ETHERNET_TYPE_VLAN));
 	SIMD_VEC(ip4_ethertype) = SIMD_SPLAT(clib_host_to_net_u16(ETHERNET_TYPE_IP4));
 	SIMD_VEC(ip6_ethertype) = SIMD_SPLAT(clib_host_to_net_u16(ETHERNET_TYPE_IP6));
