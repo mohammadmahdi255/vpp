@@ -233,7 +233,7 @@ static u8 *format_ethernet_detunnel_trace(u8 *s, va_list *args)
 }
 
 VLIB_REGISTER_NODE (ethernet_detunnel) = {
-	.name = "ethernet detunnel",
+	.name = "ethernet-detunnel",
 	.vector_size = sizeof(u32),
 	.format_trace = format_ethernet_detunnel_trace,
 	.type = VLIB_NODE_TYPE_INTERNAL,

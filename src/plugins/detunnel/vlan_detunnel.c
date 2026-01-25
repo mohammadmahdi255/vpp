@@ -246,7 +246,7 @@ static u8 *format_vlan_trace(u8 *s, va_list *args)
 
 /* Register node */
 VLIB_REGISTER_NODE (vlan_detunnel) = {
-	.name = "vlan detunnel",
+	.name = "vlan-detunnel",
 	.vector_size = sizeof(u32),
 	.format_trace = format_vlan_trace,
 	.type = VLIB_NODE_TYPE_INTERNAL,

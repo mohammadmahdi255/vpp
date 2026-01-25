@@ -175,32 +175,6 @@ process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, 
 	next[0] = ip4->protocol;
 }
 
-#ifndef CLIB_MARCH_VARIANT
-
-static u8 *format_ipv4_trace(u8 *s, va_list *args)
-{
-	vlib_main_t *CLIB_UNUSED(vm)   = va_arg(*args, vlib_main_t *);
-	vlib_node_t *CLIB_UNUSED(node) = va_arg(*args, vlib_node_t *);
-	ip4_trace_t *t = va_arg(*args, ip4_trace_t *);
-	return format(s, "ipv4 detunnel: if index %u protocol %u checksum 0x%04x",
-			t->sw_if_index, t->ip4.protocol, t->ip4.checksum);
-}
-
-VLIB_REGISTER_NODE (ipv4_detunnel) = {
-	.name = "ipv4 detunnel",
-	.vector_size = sizeof(u32),
-	.format_trace = format_ipv4_trace,
-	.type = VLIB_NODE_TYPE_INTERNAL,
-	.n_next_nodes = NEXT_NODE_N,
-	.next_nodes = {
-#define _(id, name) [NEXT_NODE_##id] = (name),
-	foreach_detunnel_next_node
-#undef _
-	},
-};
-
-#endif
-
 VLIB_NODE_FN (ipv4_detunnel) (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_frame_t *frame)
 {
 	vlib_buffer_t *bufs[VLIB_FRAME_SIZE];
@@ -279,6 +253,32 @@ VLIB_NODE_FN (ipv4_detunnel) (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_f
 
 	return frame->n_vectors;
 }
+
+#ifndef CLIB_MARCH_VARIANT
+
+static u8 *format_ipv4_trace(u8 *s, va_list *args)
+{
+	vlib_main_t *CLIB_UNUSED(vm)   = va_arg(*args, vlib_main_t *);
+	vlib_node_t *CLIB_UNUSED(node) = va_arg(*args, vlib_node_t *);
+	ip4_trace_t *t = va_arg(*args, ip4_trace_t *);
+	return format(s, "ipv4 detunnel: if index %u protocol %u checksum 0x%04x",
+			t->sw_if_index, t->ip4.protocol, t->ip4.checksum);
+}
+
+VLIB_REGISTER_NODE (ipv4_detunnel) = {
+	.name = "ipv4-detunnel",
+	.vector_size = sizeof(u32),
+	.format_trace = format_ipv4_trace,
+	.type = VLIB_NODE_TYPE_INTERNAL,
+	.n_next_nodes = NEXT_NODE_N,
+	.next_nodes = {
+#define _(id, name) [NEXT_NODE_##id] = (name),
+	foreach_detunnel_next_node
+#undef _
+	},
+};
+
+#endif
 
 static clib_error_t *ipv4_detunnel_init(vlib_main_t *CLIB_UNUSED(vm))
 {
