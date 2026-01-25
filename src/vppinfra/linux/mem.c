@@ -1,16 +1,6 @@
 /*
+ * SPDX-License-Identifier: Apache-2.0
  * Copyright (c) 2017 Cisco and/or its affiliates.
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at:
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
  */
 
 #define _GNU_SOURCE
@@ -231,7 +221,8 @@ clib_mem_vm_create_fd (clib_mem_page_sz_t log2_page_size, char *fmt, ...)
 
   if (log2_page_size == mm->log2_page_sz)
     log2_page_size = CLIB_MEM_PAGE_SZ_DEFAULT;
-  else if (log2_page_size == mm->log2_sys_default_hugepage_sz)
+  else if (mm->log2_sys_default_hugepage_sz != CLIB_MEM_PAGE_SZ_UNKNOWN &&
+	   log2_page_size == mm->log2_sys_default_hugepage_sz)
     log2_page_size = CLIB_MEM_PAGE_SZ_DEFAULT_HUGE;
 
   switch (log2_page_size)
@@ -505,11 +496,11 @@ clib_mem_get_page_stats (void *start, clib_mem_page_sz_t log2_page_size,
 	}
       if (status[i] >= 0 && status[i] < CLIB_MAX_NUMAS)
 	{
-	  stats->mapped++;
+	  stats->populated++;
 	  stats->per_numa[status[i]]++;
 	}
-      else if (status[i] == -EFAULT)
-	stats->not_mapped++;
+      else if (status[i] == -EFAULT || status[i] == -ENOENT)
+	stats->not_populated++;
       else
 	stats->unknown++;
     }
@@ -613,11 +604,3 @@ clib_mem_set_default_numa_affinity ()
     }
   return 0;
 }
-
-/*
- * fd.io coding-style-patch-verification: ON
- *
- * Local Variables:
- * eval: (c-set-style "gnu")
- * End:
- */

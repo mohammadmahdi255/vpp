@@ -1,16 +1,6 @@
 /*
+ * SPDX-License-Identifier: Apache-2.0
  * Copyright (c) 2019 Cisco and/or its affiliates.
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at:
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
  */
 
 #include <sys/socket.h>
@@ -31,6 +21,8 @@
 #include <netlink/route/addr.h>
 #include <netlink/route/link/vlan.h>
 
+#include <vnet/fib/fib_entry_src.h>
+#include <vnet/fib/fib_path_list.h>
 #include <vnet/fib/fib_table.h>
 #include <vnet/mfib/mfib_table.h>
 #include <vnet/ip/ip6_ll_table.h>
@@ -1359,6 +1351,7 @@ lcp_router_route_add (struct rtnl_route *rr, int is_replace)
   lcp_router_route_mk_prefix (rr, &pfx);
   entry_flags = lcp_router_route_mk_entry_flags (rtype, table_id, rproto);
 
+  nlt = lcp_router_table_add_or_lock (table_id, pfx.fp_proto);
   /* Skip any kernel routes and IPv6 LL or multicast routes */
   if (rproto == RTPROT_KERNEL ||
       (FIB_PROTOCOL_IP6 == pfx.fp_proto &&
@@ -1386,8 +1379,6 @@ lcp_router_route_add (struct rtnl_route *rr, int is_replace)
 
   if (0 != vec_len (np.paths))
     {
-      nlt = lcp_router_table_add_or_lock (table_id, pfx.fp_proto);
-
       if (rtype == RTN_MULTICAST)
 	{
 	  /* it's not clear to me how linux expresses the RPF paramters
@@ -1451,16 +1442,6 @@ lcp_router_route_add (struct rtnl_route *rr, int is_replace)
       LCP_ROUTER_DBG ("no paths for route: %d:%U %U",
 		      rtnl_route_get_table (rr), format_fib_prefix, &pfx,
 		      format_fib_entry_flags, entry_flags);
-
-      nlt =
-	lcp_router_table_find (lcp_router_table_k2f (table_id), pfx.fp_proto);
-
-      if (is_replace && nlt)
-	{
-	  fib_source_t fib_src;
-	  fib_src = lcp_router_proto_fib_source (rproto);
-	  fib_table_entry_delete (nlt->nlt_fib_index, &pfx, fib_src);
-	}
     }
   vec_free (np.paths);
 }
@@ -1499,27 +1480,68 @@ lcp_router_route_sync_end (void)
     }
 }
 
+typedef struct lcp_router_table_flush_entry_t
+{
+  const fib_prefix_t *lrtfe_pfx;
+  fib_route_path_t *rpaths;
+} lcp_router_table_flush_entry_t;
+
 typedef struct lcp_router_table_flush_ctx_t_
 {
-  fib_node_index_t *lrtf_entries;
+  lcp_router_table_flush_entry_t *lrtf_entries;
   u32 *lrtf_sw_if_index_to_bool;
   fib_source_t lrtf_source;
+  fib_path_encode_ctx_t path_ctx;
 } lcp_router_table_flush_ctx_t;
+
+fib_path_list_walk_rc_t
+lcp_router_path_filter_and_encode (fib_node_index_t path_list_index,
+				   fib_node_index_t path_index, void *arg)
+{
+  lcp_router_table_flush_ctx_t *ctx = arg;
+  u32 sw_if_index;
+
+  sw_if_index = fib_path_get_resolving_interface (path_index);
+
+  if (~0 != sw_if_index &&
+      sw_if_index < vec_len (ctx->lrtf_sw_if_index_to_bool) &&
+      ctx->lrtf_sw_if_index_to_bool[sw_if_index])
+    {
+      return fib_path_encode (path_list_index, path_index, NULL,
+			      &ctx->path_ctx);
+    }
+
+  return (FIB_PATH_LIST_WALK_CONTINUE);
+}
 
 static fib_table_walk_rc_t
 lcp_router_table_flush_cb (fib_node_index_t fib_entry_index, void *arg)
 {
   lcp_router_table_flush_ctx_t *ctx = arg;
-  u32 sw_if_index;
+  fib_entry_t *fib_entry;
+  fib_entry_src_t *esrc;
 
-  sw_if_index = fib_entry_get_resolving_interface_for_source (
-    fib_entry_index, ctx->lrtf_source);
+  ctx->path_ctx.rpaths = NULL;
 
-  if (sw_if_index < vec_len (ctx->lrtf_sw_if_index_to_bool) &&
-      ctx->lrtf_sw_if_index_to_bool[sw_if_index])
+  fib_entry = fib_entry_get (fib_entry_index);
+
+  esrc = fib_entry_src_find (fib_entry, ctx->lrtf_source);
+
+  if (NULL == esrc || FIB_NODE_INDEX_INVALID == esrc->fes_pl)
     {
-      vec_add1 (ctx->lrtf_entries, fib_entry_index);
+      return (FIB_TABLE_WALK_CONTINUE);
     }
+
+  fib_path_list_walk (esrc->fes_pl, lcp_router_path_filter_and_encode, ctx);
+
+  if (0 != vec_len (ctx->path_ctx.rpaths))
+    {
+      lcp_router_table_flush_entry_t *lrtfe;
+      vec_add2 (ctx->lrtf_entries, lrtfe, 1);
+      lrtfe->lrtfe_pfx = fib_entry_get_prefix (fib_entry_index);
+      lrtfe->rpaths = ctx->path_ctx.rpaths;
+    }
+
   return (FIB_TABLE_WALK_CONTINUE);
 }
 
@@ -1527,12 +1549,12 @@ static void
 lcp_router_table_flush (lcp_router_table_t *nlt, u32 *sw_if_index_to_bool,
 			fib_source_t source)
 {
-  fib_node_index_t *fib_entry_index;
   lcp_router_table_flush_ctx_t ctx = {
     .lrtf_entries = NULL,
     .lrtf_sw_if_index_to_bool = sw_if_index_to_bool,
     .lrtf_source = source,
   };
+  lcp_router_table_flush_entry_t *lrtfe;
 
   LCP_ROUTER_DBG (
     "Flush table: proto %U, fib-index %u, max sw_if_index %u, source %U",
@@ -1545,9 +1567,11 @@ lcp_router_table_flush (lcp_router_table_t *nlt, u32 *sw_if_index_to_bool,
   LCP_ROUTER_DBG ("Flush table: entries number to delete %u",
 		  vec_len (ctx.lrtf_entries));
 
-  vec_foreach (fib_entry_index, ctx.lrtf_entries)
+  vec_foreach (lrtfe, ctx.lrtf_entries)
     {
-      fib_table_entry_delete_index (*fib_entry_index, source);
+      fib_table_entry_path_remove2 (nlt->nlt_fib_index, lrtfe->lrtfe_pfx,
+				    source, lrtfe->rpaths);
+      vec_free (lrtfe->rpaths);
       lcp_router_table_unlock (nlt);
     }
 
@@ -1617,11 +1641,3 @@ lcp_router_init (vlib_main_t *vm)
 VLIB_INIT_FUNCTION (lcp_router_init) = {
   .runs_before = VLIB_INITS ("lcp_nl_init"),
 };
-
-/*
- * fd.io coding-style-patch-verification: ON
- *
- * Local Variables:
- * eval: (c-set-style "gnu")
- * End:
- */

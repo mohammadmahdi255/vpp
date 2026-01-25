@@ -1,16 +1,6 @@
 /*
+ * SPDX-License-Identifier: Apache-2.0
  * Copyright (c) 2018 Cisco and/or its affiliates.
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at:
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
  */
 
 #define _GNU_SOURCE
@@ -59,7 +49,10 @@ clib_pmalloc_init (clib_pmalloc_main_t * pm, uword base_addr, uword size)
 
   ASSERT (pm->error == 0);
 
-  pagesize = clib_mem_get_default_hugepage_size ();
+  if (clib_mem_get_log2_default_hugepage_size () != CLIB_MEM_PAGE_SZ_UNKNOWN)
+    pagesize = clib_mem_get_default_hugepage_size ();
+  else
+    pagesize = clib_mem_get_page_size ();
   pm->def_log2_page_sz = min_log2 (pagesize);
   pm->lookup_log2_page_sz = pm->def_log2_page_sz;
 
@@ -719,11 +712,3 @@ format_pmalloc_map (u8 * s, va_list * va)
   }
   return s;
 }
-
-/*
- * fd.io coding-style-patch-verification: ON
- *
- * Local Variables:
- * eval: (c-set-style "gnu")
- * End:
- */

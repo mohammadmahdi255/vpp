@@ -97,7 +97,7 @@ extern vlib_node_registration_t quic_input_node;
 
 typedef enum
 {
-#define quic_error(n,s) QUIC_ERROR_##n,
+#define quic_error(f, n, s, d) QUIC_ERROR_##f,
 #include <plugins/quic/quic_error.def>
 #undef quic_error
   QUIC_N_ERROR,
@@ -128,6 +128,8 @@ typedef enum quic_ctx_flags_
 {
   QUIC_F_IS_STREAM = (1 << 0),
   QUIC_F_IS_LISTENER = (1 << 1),
+  QUIC_F_STREAM_TX_DRAINED = (1 << 2),
+  QUIC_F_NO_APP_SESSION = (1 << 3),
 } quic_ctx_flags_t;
 
 typedef enum quic_cc_type
@@ -170,7 +172,7 @@ typedef struct quic_ctx_
   u32 crypto_context_index;
   u8 alpn_protos[4];
   tls_alpn_proto_t alpn_selected;
-  u8 flags;
+  quic_ctx_flags_t flags;
 
   struct
   {
@@ -229,6 +231,15 @@ typedef struct quic_rx_packet_ctx_
     u8 padding[1024 * 128]; /* FIXME: remove hardcoded size */
 } quic_rx_packet_ctx_t;
 
+typedef struct crypto_ctx_
+{
+  u32 ctx_index;     /**< index in crypto context pool */
+  u32 n_subscribers; /**< refcount of sessions using said context */
+  u32 ckpair_index;  /**< certificate & key */
+  u8 crypto_engine;
+  void *data; /**< protocol specific data */
+} crypto_context_t;
+
 typedef struct quic_worker_ctx_
 {
   CLIB_CACHE_LINE_ALIGN_MARK (cacheline0);
@@ -280,6 +291,13 @@ quic_ctx_alloc (quic_main_t *qm, clib_thread_index_t thread_index)
   QUIC_DBG (3, "Allocated quic_ctx %u on thread %u",
 	    ctx - qm->wrk_ctx[thread_index].ctx_pool, thread_index);
   return ctx - qm->wrk_ctx[thread_index].ctx_pool;
+}
+
+static_always_inline quic_ctx_t *
+quic_ctx_get (u32 ctx_index, clib_thread_index_t thread_index)
+{
+  return pool_elt_at_index (
+    quic_wrk_ctx_get (&quic_main, thread_index)->ctx_pool, ctx_index);
 }
 
 static_always_inline void
@@ -366,7 +384,6 @@ typedef enum quic_session_connected_
 typedef struct quic_engine_vft_
 {
   void (*engine_init) (quic_main_t *qm);
-  int (*app_cert_key_pair_delete) (app_cert_key_pair_t *ckpair);
   int (*crypto_context_acquire) (quic_ctx_t *ctx);
   void (*crypto_context_release) (u32 crypto_context_index, u8 thread_index);
   int (*connect) (quic_ctx_t *ctx, u32 ctx_index,
@@ -381,9 +398,10 @@ typedef struct quic_engine_vft_
   u64 (*stream_tx) (quic_ctx_t *ctx, session_t *stream_session);
   int (*send_packets) (quic_ctx_t *ctx);
   u8 *(*format_connection_stats) (u8 *s, va_list *args);
-  u8 *(*format_stream_connection) (u8 *s, va_list *args);
-  u8 *(*format_stream_ctx_stream_id) (u8 *s, va_list *args);
+  u8 *(*format_stream_stats) (u8 *s, va_list *args);
+  i64 (*stream_get_stream_id) (quic_ctx_t *ctx);
   void (*proto_on_close) (u32 ctx_index, clib_thread_index_t thread_index);
+  void (*transport_closed) (quic_ctx_t *ctx);
 } quic_engine_vft_t;
 
 extern quic_engine_vft_t *quic_engine_vfts;
@@ -392,12 +410,10 @@ extern void quic_register_engine (const quic_engine_vft_t *vft,
 typedef void (*quic_register_engine_fn) (const quic_engine_vft_t *vft,
 					 quic_engine_type_t engine_type);
 
-#endif /* __included_quic_h__ */
+void quic_update_fifo_size ();
 
-/*
- * fd.io coding-style-patch-verification: ON
- *
- * Local Variables:
- * eval: (c-set-style "gnu")
- * End:
- */
+u8 *format_quic_listener (u8 *s, va_list *args);
+u8 *format_quic_half_open (u8 *s, va_list *args);
+u8 *format_quic_connection (u8 *s, va_list *args);
+
+#endif /* __included_quic_h__ */

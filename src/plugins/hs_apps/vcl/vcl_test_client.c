@@ -1,16 +1,6 @@
 /*
+ * SPDX-License-Identifier: Apache-2.0
  * Copyright (c) 2017-2021 Cisco and/or its affiliates.
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at:
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
  */
 
 #include <unistd.h>
@@ -53,6 +43,7 @@ struct vtc_worker_
   pthread_t thread_handle;
   vtc_worker_run_fn *wrk_run_fn;
   hs_test_cfg_t cfg;
+  struct timespec old_stats_stop;
 };
 
 typedef struct
@@ -94,14 +85,14 @@ vtc_cfg_sync (vcl_test_session_t * ts)
       vtinf ("(fd %d): Sending config to server.", ts->fd);
       hs_test_cfg_dump (&ts->cfg, 1 /* is_client */);
     }
-  tx_bytes = ts->write (ts, &ts->cfg, sizeof (ts->cfg));
+  tx_bytes = vppcom_session_write (ts->fd, &ts->cfg, sizeof (ts->cfg));
   if (tx_bytes < 0)
     {
       vtwrn ("(fd %d): write test cfg failed (%d)!", ts->fd, tx_bytes);
       return tx_bytes;
     }
 
-  rx_bytes = ts->read (ts, ts->rxbuf, sizeof (hs_test_cfg_t));
+  rx_bytes = vppcom_session_read (ts->fd, ts->rxbuf, sizeof (hs_test_cfg_t));
   if (rx_bytes < 0)
     return rx_bytes;
 
@@ -279,18 +270,48 @@ vtc_worker_sessions_exit (vcl_test_client_worker_t * wrk)
 }
 
 static void
-vtc_inc_stats_check (vcl_test_session_t *ts)
+vtc_worker_inc_stats_check (vcl_test_client_worker_t *wrk,
+			    vcl_test_session_t *ts)
 {
+  struct timespec now;
+  uint32_t i, n_print = 0;
+  uint64_t total_bytes = 0;
+  double duration, total_rate;
+
   /* Avoid checking time too often because of syscall cost */
   if (ts->stats.tx_bytes - ts->old_stats.tx_bytes < 1 << 20)
     return;
 
-  clock_gettime (CLOCK_REALTIME, &ts->stats.stop);
-  if (vcl_test_time_diff (&ts->old_stats.stop, &ts->stats.stop) > 1)
+  clock_gettime (CLOCK_REALTIME, &now);
+  if (vcl_test_time_diff (&wrk->old_stats_stop, &now) < 1)
+    return;
+
+  for (i = 0; i < wrk->cfg.num_test_sessions; i++)
     {
-      vcl_test_stats_dump_inc (ts, 0 /* is_rx */);
-      ts->old_stats = ts->stats;
+      ts = &wrk->sessions[i];
+      if (ts->is_done)
+	continue;
+
+      ts->stats.stop = now;
+      if (vcl_test_time_diff (&ts->old_stats.stop, &ts->stats.stop) > 1)
+	{
+	  vcl_test_stats_dump_inc (ts, 0 /* is_rx */);
+	  total_bytes += ts->stats.tx_bytes - ts->old_stats.tx_bytes;
+	  ts->old_stats = ts->stats;
+	  n_print++;
+	}
     }
+
+  if (n_print > 1)
+    {
+      duration = vcl_test_time_diff (&wrk->old_stats_stop, &now);
+      total_rate = (double) total_bytes * 8 / duration / 1e9;
+      printf ("Sum: Sent %lu Mbytes in %.2lf seconds %.2lf Gbps\n",
+	      (uint64_t) (total_bytes / 1e6), duration, total_rate);
+      printf ("-------------------------------------------------\n");
+    }
+
+  wrk->old_stats_stop = now;
 }
 
 static void
@@ -355,6 +376,14 @@ vtc_worker_connect_sessions_select (vcl_test_client_worker_t *wrk)
   return 0;
 }
 
+static void
+vtc_abort_test ()
+{
+  vcl_test_client_main_t *vtcm = &vcl_client_main;
+  vtcm->test_running = 0;
+  exit (1);
+}
+
 static int
 vtc_worker_run_select (vcl_test_client_worker_t *wrk)
 {
@@ -403,7 +432,11 @@ vtc_worker_run_select (vcl_test_client_worker_t *wrk)
 	    {
 	      rv = ts->read (ts, ts->rxbuf, ts->rxbuf_size);
 	      if (rv < 0)
-		break;
+		{
+		  vtwrn ("vppcom_test_read (%d) failed -- aborting test",
+			 ts->fd);
+		  vtc_abort_test ();
+		}
 	    }
 
 	  if (FD_ISSET (vppcom_session_index (ts->fd), wfdset) &&
@@ -414,10 +447,10 @@ vtc_worker_run_select (vcl_test_client_worker_t *wrk)
 		{
 		  vtwrn ("vppcom_test_write (%d) failed -- aborting test",
 			 ts->fd);
-		  break;
+		  vtc_abort_test ();
 		}
 	      if (vcm->incremental_stats)
-		vtc_inc_stats_check (ts);
+		vtc_worker_inc_stats_check (wrk, ts);
 	    }
 	  if (vtc_session_check_is_done (ts, check_rx))
 	    n_active_sessions -= 1;
@@ -608,7 +641,7 @@ vtc_worker_run_epoll (vcl_test_client_worker_t *wrk)
       if (rv > 0)
 	{
 	  if (vcm->incremental_stats)
-	    vtc_inc_stats_check (ts);
+	    vtc_worker_inc_stats_check (wrk, ts);
 	  if (vtc_session_check_is_done (ts, check_rx))
 	    n_active_sessions -= 1;
 	}
@@ -1481,11 +1514,3 @@ main (int argc, char **argv)
   free (vcm->workers);
   return 0;
 }
-
-/*
- * fd.io coding-style-patch-verification: ON
- *
- * Local Variables:
- * eval: (c-set-style "gnu")
- * End:
- */

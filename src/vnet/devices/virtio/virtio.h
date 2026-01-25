@@ -1,22 +1,9 @@
 /*
- *------------------------------------------------------------------
- * Copyright (c) 2017 Cisco and/or its affiliates.
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at:
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- *------------------------------------------------------------------
+ * SPDX-License-Identifier: Apache-2.0
+ * Copyright (c) 2017-2025 Cisco and/or its affiliates.
  */
 
-#ifndef _VNET_DEVICES_VIRTIO_VIRTIO_H_
-#define _VNET_DEVICES_VIRTIO_VIRTIO_H_
+#pragma once
 
 #include <vnet/devices/virtio/virtio_std.h>
 #include <vnet/devices/virtio/vhost_std.h>
@@ -43,23 +30,7 @@ typedef enum
 #define VIRTIO_NUM_RX_DESC 256
 #define VIRTIO_NUM_TX_DESC 256
 
-#define foreach_virtio_if_types \
-  _ (TAP, 0)                    \
-  _ (TUN, 1)                    \
-  _ (PCI, 2)
-
-typedef enum
-{
-#define _(a, b) VIRTIO_IF_TYPE_##a = (1 << b),
-  foreach_virtio_if_types
-#undef _
-    VIRTIO_IF_N_TYPES = (1 << 3),
-} virtio_if_type_t;
-
 #define VIRTIO_RING_FLAG_MASK_INT 1
-
-#define VIRTIO_EVENT_START_TIMER 1
-#define VIRTIO_EVENT_STOP_TIMER 2
 
 typedef struct
 {
@@ -125,9 +96,6 @@ typedef union
   u32 as_u32;
 } pci_addr_t;
 
-/* forward declaration */
-typedef struct _virtio_pci_func virtio_pci_func_t;
-
 typedef struct
 {
   CLIB_CACHE_LINE_ALIGN_MARK (cacheline0);
@@ -138,27 +106,20 @@ typedef struct
   u16 num_txqs;
   vnet_virtio_vring_t *rxq_vrings;
   vnet_virtio_vring_t *txq_vrings;
-  int gso_enabled;
-  int csum_offload_enabled;
-  int rss_enabled;
-  union
-  {
-    int *tap_fds;
-    struct
-    {
-      u32 pci_dev_handle;
-      u32 msix_enabled;
-    };
-  };
+  u32 pci_dev_handle;
+  u32 msix_enabled;
   u16 virtio_net_hdr_sz;
-  virtio_if_type_t type;
 
   u32 hw_if_index;
   u32 sw_if_index;
   u8 *initial_if_name;
+  u8 is_packed : 1;
+  u8 consistent_qp : 1;
+  u8 gso_enabled : 1;
+  u8 csum_offload_enabled : 1;
+  u8 rss_enabled : 1;
 
   CLIB_CACHE_LINE_ALIGN_MARK (cacheline1);
-  int packet_coalesce;
   int packet_buffering;
   u32 dev_instance;
   u32 numa_node;
@@ -175,46 +136,19 @@ typedef struct
     };
     u8 mac_addr[6];
   };
-  union
-  {
-    struct			/* tun/tap interface */
-    {
-      ip6_address_t host_ip6_addr;
-      int *vhost_fds;
-      u8 *host_if_name;
-      u8 *net_ns;
-      u8 *host_bridge;
-      u8 host_mac_addr[6];
-      u32 id;
-      u32 host_mtu_size;
-      u32 tap_flags;
-      int ifindex;
-      ip4_address_t host_ip4_addr;
-      u8 host_ip4_prefix_len;
-      u8 host_ip6_prefix_len;
-      u8 host_carrier_up;	/* host tun/tap driver link carrier state */
-    };
-    struct			/* native virtio */
-    {
-      void *bar;
-      vnet_virtio_vring_t *cxq_vring;
-      pci_addr_t pci_addr;
-      u32 bar_id;
-      u32 notify_off_multiplier;
-      u32 is_modern;
-      u16 common_offset;
-      u16 notify_offset;
-      u16 device_offset;
-      u16 isr_offset;
-      u16 max_queue_pairs;
-      u16 msix_table_size;
-      u8 support_int_mode;	/* support interrupt mode */
-      u8 status;
-    };
-  };
-  const virtio_pci_func_t *virtio_pci_func;
-  int is_packed;
-  u8 consistent_qp : 1;
+  void *bar;
+  vnet_virtio_vring_t *cxq_vring;
+  pci_addr_t pci_addr;
+  u32 bar_id;
+  u32 notify_off_multiplier;
+  u16 common_offset;
+  u16 notify_offset;
+  u16 device_offset;
+  u16 isr_offset;
+  u16 max_queue_pairs;
+  u16 msix_table_size;
+  u8 support_int_mode; /* support interrupt mode */
+  u8 status;
 } virtio_if_t;
 
 typedef struct
@@ -231,26 +165,16 @@ extern virtio_main_t virtio_main;
 extern vnet_device_class_t virtio_device_class;
 extern vlib_node_registration_t virtio_input_node;
 
-clib_error_t *virtio_vring_init (vlib_main_t * vm, virtio_if_t * vif, u16 idx,
+clib_error_t *virtio_vring_init (vlib_main_t *vm, virtio_if_t *vif, u16 idx,
 				 u16 sz);
-clib_error_t *virtio_vring_free_rx (vlib_main_t * vm, virtio_if_t * vif,
-				    u32 idx);
-clib_error_t *virtio_vring_free_tx (vlib_main_t * vm, virtio_if_t * vif,
-				    u32 idx);
 void virtio_vring_set_rx_queues (vlib_main_t *vm, virtio_if_t *vif);
 void virtio_vring_set_tx_queues (vlib_main_t *vm, virtio_if_t *vif);
 extern void virtio_free_buffers (vlib_main_t *vm, vnet_virtio_vring_t *vring);
 extern void virtio_set_net_hdr_size (virtio_if_t * vif);
-extern void virtio_show (vlib_main_t *vm, u32 *hw_if_indices, u8 show_descr,
-			 virtio_if_type_t type);
-extern void virtio_set_packet_coalesce (virtio_if_t * vif);
+extern void virtio_show (vlib_main_t *vm, u32 *hw_if_indices, u8 show_descr);
 clib_error_t *virtio_set_packet_buffering (virtio_if_t * vif, u16 size);
-extern void virtio_pci_legacy_notify_queue (vlib_main_t * vm,
-					    virtio_if_t * vif, u16 queue_id,
-					    u16 queue_notify_offset);
-extern void virtio_pci_modern_notify_queue (vlib_main_t * vm,
-					    virtio_if_t * vif, u16 queue_id,
-					    u16 queue_notify_offset);
+extern void virtio_pci_notify_queue (vlib_main_t *vm, virtio_if_t *vif,
+				     u16 queue_id, u16 queue_notify_offset);
 extern void virtio_pre_input_node_enable (vlib_main_t *vm, virtio_if_t *vif);
 extern void virtio_pre_input_node_disable (vlib_main_t *vm, virtio_if_t *vif);
 
@@ -260,23 +184,8 @@ format_function_t format_virtio_log_name;
 static_always_inline void
 virtio_kick (vlib_main_t *vm, vnet_virtio_vring_t *vring, virtio_if_t *vif)
 {
-  if (vif->type == VIRTIO_IF_TYPE_PCI)
-    {
-      if (vif->is_modern)
-	virtio_pci_modern_notify_queue (vm, vif, vring->queue_id,
-					vring->queue_notify_offset);
-      else
-	virtio_pci_legacy_notify_queue (vm, vif, vring->queue_id,
-					vring->queue_notify_offset);
-    }
-  else
-    {
-      u64 x = 1;
-      int __clib_unused r;
-
-      r = write (vring->kick_fd, &x, sizeof (x));
-      vring->last_kick_avail_idx = vring->avail->idx;
-    }
+  virtio_pci_notify_queue (vm, vif, vring->queue_id,
+			   vring->queue_notify_offset);
 }
 
 static_always_inline u8
@@ -343,19 +252,8 @@ vnet_virtio_vring_size (u16 queue_size, u32 align)
            ##__VA_ARGS__);					\
 };
 
-#define virtio_log_error(vif, f, ...)				\
-{								\
-  vlib_log(VLIB_LOG_LEVEL_ERR, virtio_main.log_default,		\
-	   "%U: " f, format_virtio_log_name, vif,		\
-           ##__VA_ARGS__);					\
-};
-
-#endif /* _VNET_DEVICES_VIRTIO_VIRTIO_H_ */
-
-/*
- * fd.io coding-style-patch-verification: ON
- *
- * Local Variables:
- * eval: (c-set-style "gnu")
- * End:
- */
+#define virtio_log_error(vif, f, ...)                                         \
+  {                                                                           \
+    vlib_log (VLIB_LOG_LEVEL_ERR, virtio_main.log_default, "%U: " f,          \
+	      format_virtio_log_name, vif, ##__VA_ARGS__);                    \
+  };

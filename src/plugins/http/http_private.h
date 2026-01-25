@@ -26,6 +26,8 @@ static const http_token_t http2_conn_preface = { http_token_lit (
   _ (connections_reset_by_app, "connections reset by app")                    \
   _ (app_streams_opened, "application streams opened")                        \
   _ (app_streams_closed, "application streams closed")                        \
+  _ (ctrl_streams_opened, "control streams opened")                           \
+  _ (ctrl_streams_closed, "control streams closed")                           \
   _ (stream_reset_by_peer, "streams reset by peer")                           \
   _ (stream_reset_by_app, "streams reset by app")                             \
   _ (requests_received, "requests received")                                  \
@@ -58,6 +60,7 @@ STATIC_ASSERT (sizeof (http_conn_handle_t) == sizeof (u32), "must fit in u32");
   _ (ESTABLISHED, "ESTABLISHED")                                              \
   _ (TRANSPORT_CLOSED, "TRANSPORT-CLOSED")                                    \
   _ (APP_CLOSED, "APP-CLOSED")                                                \
+  _ (HALF_CLOSED, "HALF-CLOSED")                                              \
   _ (CLOSED, "CLOSED")
 
 typedef enum http_conn_state_
@@ -173,13 +176,16 @@ typedef struct http_req_
   _ (NO_APP_SESSION, "no-app-session")                                        \
   _ (PENDING_TIMER, "pending-timer")                                          \
   _ (IS_SERVER, "is-server")                                                  \
-  _ (HAS_REQUEST, "has-request")
+  _ (HAS_REQUEST, "has-request")                                              \
+  _ (UNIDIRECTIONAL_STREAM, "unidirectional-stream")                          \
+  _ (BIDIRECTIONAL_STREAM, "bidirectional-stream")
 
 typedef enum http_conn_flags_bit_
 {
 #define _(sym, str) HTTP_CONN_F_BIT_##sym,
   foreach_http_conn_flags
 #undef _
+    HTTP_CONN_N_F_BITS
 } http_conn_flags_bit_t;
 
 typedef enum http_conn_flags_
@@ -196,8 +202,19 @@ typedef struct http_conn_id_
     session_handle_t app_session_handle;
     u32 parent_app_api_ctx;
   };
-  session_handle_t tc_session_handle;
+  union
+  {
+    session_handle_t tc_session_handle;
+    struct
+    {
+      /* listener case */
+      session_handle_t tl_handle_tcp;
+      session_handle_t tl_handle_quic;
+    };
+  };
   u32 parent_app_wrk_index;
+  u32 ho_index;
+  u32 http_connection_index; /* stream case */
 } http_conn_id_t;
 
 STATIC_ASSERT (sizeof (http_conn_id_t) <= TRANSPORT_CONN_ID_LEN,
@@ -211,9 +228,13 @@ typedef struct http_tc_
     http_conn_id_t c_http_conn_id;
   };
 #define hc_tc_session_handle c_http_conn_id.tc_session_handle
+#define hc_tl_handle_tcp     c_http_conn_id.tl_handle_tcp
+#define hc_tl_handle_quic    c_http_conn_id.tl_handle_quic
 #define hc_pa_wrk_index	     c_http_conn_id.parent_app_wrk_index
 #define hc_pa_session_handle c_http_conn_id.app_session_handle
 #define hc_pa_app_api_ctx    c_http_conn_id.parent_app_api_ctx
+#define hc_ho_index	     c_http_conn_id.ho_index
+#define hc_http_conn_index   c_http_conn_id.http_connection_index
 #define hc_hc_index	     connection.c_index
 
   http_version_t version;
@@ -221,7 +242,6 @@ typedef struct http_tc_
   u32 timer_handle;
   u32 timeout;
   u32 app_rx_fifo_size;
-  u32 ho_index;
   u8 *app_name;
   u8 *host;
   http_conn_flags_t flags;
@@ -229,6 +249,10 @@ typedef struct http_tc_
 
   void *opaque; /* version specific data */
 } http_conn_t;
+
+#define http_conn_is_stream(_hc)                                              \
+  ((_hc)->flags &                                                             \
+   (HTTP_CONN_F_UNIDIRECTIONAL_STREAM | HTTP_CONN_F_BIDIRECTIONAL_STREAM))
 
 typedef struct http_pending_connect_stream_
 {
@@ -293,10 +317,14 @@ typedef struct http_engine_vft_
   void (*transport_close_callback) (http_conn_t *hc);
   void (*transport_reset_callback) (http_conn_t *hc);
   void (*transport_conn_reschedule_callback) (http_conn_t *hc);
-  void (*conn_accept_callback) (http_conn_t *hc); /* optional */
+  int (*transport_stream_accept_callback) (http_conn_t *hc);
+  void (*transport_stream_close_callback) (http_conn_t *hc);
+  void (*transport_stream_reset_callback) (http_conn_t *hc);
+  void (*conn_accept_callback) (http_conn_t *hc);
   int (*conn_connect_stream_callback) (http_conn_t *hc,
 				       u32 *req_index); /* optional */
   void (*conn_cleanup_callback) (http_conn_t *hc);
+  void (*stream_cleanup_callback) (http_conn_t *hc);
   void (*enable_callback) (void);			    /* optional */
   uword (*unformat_cfg_callback) (unformat_input_t *input); /* optional */
 } http_engine_vft_t;
@@ -340,6 +368,7 @@ typedef http_sm_result_t (*http_sm_handler) (http_conn_t *hc, http_req_t *req,
 
 u8 *format_http_req_state (u8 *s, va_list *va);
 u8 *format_http_conn_state (u8 *s, va_list *args);
+u8 *format_http_conn_flags (u8 *s, va_list *args);
 u8 *format_http_time_now (u8 *s, va_list *args);
 
 http_conn_t *http_conn_get_w_thread (u32 hc_index,
@@ -440,6 +469,34 @@ u8 *http_get_app_target (http_req_t *req, http_msg_t *msg);
  * @note Use for streaming of body sent by app.
  */
 void http_req_tx_buffer_init (http_req_t *req, http_msg_t *msg);
+
+/**
+ * Open new stream on existing transport connection.
+ *
+ * @param parent_index      Parent connection index.
+ * @param thread_index      Thread index.
+ * @param is_unidirectional Stream can be unidirectional or bidirectional.
+ * @param stream            Opened stream ctx.
+ *
+ * @return @c 0 if stream was opened, non-zero value otherwise.
+ */
+int http_connect_transport_stream (u32 parent_index,
+				   clib_thread_index_t thread_index,
+				   u8 is_unidirectional, http_conn_t **stream);
+
+/**
+ * Reset stream.
+ *
+ * @param stream Stream ctx.
+ */
+void http_reset_transport_stream (http_conn_t *stream, u64 error_code);
+
+/**
+ * Close stream for sending.
+ *
+ * @param stream Stream ctx.
+ */
+void http_close_transport_stream (http_conn_t *stream);
 
 /**
  * Change state of given HTTP request.
@@ -762,11 +819,11 @@ http_io_ts_read_segs (http_conn_t *hc, svm_fifo_seg_t *segs, u32 *n_segs,
   ASSERT (n_read > 0);
 }
 
-always_inline void
+always_inline u32
 http_io_ts_drain (http_conn_t *hc, u32 len)
 {
   session_t *ts = session_get_from_handle (hc->hc_tc_session_handle);
-  svm_fifo_dequeue_drop (ts->rx_fifo, len);
+  return svm_fifo_dequeue_drop (ts->rx_fifo, len);
 }
 
 always_inline void
@@ -789,6 +846,17 @@ http_io_ts_after_read (http_conn_t *hc, u8 clear_evt)
     {
       if (svm_fifo_max_dequeue_cons (ts->rx_fifo))
 	session_program_rx_io_evt (hc->hc_tc_session_handle);
+    }
+}
+
+always_inline void
+http_io_ts_program_rx_evt (http_conn_t *hc, u32 n_last_deq)
+{
+  session_t *ts = session_get_from_handle (hc->hc_tc_session_handle);
+  if (svm_fifo_needs_deq_ntf (ts->rx_fifo, n_last_deq))
+    {
+      svm_fifo_clear_deq_ntf (ts->rx_fifo);
+      session_program_transport_io_evt (ts->handle, SESSION_IO_EVT_RX);
     }
 }
 
@@ -856,7 +924,6 @@ http_conn_accept_request (http_conn_t *hc, http_req_t *req)
   as = session_alloc (hc->c_thread_index);
   HTTP_DBG (1, "allocated session 0x%lx", session_handle (as));
   req->c_s_index = as->session_index;
-  as->app_wrk_index = hc->hc_pa_wrk_index;
   as->connection_index = req->hr_req_handle;
   as->session_state = SESSION_STATE_ACCEPTING;
   asl = listen_session_get_from_handle (hc->hc_pa_session_handle);
@@ -897,7 +964,7 @@ http_conn_established (http_conn_t *hc, http_req_t *req,
   http_conn_t *ho_hc;
   int rv;
 
-  ho_hc = http_ho_conn_get (hc->ho_index);
+  ho_hc = http_ho_conn_get (hc->hc_ho_index);
   /* in chain with TLS there is race on half-open cleanup */
   __atomic_fetch_or (&ho_hc->flags, HTTP_CONN_F_HO_DONE, __ATOMIC_RELEASE);
 

@@ -1,16 +1,6 @@
 /*
+ * SPDX-License-Identifier: Apache-2.0
  * Copyright (c) 2016-2019 Cisco and/or its affiliates.
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at:
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
  */
 
 #ifndef VNET_VNET_URI_TRANSPORT_TYPES_H_
@@ -34,9 +24,8 @@ typedef enum transport_dequeue_type_
 
 typedef enum transport_service_type_
 {
-  TRANSPORT_SERVICE_VC,		/**< virtual circuit service */
-  TRANSPORT_SERVICE_CL,		/**< connectionless service */
-  TRANSPORT_SERVICE_APP,	/**< app transport service */
+  TRANSPORT_SERVICE_VC, /**< virtual circuit service */
+  TRANSPORT_SERVICE_CL, /**< connectionless service */
   TRANSPORT_N_SERVICES
 } transport_service_type_t;
 
@@ -433,11 +422,3 @@ transport_service_type_t transport_protocol_service_type (transport_proto_t);
 transport_tx_fn_type_t transport_protocol_tx_fn_type (transport_proto_t tp);
 
 #endif /* VNET_VNET_URI_TRANSPORT_TYPES_H_ */
-
-/*
- * fd.io coding-style-patch-verification: ON
- *
- * Local Variables:
- * eval: (c-set-style "gnu")
- * End:
- */

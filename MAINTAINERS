@@ -117,11 +117,11 @@ F:	src/plugins/af_packet
 
 VNET TAP Drivers
 I:	tap
-Y:	src/vnet/devices/tap/FEATURE.yaml
+Y:	src/plugins/tap/FEATURE.yaml
 M:	Damjan Marion <damarion@cisco.com>
 M:	Steven Luong <sluong@cisco.com>
 M:	Mohsin Kazmi <mohsin.kazmi14@gmail.com>
-F:	src/vnet/devices/tap/
+F:	src/plugins/tap/
 
 VNET Vhost User Driver
 I:	vhost
@@ -913,20 +913,13 @@ I:	hs-test
 M:	Florin Coras <fcoras@cisco.com>
 M:	Matus Fabian <matfabia@cisco.com>
 M:	Adrian Villin <avillin@cisco.com>
-F:	test-c/hs-test
+F:	test/hs-test
 
 Kube test framework
 I:	kube-test
 M:	Florin Coras <fcoras@cisco.com>
 M:	Adrian Villin <avillin@cisco.com>
-F:	test-c/kube-test
-
-THE REST
-I:	misc
-M:	vpp-dev Mailing List <vpp-dev@fd.io>
-C:	Missing Maintainer
-F:	*
-F:	*/
+F:	extras/kube-test
 
 Netmap
 I:	netmap
@@ -943,3 +936,26 @@ Plugin - Shared Elog
 I:	selog
 M:	Mohammed Hawari <mohammed@hawari.fr>
 F:	src/plugins/selog
+
+Plugin - Soft RSS
+I:	soft-rss
+M:	Damjan Marion <damarion@cisco.com>
+F:	src/plugins/soft-rss/
+
+SASC
+I:	sasc
+M:	Ole Troan <otroan@employees.org>
+M:	Mohammed Hawari <mohammed@hawari.fr>
+F:	src/plugins/sasc/
+
+GitHub Actions
+I: gha
+M: Dave Wallace <dwallacelf@gmail.com>
+F: .github/
+
+THE REST
+I:	misc
+M:	vpp-dev Mailing List <vpp-dev@fd.io>
+C:	Missing Maintainer
+F:	*
+F:	*/

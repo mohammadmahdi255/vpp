@@ -1,17 +1,6 @@
-/*
+/* SPDX-License-Identifier: Apache-2.0
  * Copyright (c) 2020 Doc.ai and/or its affiliates.
  * Copyright (c) 2020 Cisco and/or its affiliates.
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at:
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
  */
 
 #include <vnet/adj/adj_midchain.h>
@@ -44,6 +33,12 @@ wg_peer_endpoint_init (wg_peer_endpoint_t *ep, const ip46_address_t *addr,
 }
 
 static void
+wg_peer_adj_reset_stacking (adj_index_t ai)
+{
+  adj_midchain_delegate_remove (ai);
+}
+
+static void
 wg_peer_clear (vlib_main_t * vm, wg_peer_t * peer)
 {
   index_t perri = peer - wg_peer_pool;
@@ -69,7 +64,7 @@ wg_peer_clear (vlib_main_t * vm, wg_peer_t * peer)
       wg_peer_by_adj_index[*adj_index] = INDEX_INVALID;
 
       if (adj_is_valid (*adj_index))
-	adj_midchain_delegate_unstack (*adj_index);
+	wg_peer_adj_reset_stacking (*adj_index);
     }
   peer->input_thread_index = ~0;
   peer->output_thread_index = ~0;
@@ -121,7 +116,7 @@ wg_peer_adj_stack (wg_peer_t *peer, adj_index_t ai)
   if (!vnet_sw_interface_is_admin_up (vnet_get_main (), wgi->sw_if_index) ||
       !wg_peer_can_send (peer))
     {
-      adj_midchain_delegate_unstack (ai);
+      wg_peer_adj_reset_stacking (ai);
     }
   else
     {
@@ -136,12 +131,6 @@ wg_peer_adj_stack (wg_peer_t *peer, adj_index_t ai)
 
       adj_midchain_delegate_stack (ai, fib_index, &dst);
     }
-}
-
-static void
-wg_peer_adj_reset_stacking (adj_index_t ai)
-{
-  adj_midchain_delegate_remove (ai);
 }
 
 static void
@@ -575,11 +564,3 @@ format_wg_peer (u8 * s, va_list * va)
 
   return s;
 }
-
-/*
- * fd.io coding-style-patch-verification: ON
- *
- * Local Variables:
- * eval: (c-set-style "gnu")
- * End:
- */

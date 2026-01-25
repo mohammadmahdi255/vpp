@@ -1,19 +1,8 @@
-/*
- * src/vnet/ip/ip_neighboor.c: ip neighbor generic handling
- *
+/* SPDX-License-Identifier: Apache-2.0
  * Copyright (c) 2018 Cisco and/or its affiliates.
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at:
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
  */
+
+/* src/vnet/ip/ip_neighboor.c: ip neighbor generic handling */
 
 #include <vppinfra/llist.h>
 
@@ -150,6 +139,12 @@ static ip_neighbor_db_t ip_neighbor_db[N_AF] = {
 
 #define IP_NEIGHBOR_INFO(...)                          \
     vlib_log_notice (ipn_logger, __VA_ARGS__);
+
+typedef enum ip_neighbor_flush_type_t_
+{
+  IP_NBR_FLUSH_TYPE_DEFAULT,
+  IP_NBR_FLUSH_TYPE_INCLUDE_STATIC,
+} ip_neighbor_flush_type_t;
 
 ip_neighbor_t *
 ip_neighbor_get (index_t ipni)
@@ -1255,7 +1250,8 @@ ip_neighbor_populate (ip_address_family_t af, u32 sw_if_index)
 }
 
 void
-ip_neighbor_flush (ip_address_family_t af, u32 sw_if_index)
+ip_neighbor_flush (ip_address_family_t af, u32 sw_if_index,
+		   ip_neighbor_flush_type_t flush_type)
 {
   index_t *ipnis = NULL, *ipni;
   ip_neighbor_t *ipn;
@@ -1267,9 +1263,10 @@ ip_neighbor_flush (ip_address_family_t af, u32 sw_if_index)
 
   pool_foreach (ipn, ip_neighbor_pool)
    {
-    if (ip_neighbor_get_af(ipn) == af &&
-        ipn->ipn_key->ipnk_sw_if_index == sw_if_index &&
-        ip_neighbor_is_dynamic (ipn))
+    if (ip_neighbor_get_af (ipn) == af &&
+	ipn->ipn_key->ipnk_sw_if_index == sw_if_index &&
+	(ip_neighbor_is_dynamic (ipn) ||
+	 flush_type == IP_NBR_FLUSH_TYPE_INCLUDE_STATIC))
       vec_add1 (ipnis, ipn - ip_neighbor_pool);
   }
 
@@ -1352,7 +1349,8 @@ ip_neighbor_interface_admin_change (vnet_main_t * vnm,
   else
     {
       /* admin down, flush all neighbours */
-      FOR_EACH_IP_ADDRESS_FAMILY (af) ip_neighbor_flush (af, sw_if_index);
+      FOR_EACH_IP_ADDRESS_FAMILY (af)
+      ip_neighbor_flush (af, sw_if_index, IP_NBR_FLUSH_TYPE_DEFAULT);
     }
 
   return (NULL);
@@ -1375,7 +1373,8 @@ ip_neighbor_add_del_sw_interface (vnet_main_t *vnm, u32 sw_if_index,
     {
       ip_address_family_t af;
 
-      FOR_EACH_IP_ADDRESS_FAMILY (af) ip_neighbor_flush (af, sw_if_index);
+      FOR_EACH_IP_ADDRESS_FAMILY (af)
+      ip_neighbor_flush (af, sw_if_index, IP_NBR_FLUSH_TYPE_INCLUDE_STATIC);
     }
 
   if (is_add)
@@ -1920,15 +1919,6 @@ ip_neighbor_init (vlib_main_t * vm)
   return (NULL);
 }
 
-VLIB_INIT_FUNCTION (ip_neighbor_init) =
-{
-  .runs_after = VLIB_INITS("ip_main_init"),
+VLIB_INIT_FUNCTION (ip_neighbor_init) = {
+  .runs_after = VLIB_INITS ("ip_main_init"),
 };
-
-/*
- * fd.io coding-style-patch-verification: ON
- *
- * Local Variables:
- * eval: (c-set-style "gnu")
- * End:
- */

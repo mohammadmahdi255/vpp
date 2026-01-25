@@ -10,7 +10,7 @@
 u8 *
 quic_quicly_format_err (u8 *s, va_list *args)
 {
-  u64 code = va_arg (*args, u64);
+  int code = va_arg (*args, int);
   switch (code)
     {
     case 0:
@@ -243,7 +243,13 @@ quic_quicly_format_err (u8 *s, va_list *args)
         format (s, "PTLS_ERROR_INCORRECT_ASN1_ECDSA_KEY_SYNTAX");
       break;
     default:
-      s = format (s, "unknown error 0x%lx", code);
+      if (QUICLY_ERROR_IS_QUIC (code))
+	s = format (s, "unknown %s error 0x%lx",
+		    QUICLY_ERROR_IS_QUIC_TRANSPORT (code) ? "transport" :
+							    "application",
+		    QUICLY_ERROR_GET_ERROR_CODE (code));
+      else
+	s = format (s, "unknown quicly error 0x%lx", code);
       break;
     }
   return s;

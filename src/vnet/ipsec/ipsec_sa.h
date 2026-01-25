@@ -1,17 +1,8 @@
 /*
+ * SPDX-License-Identifier: Apache-2.0
  * Copyright (c) 2015 Cisco and/or its affiliates.
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at:
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
  */
+
 #ifndef __IPSEC_SPD_SA_H__
 #define __IPSEC_SPD_SA_H__
 
@@ -152,22 +143,38 @@ typedef struct
   u16 is_tunnel : 1;
   u16 is_transport : 1;
   u16 is_async : 1;
-  u16 cipher_op_id;
-  u16 integ_op_id;
+  u16 op_id;
   u8 cipher_iv_size;
   u8 integ_icv_size;
   u8 udp_sz;
+  u8 esp_advance;
+  u8 tail_base;
   clib_thread_index_t thread_index;
   u32 salt;
   u64 seq64;
   u16 async_op_id;
-  vnet_crypto_key_index_t cipher_key_index;
-  vnet_crypto_key_index_t integ_key_index;
+  vnet_crypto_key_index_t key_index;
+  vnet_crypto_op_t op_tmpl_single;
+  vnet_crypto_op_t op_tmpl_chained;
   u32 anti_replay_window_size;
   uword replay_window[];
 } ipsec_sa_inb_rt_t;
 
-typedef struct
+/* Forward declarations and builder callback typedef */
+typedef struct ipsec_sa_outb_rt_t_ ipsec_sa_outb_rt_t;
+
+/* Function signature and pointer type for IPsec builder callbacks */
+#define IPSEC_BUILD_OP_TMPL_ARGS                                              \
+  vnet_crypto_op_t *op, ipsec_sa_outb_rt_t *ort, vlib_main_t *vm, void *ptd,  \
+    vlib_buffer_t **b, vlib_buffer_t *lb, u8 *payload, u16 payload_len,       \
+    u32 hdr_len, void *esp
+
+#define IPSEC_BUILD_OP_ARGS IPSEC_BUILD_OP_TMPL_ARGS
+
+typedef void ipsec_build_op_tmpl_sig (IPSEC_BUILD_OP_TMPL_ARGS);
+typedef ipsec_build_op_tmpl_sig *ipsec_build_op_tmpl_fn_t;
+
+typedef struct ipsec_sa_outb_rt_t_
 {
   CLIB_CACHE_LINE_ALIGN_MARK (cacheline0);
   u16 is_aead : 1;
@@ -180,8 +187,13 @@ typedef struct
   u16 use_anti_replay : 1;
   u16 drop_no_crypto : 1;
   u16 is_async : 1;
-  u16 cipher_op_id;
-  u16 integ_op_id;
+  u16 need_udp_cksum : 1;
+  u16 need_tunnel_fixup : 1;
+  u16 prepare_sync_op : 1;
+  u16 op_id;
+  vnet_crypto_op_t op_tmpl_single;
+  vnet_crypto_op_t op_tmpl_chained;
+  ipsec_build_op_tmpl_fn_t *bld_op_tmpl[VNET_CRYPTO_OP_N_TYPES];
   u8 cipher_iv_size;
   u8 esp_block_align;
   u8 integ_icv_size;
@@ -194,8 +206,7 @@ typedef struct
   u64 seq64;
   dpo_id_t dpo;
   clib_pcg64i_random_t iv_prng;
-  vnet_crypto_key_index_t cipher_key_index;
-  vnet_crypto_key_index_t integ_key_index;
+  vnet_crypto_key_index_t key_index;
   union
   {
     ip4_header_t ip4_hdr;
@@ -745,11 +756,3 @@ ipsec_sa_assign_thread (u16 thread_id)
 }
 
 #endif /* __IPSEC_SPD_SA_H__ */
-
-/*
- * fd.io coding-style-patch-verification: ON
- *
- * Local Variables:
- * eval: (c-set-style "gnu")
- * End:
- */

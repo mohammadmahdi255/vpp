@@ -1,19 +1,9 @@
-/*
- * esp_decrypt.c : IPSec ESP decrypt node
- *
+/* SPDX-License-Identifier: Apache-2.0
  * Copyright (c) 2015 Cisco and/or its affiliates.
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at:
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
  */
+
+/* esp_decrypt.c : IPSec ESP decrypt node */
+
 #include <vnet/vnet.h>
 #include <vnet/api_errno.h>
 #include <vnet/ip/ip.h>
@@ -109,7 +99,9 @@ esp_process_ops (vlib_main_t * vm, vlib_node_runtime_t * node,
 	{
 	  u32 err, bi = op->user_data;
 	  if (op->status == VNET_CRYPTO_OP_STATUS_FAIL_BAD_HMAC)
-	    err = e;
+	    err = op->flags & VNET_CRYPTO_OP_FLAG_HMAC_CHECK ?
+		    ESP_DECRYPT_ERROR_INTEG_ERROR :
+		    e;
 	  else
 	    err = ESP_DECRYPT_ERROR_CRYPTO_ENGINE_ERROR;
 	  esp_decrypt_set_next_index (b[bi], node, vm->thread_index, err, bi,
@@ -142,7 +134,9 @@ esp_process_chained_ops (vlib_main_t * vm, vlib_node_runtime_t * node,
 	{
 	  u32 err, bi = op->user_data;
 	  if (op->status == VNET_CRYPTO_OP_STATUS_FAIL_BAD_HMAC)
-	    err = e;
+	    err = op->flags & VNET_CRYPTO_OP_FLAG_HMAC_CHECK ?
+		    ESP_DECRYPT_ERROR_INTEG_ERROR :
+		    e;
 	  else
 	    err = ESP_DECRYPT_ERROR_CRYPTO_ENGINE_ERROR;
 	  esp_decrypt_set_next_index (b[bi], node, vm->thread_index, err, bi,
@@ -502,29 +496,37 @@ esp_decrypt_prepare_sync_op (vlib_main_t *vm, ipsec_per_thread_data_t *ptd,
 			     esp_decrypt_packet_data2_t *pd2, vlib_buffer_t *b,
 			     u32 index)
 {
-  vnet_crypto_op_t **crypto_ops;
-  vnet_crypto_op_t **integ_ops;
+  vnet_crypto_op_t **ops;
   vnet_crypto_op_t _op, *op = &_op;
   const u8 esp_sz = sizeof (esp_header_t);
+  const vnet_crypto_op_t *tmpl_single = &irt->op_tmpl_single;
+  const vnet_crypto_op_t *tmpl_chained = &irt->op_tmpl_chained;
 
-  if (PREDICT_TRUE (irt->integ_op_id != VNET_CRYPTO_OP_NONE))
+  if (irt->key_index == ~0 || !irt->op_id)
+    return ESP_DECRYPT_ERROR_RX_PKTS;
+
+  *op = *tmpl_single;
+  op->user_data = index;
+
+  if (irt->integ_icv_size && !irt->is_aead)
     {
-      vnet_crypto_op_init (op, irt->integ_op_id);
-      op->key_index = irt->integ_key_index;
-      op->src = payload;
-      op->flags = VNET_CRYPTO_OP_FLAG_HMAC_CHECK;
-      op->user_data = index;
-      op->digest = payload + len;
-      op->digest_len = icv_sz;
-      op->len = len;
+      u32 integ_len = len;
+      ops = &ptd->crypto_ops;
 
       if (pd->is_chain)
 	{
-	  /* buffer is chained */
-	  integ_ops = &ptd->chained_integ_ops;
+	  *op = *tmpl_chained;
+	  op->user_data = index;
+	  ops = &ptd->chained_crypto_ops;
+	  integ_len = pd->current_length;
+	}
 
-	  op->len = pd->current_length;
+      op->flags = VNET_CRYPTO_OP_FLAG_HMAC_CHECK;
+      op->digest = payload + len;
+      op->integ_src = payload;
 
+      if (pd->is_chain)
+	{
 	  /* special case when ICV is splitted and needs to be reassembled
 	   * first -> move it to the last buffer. Also take into account
 	   * that ESN needs to be added after encrypted data and may or
@@ -533,54 +535,54 @@ esp_decrypt_prepare_sync_op (vlib_main_t *vm, ipsec_per_thread_data_t *ptd,
 	    {
 	      u8 extra_esn = 0;
 	      op->digest = esp_move_icv_esn (vm, b, pd, pd2, icv_sz, irt,
-					     &extra_esn, &op->len);
+					     &extra_esn, &integ_len);
 
 	      if (extra_esn)
 		{
 		  /* esn is in the last buffer, that was unlinked from
 		   * the chain */
-		  op->len = b->current_length;
+		  integ_len = b->current_length;
 		}
-	      else
+	      else if (pd2->lb == b)
 		{
-		  if (pd2->lb == b)
-		    {
-		      /* we now have a single buffer of crypto data, adjust
-		       * the length (second buffer contains only ICV) */
-		      integ_ops = &ptd->integ_ops;
-		      len = b->current_length;
-		      goto out;
-		    }
+		  ops = &ptd->crypto_ops;
+		  len = b->current_length;
+		  op->integ_len = (u16) integ_len;
+		  goto out_integ;
 		}
 	    }
 	  else
-	    op->digest = vlib_buffer_get_tail (pd2->lb) - icv_sz;
+	    {
+	      op->digest = vlib_buffer_get_tail (pd2->lb) - icv_sz;
+	    }
 
 	  op->flags |= VNET_CRYPTO_OP_FLAG_CHAINED_BUFFERS;
-	  op->chunk_index = vec_len (ptd->chunks);
-	  if (esp_decrypt_chain_integ (vm, ptd, pd, pd2, irt, b, icv_sz,
-				       payload, pd->current_length,
-				       &op->digest, &op->n_chunks, 0) < 0)
+	  op->integ_chunk_index = vec_len (ptd->chunks);
+	  if (esp_decrypt_chain_integ (
+		vm, ptd, pd, pd2, irt, b, icv_sz, payload, pd->current_length,
+		&op->digest, &op->integ_n_chunks, 0) < 0)
 	    return ESP_DECRYPT_ERROR_NO_BUFFERS;
 	}
       else
 	{
-	  integ_ops = &ptd->integ_ops;
-	  esp_insert_esn (vm, irt, pd, pd2, &op->len, &op->digest, &len, b,
+	  esp_insert_esn (vm, irt, pd, pd2, &integ_len, &op->digest, &len, b,
 			  payload);
+	  op->integ_len = (u16) integ_len;
 	}
-    out:
-      vec_add_aligned (*integ_ops, op, 1, CLIB_CACHE_LINE_BYTES);
+
+    out_integ:
+      if (!irt->cipher_iv_size)
+	{
+	  vec_add_aligned (*ops, op, 1, CLIB_CACHE_LINE_BYTES);
+	  return ESP_DECRYPT_ERROR_RX_PKTS;
+	}
     }
-
-  payload += esp_sz;
-  len -= esp_sz;
-
-  if (irt->cipher_op_id != VNET_CRYPTO_OP_NONE)
+  if (irt->cipher_iv_size)
     {
-      vnet_crypto_op_init (op, irt->cipher_op_id);
-      op->key_index = irt->cipher_key_index;
-      op->iv = payload;
+      op->iv = payload + esp_sz;
+
+      payload += esp_sz;
+      len -= esp_sz;
 
       if (irt->is_ctr)
 	{
@@ -593,10 +595,8 @@ esp_decrypt_prepare_sync_op (vlib_main_t *vm, ipsec_per_thread_data_t *ptd,
 	      /* constuct aad in a scratch space in front of the nonce */
 	      esp_header_t *esp0 = (esp_header_t *) (payload - esp_sz);
 	      op->aad = (u8 *) nonce - sizeof (esp_aead_t);
-	      op->aad_len =
-		esp_aad_fill (op->aad, esp0, irt->use_esn, pd->seq_hi);
+	      esp_aad_fill (op->aad, esp0, irt->use_esn, pd->seq_hi);
 	      op->tag = payload + len;
-	      op->tag_len = 16;
 	      if (PREDICT_FALSE (irt->is_null_gmac))
 		{
 		  /* RFC-4543 ENCR_NULL_AUTH_AES_GMAC: IV is part of AAD */
@@ -613,9 +613,8 @@ esp_decrypt_prepare_sync_op (vlib_main_t *vm, ipsec_per_thread_data_t *ptd,
 	  nonce->iv = *(u64 *) op->iv;
 	  op->iv = (u8 *) nonce;
 	}
-      op->src = op->dst = payload += iv_sz;
-      op->len = len - iv_sz;
-      op->user_data = index;
+
+      payload += iv_sz;
 
       if (pd->is_chain && (pd2->lb != b))
 	{
@@ -625,14 +624,17 @@ esp_decrypt_prepare_sync_op (vlib_main_t *vm, ipsec_per_thread_data_t *ptd,
 	  esp_decrypt_chain_crypto (vm, ptd, pd, pd2, irt, b, icv_sz, payload,
 				    len - pd->iv_sz + pd->icv_sz, &op->tag,
 				    &op->n_chunks);
-	  crypto_ops = &ptd->chained_crypto_ops;
+	  ops = &ptd->chained_crypto_ops;
 	}
       else
 	{
-	  crypto_ops = &ptd->crypto_ops;
+	  op->src = op->dst = payload;
+	  op->len = len - iv_sz;
+	  op->user_data = index;
+	  ops = &ptd->crypto_ops;
 	}
 
-      vec_add_aligned (*crypto_ops, op, 1, CLIB_CACHE_LINE_BYTES);
+      vec_add_aligned (*ops, op, 1, CLIB_CACHE_LINE_BYTES);
     }
 
   return ESP_DECRYPT_ERROR_RX_PKTS;
@@ -651,7 +653,7 @@ esp_decrypt_prepare_async_frame (vlib_main_t *vm, ipsec_per_thread_data_t *ptd,
   esp_decrypt_packet_data_t *async_pd = &(esp_post_data (b))->decrypt_data;
   esp_decrypt_packet_data2_t *async_pd2 = esp_post_data2 (b);
   u8 *tag = payload + len, *iv = payload + esp_sz, *aad = 0;
-  const u32 key_index = irt->cipher_key_index;
+  const u32 key_index = irt->key_index;
   u32 crypto_len, integ_len = 0;
   i16 crypto_start_offset, integ_start_offset = 0;
   u8 flags = 0;
@@ -661,7 +663,7 @@ esp_decrypt_prepare_async_frame (vlib_main_t *vm, ipsec_per_thread_data_t *ptd,
       /* linked algs */
       integ_start_offset = payload - b->data;
       integ_len = len;
-      if (PREDICT_TRUE (irt->integ_op_id != VNET_CRYPTO_OP_NONE))
+      if (PREDICT_TRUE (irt->integ_icv_size))
 	flags |= VNET_CRYPTO_OP_FLAG_HMAC_CHECK;
 
       if (pd->is_chain)
@@ -782,9 +784,10 @@ esp_decrypt_post_crypto (vlib_main_t *vm, vlib_node_runtime_t *node,
 {
   ipsec_sa_inb_rt_t *irt = ipsec_sa_get_inb_rt_by_index (pd->sa_index);
   vlib_buffer_t *lb = b;
-  const u8 esp_sz = sizeof (esp_header_t);
   u8 pad_length = 0, next_header = 0;
   u16 icv_sz;
+  u16 tail_adjust = 0;
+  u16 tail_base = pd->tail_base;
   u64 n_lost;
 
   /*
@@ -827,6 +830,7 @@ esp_decrypt_post_crypto (vlib_main_t *vm, vlib_node_runtime_t *node,
     {
       lb = pd2->lb;
       icv_sz = pd2->icv_removed ? 0 : pd->icv_sz;
+      tail_adjust = pd2->icv_removed ? pd->icv_sz : 0;
       if (pd2->free_buffer_index)
 	{
 	  vlib_buffer_free_one (vm, pd2->free_buffer_index);
@@ -877,15 +881,15 @@ esp_decrypt_post_crypto (vlib_main_t *vm, vlib_node_runtime_t *node,
       next_header = f->next_header;
     }
 
-  u16 adv = pd->iv_sz + esp_sz;
-  u16 tail = sizeof (esp_footer_t) + pad_length + icv_sz;
-  u16 tail_orig = sizeof (esp_footer_t) + pad_length + pd->icv_sz;
+  u16 adv = pd->esp_advance;
+  u16 tail = pad_length + tail_base - tail_adjust;
+  u16 tail_orig = pad_length + tail_base;
   b->flags &=
     ~(VNET_BUFFER_F_L4_CHECKSUM_COMPUTED | VNET_BUFFER_F_L4_CHECKSUM_CORRECT);
 
-  if (pd->is_transport && !is_tun) /* transport mode */
+  if (irt->is_transport && !is_tun) /* transport mode */
     {
-      u8 udp_sz = is_ip6 ? 0 : pd->udp_sz;
+      u8 udp_sz = is_ip6 ? 0 : irt->udp_sz;
       u16 ip_hdr_sz = pd->hdr_sz - udp_sz;
       u8 *old_ip = b->data + pd->current_data - ip_hdr_sz - udp_sz;
       u8 *ip = old_ip + adv + udp_sz;
@@ -1098,9 +1102,7 @@ esp_decrypt_inline (vlib_main_t *vm, vlib_node_runtime_t *node,
 
   vlib_get_buffers (vm, from, b, n_left);
   vec_reset_length (ptd->crypto_ops);
-  vec_reset_length (ptd->integ_ops);
   vec_reset_length (ptd->chained_crypto_ops);
-  vec_reset_length (ptd->chained_integ_ops);
   vec_reset_length (ptd->async_frames);
   vec_reset_length (ptd->chunks);
   clib_memset (sync_nexts, -1, sizeof (sync_nexts));
@@ -1146,8 +1148,8 @@ esp_decrypt_inline (vlib_main_t *vm, vlib_node_runtime_t *node,
 
 	  cpd.icv_sz = irt->integ_icv_size;
 	  cpd.iv_sz = irt->cipher_iv_size;
-	  cpd.udp_sz = irt->udp_sz;
-	  cpd.is_transport = irt->is_transport;
+	  cpd.esp_advance = irt->esp_advance;
+	  cpd.tail_base = irt->tail_base;
 	  cpd.sa_index = current_sa_index;
 	  is_async = irt->is_async;
 	}
@@ -1314,12 +1316,6 @@ esp_decrypt_inline (vlib_main_t *vm, vlib_node_runtime_t *node,
 
   if (n_sync)
     {
-      esp_process_ops (vm, node, ptd->integ_ops, sync_bufs, sync_nexts,
-		       ESP_DECRYPT_ERROR_INTEG_ERROR);
-      esp_process_chained_ops (vm, node, ptd->chained_integ_ops, sync_bufs,
-			       sync_nexts, ptd->chunks,
-			       ESP_DECRYPT_ERROR_INTEG_ERROR);
-
       esp_process_ops (vm, node, ptd->crypto_ops, sync_bufs, sync_nexts,
 		       ESP_DECRYPT_ERROR_DECRYPTION_FAILED);
       esp_process_chained_ops (vm, node, ptd->chained_crypto_ops, sync_bufs,
@@ -1668,11 +1664,3 @@ esp_decrypt_init (vlib_main_t *vm)
 VLIB_INIT_FUNCTION (esp_decrypt_init);
 
 #endif
-
-/*
- * fd.io coding-style-patch-verification: ON
- *
- * Local Variables:
- * eval: (c-set-style "gnu")
- * End:
- */

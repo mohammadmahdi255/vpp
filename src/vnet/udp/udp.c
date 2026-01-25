@@ -1,21 +1,12 @@
 /*
+ * SPDX-License-Identifier: Apache-2.0
  * Copyright (c) 2016-2020 Cisco and/or its affiliates.
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at:
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
  */
 
 #include <vnet/udp/udp.h>
 #include <vnet/session/session.h>
 #include <vnet/dpo/load_balance.h>
+#include <vnet/ip/icmp46_packet.h>
 #include <vnet/ip/ip4_inlines.h>
 #include <vnet/ip/ip6_inlines.h>
 #include <vppinfra/sparse_vec.h>
@@ -529,6 +520,63 @@ format_udp_listener_session (u8 * s, va_list * args)
 }
 
 static void
+udp_connection_icmp_cleanup_rpc (void *args)
+{
+  session_handle_t sh = pointer_to_uword (args);
+  udp_connection_t *uc;
+  session_t *s;
+
+  s = session_get_from_handle (sh);
+  if (!s || s->session_state > SESSION_STATE_TRANSPORT_CLOSING)
+    return;
+
+  uc = udp_connection_get (s->connection_index, s->thread_index);
+  if (!uc)
+    return;
+
+  session_transport_closing_notify (&uc->connection);
+  session_transport_closed_notify (&uc->connection);
+  udp_connection_program_cleanup (uc);
+}
+
+void
+udp_connection_handle_icmp (transport_connection_t *tc, u8 icmp_type,
+			    u8 icmp_code)
+{
+  udp_connection_t *uc;
+  session_t *s;
+
+  uc = udp_connection_from_transport (tc);
+  if (tc->is_ip4)
+    {
+      switch (icmp_type)
+	{
+	case ICMP4_destination_unreachable:
+	  s = session_get (uc->c_s_index, uc->c_thread_index);
+
+	  /* Ignore connectionless UDP and sessions that have already been
+	   * closed */
+	  if (s->session_state == SESSION_STATE_LISTENING ||
+	      s->session_state >= SESSION_STATE_TRANSPORT_CLOSING)
+	    break;
+
+	  /* ICMPs will probably not hash identically to original connection */
+	  session_send_rpc_evt_to_thread (s->thread_index,
+					  udp_connection_icmp_cleanup_rpc,
+					  (void *) session_handle (s));
+
+	  break;
+	default:
+	  break;
+	}
+    }
+  else
+    {
+      /* not handled yet */
+    }
+}
+
+static void
 udp_realloc_ports_sv (u16 **ports_nh_svp)
 {
   u16 port, port_no, *ports_nh_sv, *mc;
@@ -680,16 +728,7 @@ udp_init (vlib_main_t * vm)
   return 0;
 }
 
-VLIB_INIT_FUNCTION (udp_init) =
-{
-  .runs_after = VLIB_INITS("ip_main_init", "ip4_lookup_init",
-                           "ip6_lookup_init"),
+VLIB_INIT_FUNCTION (udp_init) = {
+  .runs_after = VLIB_INITS ("ip_main_init", "ip4_lookup_init",
+			    "ip6_lookup_init"),
 };
-
-/*
- * fd.io coding-style-patch-verification: ON
- *
- * Local Variables:
- * eval: (c-set-style "gnu")
- * End:
- */

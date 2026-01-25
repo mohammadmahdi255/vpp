@@ -1,16 +1,6 @@
 /*
+ * SPDX-License-Identifier: Apache-2.0
  * Copyright (c) 2015-2019 Cisco and/or its affiliates.
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at:
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
  */
 
 #include <vnet/vnet.h>
@@ -283,8 +273,7 @@ mq_send_session_accepted_cb (session_t * s)
       m.mq_index = s->thread_index;
       m.handle = session_handle (s);
 
-      session_get_endpoint (s, &m.rmt, 0 /* is_lcl */);
-      session_get_endpoint (s, &m.lcl, 1 /* is_lcl */);
+      session_get_endpoint (s, &m.rmt, &m.lcl);
     }
   else
     {
@@ -399,7 +388,7 @@ mq_send_session_connected_cb (u32 app_wrk_index, u32 api_context,
       m.vpp_event_queue_address =
 	fifo_segment_msg_q_offset (eq_seg, s->thread_index);
 
-      session_get_endpoint (s, &m.lcl, 1 /* is_lcl */);
+      session_get_endpoint (s, NULL, &m.lcl);
 
       m.server_rx_fifo = fifo_segment_fifo_offset (s->rx_fifo);
       m.server_tx_fifo = fifo_segment_fifo_offset (s->tx_fifo);
@@ -2477,11 +2466,3 @@ session_api_hookup (vlib_main_t *vm)
 }
 
 VLIB_API_INIT_FUNCTION (session_api_hookup);
-
-/*
- * fd.io coding-style-patch-verification: ON
- *
- * Local Variables:
- * eval: (c-set-style "gnu")
- * End:
- */

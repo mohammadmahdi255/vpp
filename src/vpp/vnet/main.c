@@ -1,16 +1,6 @@
 /*
+ * SPDX-License-Identifier: Apache-2.0
  * Copyright (c) 2015 Cisco and/or its affiliates.
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at:
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
  */
 
 #define _GNU_SOURCE
@@ -90,6 +80,7 @@ print_help (const char *progname)
     "Usage: %s [options] [startup configuration]\n"
     "  -c, --config <file>         Read startup configuration from file\n"
     "  -i, --interactive           Run in interactive mode\n"
+    "      --no-alloc-intercept    Disable memory alloc/free interception\n"
     "  -v, --version               Print version information and exit\n"
     "  -h, --help                  Show this help message and exit\n",
     progname);
@@ -110,6 +101,7 @@ main (int argc, char *argv[])
   clib_mem_init_ex_args_t mem_init_args = {
     .log2_page_sz = CLIB_MEM_PAGE_SZ_DEFAULT,
     .memory_size = (1ULL << 30),
+    .alloc_free_intercept = 1,
   };
   clib_mem_page_sz_t default_log2_hugepage_sz = CLIB_MEM_PAGE_SZ_UNKNOWN;
   const size_t config_max_size = 1ULL << 18;
@@ -123,11 +115,16 @@ main (int argc, char *argv[])
   char *config_file = 0;
   int opt;
   int config_arg_index = 1;
+  enum
+  {
+    OPT_NO_ALLOC_INTERCEPT = CHAR_MAX + 1,
+  };
 
   const struct option long_options[] = {
     { "config", required_argument, 0, 'c' },
     { "version", no_argument, 0, 'v' },
     { "interactive", no_argument, 0, 'i' },
+    { "no-alloc-intercept", no_argument, 0, OPT_NO_ALLOC_INTERCEPT },
     { "help", no_argument, 0, 'h' },
     {},
   };
@@ -165,6 +162,9 @@ main (int argc, char *argv[])
 	    fprintf (stderr, "%s: unrecognized option\n", argv[0]);
 	  print_help (argv[0]);
 	  return 1;
+	case OPT_NO_ALLOC_INTERCEPT:
+	  mem_init_args.alloc_free_intercept = 0;
+	  break;
 	default:
 	  break;
 	}
@@ -543,11 +543,3 @@ __asan_default_options (void)
   return VPP_SANITIZE_ADDR_OPTIONS;
 }
 #endif /* CLIB_SANITIZE_ADDR */
-
-/*
- * fd.io coding-style-patch-verification: ON
- *
- * Local Variables:
- * eval: (c-set-style "gnu")
- * End:
- */

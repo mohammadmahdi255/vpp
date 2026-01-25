@@ -1,16 +1,6 @@
 /*
+ * SPDX-License-Identifier: Apache-2.0
  * Copyright (c) 2022 Cisco and/or its affiliates.
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at:
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
  */
 
 #include <vnet/session/application.h>
@@ -50,6 +40,7 @@ typedef struct hts_listen_cfg_
   u32 vrf;
   f64 rnd_close;
   u8 is_del;
+  u8 listen_h3;
 } hts_listen_cfg_t;
 
 typedef struct hs_main_
@@ -467,7 +458,8 @@ hts_ts_rx_callback (session_t *ts)
 	  hs->total_recv = msg.data.body_len;
 	  if (htm->no_zc)
 	    vec_validate (hs->rx_buf, HTS_RX_BUF_SIZE - 1);
-	  hts_session_rx_body (hs, ts);
+	  if (svm_fifo_max_dequeue (ts->rx_fifo))
+	    hts_session_rx_body (hs, ts);
 	  return 0;
 	}
 
@@ -643,18 +635,10 @@ hts_attach (hts_main_t *hm)
 }
 
 static int
-hts_transport_needs_crypto (transport_proto_t proto)
-{
-  return proto == TRANSPORT_PROTO_TLS || proto == TRANSPORT_PROTO_DTLS ||
-	 proto == TRANSPORT_PROTO_QUIC;
-}
-
-static int
 hts_start_listen (hts_main_t *htm, session_endpoint_cfg_t *sep, u8 *uri,
-		  f64 rnd_close)
+		  hts_listen_cfg_t *lcfg)
 {
   vnet_listen_args_t _a, *a = &_a;
-  u8 need_crypto;
   hts_session_t *hls;
   session_t *ls;
   clib_thread_index_t thread_index = 0;
@@ -663,22 +647,22 @@ hts_start_listen (hts_main_t *htm, session_endpoint_cfg_t *sep, u8 *uri,
   clib_memset (a, 0, sizeof (*a));
   a->app_index = htm->app_index;
 
-  need_crypto = hts_transport_needs_crypto (sep->transport_proto);
-
   sep->transport_proto = TRANSPORT_PROTO_HTTP;
   clib_memcpy (&a->sep_ext, sep, sizeof (*sep));
 
-  if (need_crypto)
+  if (sep->flags & SESSION_ENDPT_CFG_F_SECURE)
     {
       transport_endpt_ext_cfg_t *ext_cfg = session_endpoint_add_ext_cfg (
 	&a->sep_ext, TRANSPORT_ENDPT_EXT_CFG_CRYPTO,
 	sizeof (transport_endpt_crypto_cfg_t));
       ext_cfg->crypto.ckpair_index = htm->ckpair_index;
+      if (lcfg->listen_h3)
+	ext_cfg->crypto.alpn_protos[0] = TLS_ALPN_PROTO_HTTP_3;
     }
 
   rv = vnet_listen (a);
 
-  if (need_crypto)
+  if (sep->flags & SESSION_ENDPT_CFG_F_SECURE)
     session_endpoint_free_ext_cfgs (&a->sep_ext);
 
   if (rv)
@@ -686,7 +670,7 @@ hts_start_listen (hts_main_t *htm, session_endpoint_cfg_t *sep, u8 *uri,
 
   hls = hts_session_alloc (thread_index);
   hls->uri = vec_dup (uri);
-  hls->close_rate = (f64) 1 / rnd_close;
+  hls->close_rate = (f64) 1 / lcfg->rnd_close;
   ls = listen_session_get_from_handle (a->handle);
   hls->vpp_session_index = ls->session_index;
   hash_set_mem (htm->uri_to_handle, hls->uri, hls->session_index);
@@ -773,7 +757,7 @@ hts_listen (hts_main_t *htm, hts_listen_cfg_t *lcfg)
       sep.fib_index = fib_index;
     }
 
-  if ((rv = hts_start_listen (htm, &sep, uri_key, lcfg->rnd_close)))
+  if ((rv = hts_start_listen (htm, &sep, uri_key, lcfg)))
     {
       error = clib_error_return (0, "failed to listen on %v: %U", uri,
 				 format_session_error, rv);
@@ -840,6 +824,8 @@ hts_create_command_fn (vlib_main_t *vm, unformat_input_t *input,
 	htm->debug_level = 1;
       else if (unformat (line_input, "vrf %u", &lcfg.vrf))
 	;
+      else if (unformat (line_input, "h3"))
+	lcfg.listen_h3 = 1;
       else if (unformat (line_input, "uri %s", &lcfg.uri))
 	;
       else if (unformat (line_input, "rnd-close %f", &lcfg.rnd_close))
@@ -985,11 +971,3 @@ hs_main_init (vlib_main_t *vm)
 }
 
 VLIB_INIT_FUNCTION (hs_main_init);
-
-/*
- * fd.io coding-style-patch-verification: ON
- *
- * Local Variables:
- * eval: (c-set-style "gnu")
- * End:
- */

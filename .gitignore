@@ -6,10 +6,12 @@
 /build-root/install-*/
 /build-root/tools
 /build-root/dpdk-includes/
+/build-root/dpdk_mlx_default.sh
 /build-root/packages-vpp/
 /build-root/path_setup
 /build-root/deb/debian/vpp-plugins/
 /build-root/deb/.pybuild/
+/build-root/debs
 /build-root/*.buildinfo
 /build-root/*.deb
 /build-root/*.rpm
@@ -136,6 +138,9 @@ compile_commands.json
 # extras gomemif build files
 /extras/gomemif/bazel*
 
+# extras libmemif build files
+/extras/libmemif
+
 # vpptop build files
 /extras/vpptop/build/*
 
@@ -146,27 +151,29 @@ compile_commands.json
 **/test-run-*-*-*
 
 # host stack test framework
-/test-c/hs-test/vpp-data
-/test-c/hs-test/hs-test
-/test-c/hs-test/http_server
-/test-c/hs-test/.build.ok
-/test-c/hs-test/.build.cov.ok
-/test-c/hs-test/.last_hst_ppid
-/test-c/hs-test/summary/
-/test-c/hs-test/.last_state_hash
-/test-c/hs-test/.go_cache/
+/test/hs-test/vpp-data
+/test/hs-test/hs-test
+/test/hs-test/http_server
+/test/hs-test/.build.ok
+/test/hs-test/.build.cov.ok
+/test/hs-test/.last_hst_ppid
+/test/hs-test/summary/
+/test/hs-test/.last_state_hash
+/test/hs-test/.go_cache/
 
 # kube-test
-/test-c/kube-test/vpp-data
-/test-c/kube-test/.build.ok
-/test-c/kube-test/.last_ppid
-/test-c/kube-test/summary/
-/test-c/kube-test/.last_state_hash
-/test-c/kube-test/.kube_deps.ok
-/test-c/kube-test/kubernetes/baremetal-calicovpp-config.yaml
-/test-c/kube-test/kubernetes/kind-calicovpp-config.yaml
-/test-c/kube-test/kubernetes/pod-definitions.yaml
-/test-c/kube-test/kubernetes/.vars
+calicovppversion
+/extras/kube-test/vpp-data
+/extras/kube-test/.build.ok
+/extras/kube-test/.last_ppid
+/extras/kube-test/summary/
+/extras/kube-test/.last_state_hash
+/extras/kube-test/.kube_deps.ok
+/extras/kube-test/kubernetes/baremetal-calicovpp-config.yaml
+/extras/kube-test/kubernetes/kind-calicovpp-config.yaml
+/extras/kube-test/kubernetes/pod-definitions.yaml
+/extras/kube-test/kubernetes/.vars
+/extras/kube-test/*.tar
 
 # ./configure
 /CMakeFiles

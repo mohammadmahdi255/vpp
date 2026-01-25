@@ -1,16 +1,6 @@
 /*
+ * SPDX-License-Identifier: Apache-2.0
  * Copyright (c) 2021 Cisco and/or its affiliates.
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at:
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
  */
 
 #ifndef SRC_PLUGINS_HSI_HSI_H_
@@ -26,6 +16,7 @@ typedef enum _hsi_error
   HSI_N_ERROR,
 } hsi_error_t;
 
-__clib_export void hsi_intercept_proto (transport_proto_t proto, u8 is_ip4);
+__clib_export void hsi_intercept_proto (transport_proto_t proto, u8 is_ip4,
+					u8 is_enable);
 
 #endif /* SRC_PLUGINS_HSI_HSI_H_ */

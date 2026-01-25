@@ -1,39 +1,7 @@
-/*
+/* SPDX-License-Identifier: Apache-2.0 OR MIT
  * Copyright (c) 2015 Cisco and/or its affiliates.
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at:
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Copyright (c) 2005 Eliot Dresselhaus
  */
-/*
-  Copyright (c) 2005 Eliot Dresselhaus
-
-  Permission is hereby granted, free of charge, to any person obtaining
-  a copy of this software and associated documentation files (the
-  "Software"), to deal in the Software without restriction, including
-  without limitation the rights to use, copy, modify, merge, publish,
-  distribute, sublicense, and/or sell copies of the Software, and to
-  permit persons to whom the Software is furnished to do so, subject to
-  the following conditions:
-
-  The above copyright notice and this permission notice shall be
-  included in all copies or substantial portions of the Software.
-
-  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
-  EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
-  MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
-  NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE
-  LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
-  OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
-  WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
-*/
 
 #ifndef included_vector_sse2_h
 #define included_vector_sse2_h
@@ -578,13 +546,82 @@ u64x2_clmul64 (u64x2 a, const int a_hi, u64x2 b, const int b_hi)
   return p;
 }
 #endif
+#define CLIB_VEC128_INSERT_DEFINED
+
+#define u8x16_insert(v, x, i) (u8x16) _mm_insert_epi8 ((__m128i) v, x, i)
+#define u16x8_insert(v, x, i) (u16x8) _mm_insert_epi16 ((__m128i) v, x, i)
+#define u32x4_insert(v, x, i) (u32x4) _mm_insert_epi32 ((__m128i) v, x, i)
+#define u64x2_insert(v, x, i) (u64x2) _mm_insert_epi64 ((__m128i) v, x, i)
+
+#define CLIB_VEC64_DYNAMIC_SHUFFLE_DEFINED
+static_always_inline u8x8
+u8x8_shuffle_dynamic (u8x8 v, u8x8 indices)
+{
+  return (u8x8) _mm_shuffle_pi8 ((__m64) v, (__m64) indices);
+}
+
+static_always_inline u16x4
+u16x4_shuffle_dynamic (u16x4 v, u16x4 indices)
+{
+  u16x8 res;
+  /* indices_16 = {i0, i1, i2, i3}
+     indices_8  = {2*i0, 2*i0 + 1,
+		   2*i1, 2*i1 + 1,
+		   2*i2, 2*i2 + 1,
+		   2*i3, 2*i3 + 1}
+  */
+  u16x8 v2 = (u16x8) _mm_set1_epi64 ((__m64) v);
+  u16x8 indices2 = (u16x8) _mm_set1_epi64 ((__m64) indices);
+  u16x8 dbled = indices2 << 1;
+  u16x8 plus_one = dbled + 1;
+  u8x16 dbled_u8 = (u8x16) _mm_packs_epi16 ((__m128i) dbled, (__m128i) dbled);
+  u8x16 plus_one_u8 =
+    (u8x16) _mm_packs_epi16 ((__m128i) plus_one, (__m128i) plus_one);
+  u8x16 indices_8 =
+    (u8x16) _mm_unpacklo_epi8 ((__m128i) dbled_u8, (__m128i) plus_one_u8);
+  res = (u16x8) _mm_shuffle_epi8 ((__m128i) v2, (__m128i) indices_8);
+  return (u16x4) _mm_movepi64_pi64 ((__m128i) res);
+}
+
+#define CLIB_VEC128_DYNAMIC_SHUFFLE_DEFINED
+#define u8x16_shuffle_dynamic(v, i)                                           \
+  (u8x16) _mm_shuffle_epi8 ((__m128i) v, (__m128i) i)
+
+static_always_inline u16x8
+u16x8_shuffle_dynamic (u16x8 v, u16x8 indices)
+{
+  u16x8 res;
+  /* indices_16 = {i0, i1, i2, i3, i4, i5, i6, i7}
+     indices_8  = {2*i0, 2*i0 + 1,
+		   2*i1, 2*i1 + 1,
+		   2*i2, 2*i2 + 1,
+		   2*i3, 2*i3 + 1,
+		   2*i4, 2*i4 + 1,
+		   2*i5, 2*i5 + 1,
+		   2*i6, 2*i6 + 1,
+		   2*i7, 2*i7 + 1}
+  */
+  u16x8 dbled = indices << 1;
+  u16x8 plus_one = dbled + 1;
+  u8x16 dbled_u8 = (u8x16) _mm_packs_epi16 ((__m128i) dbled, (__m128i) dbled);
+  u8x16 plus_one_u8 =
+    (u8x16) _mm_packs_epi16 ((__m128i) plus_one, (__m128i) plus_one);
+  u8x16 indices_8 =
+    (u8x16) _mm_unpacklo_epi8 ((__m128i) dbled_u8, (__m128i) plus_one_u8);
+  res = (u16x8) _mm_shuffle_epi8 ((__m128i) v, (__m128i) indices_8);
+  return res;
+}
+
+static_always_inline u32x4
+u32x4_shuffle_dynamic (u32x4 v, u32x4 indices)
+{
+  u32x4 fourtupled = indices << 2;
+  const u8x16 mask1 = { 0, 0, 0, 0, 4, 4, 4, 4, 8, 8, 8, 8, 12, 12, 12, 12 };
+  const u8x16 offset = { 0, 1, 2, 3, 0, 1, 2, 3, 0, 1, 2, 3, 0, 1, 2, 3 };
+  u8x16 new_mask =
+    (u8x16) _mm_shuffle_epi8 ((__m128i) fourtupled, (__m128i) mask1);
+  new_mask += offset;
+  return (u32x4) _mm_shuffle_epi8 ((__m128i) v, (__m128i) new_mask);
+}
 
 #endif /* included_vector_sse2_h */
-
-/*
- * fd.io coding-style-patch-verification: ON
- *
- * Local Variables:
- * eval: (c-set-style "gnu")
- * End:
- */

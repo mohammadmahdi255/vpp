@@ -1,41 +1,9 @@
-/*
+/* SPDX-License-Identifier: Apache-2.0 OR MIT
  * Copyright (c) 2015 Cisco and/or its affiliates.
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at:
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
-/*
- * interface_format.c: interface formatting
- *
  * Copyright (c) 2008 Eliot Dresselhaus
- *
- * Permission is hereby granted, free of charge, to any person obtaining
- * a copy of this software and associated documentation files (the
- * "Software"), to deal in the Software without restriction, including
- * without limitation the rights to use, copy, modify, merge, publish,
- * distribute, sublicense, and/or sell copies of the Software, and to
- * permit persons to whom the Software is furnished to do so, subject to
- * the following conditions:
- *
- * The above copyright notice and this permission notice shall be
- * included in all copies or substantial portions of the Software.
- *
- *  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
- *  EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
- *  MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
- *  NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE
- *  LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
- *  OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
- *  WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
+
+/* interface_format.c: interface formatting */
 
 #include <vnet/vnet.h>
 #include <vppinfra/bitmap.h>
@@ -515,6 +483,15 @@ format_vnet_buffer_opaque (u8 * s, va_list * args)
 	      (u32) (o->l4_hdr_offset), (u32) (o->feature_arc_index));
   vec_add1 (s, '\n');
 
+  s = format (s, "offload flags: ");
+#define _(bit, name, str, v)                                                  \
+  if (o->oflags & VNET_BUFFER_OFFLOAD_F_##name)                               \
+    s = format (s, "%s ", str);
+  foreach_vnet_buffer_offload_flag
+#undef _
+    else if (!o->oflags) s = format (s, "none ");
+  vec_add1 (s, '\n');
+
   s = format (s,
 	      "ip.adj_index[VLIB_RX]: %d, ip.adj_index[VLIB_TX]: %d",
 	      (u32) (o->ip.adj_index[0]), (u32) (o->ip.adj_index[1]));
@@ -878,11 +855,3 @@ unformat_vnet_hw_interface_flags (unformat_input_t * input, va_list * args)
   *result = flags;
   return 1;
 }
-
-/*
- * fd.io coding-style-patch-verification: ON
- *
- * Local Variables:
- * eval: (c-set-style "gnu")
- * End:
- */

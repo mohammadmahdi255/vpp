@@ -1,16 +1,6 @@
 /*
+ * SPDX-License-Identifier: Apache-2.0
  * Copyright (c) 2017-2021 Cisco and/or its affiliates.
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at:
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
  */
 
 #include <unistd.h>
@@ -227,6 +217,7 @@ vts_test_cmd (vcl_test_server_worker_t *wrk, vcl_test_session_t *conn,
 	  if (tc->is_open)
 	    {
 	      vts_session_cleanup (tc);
+	      wrk->nfds--;
 	      continue;
 	    }
 	  /* Only relevant if all connections previously closed */
@@ -711,9 +702,13 @@ vts_worker_loop (void *arg)
 		{
 		  vtinf ("ctrl session went away");
 		  vsm->ctrl = 0;
+		  vts_wrk_cleanup_all (wrk);
 		}
-	      vts_session_cleanup (conn);
-	      wrk->nfds--;
+	      else
+		{
+		  vts_session_cleanup (conn);
+		  wrk->nfds--;
+		}
 	      continue;
 	    }
 
@@ -732,8 +727,9 @@ vts_worker_loop (void *arg)
 	      continue;
 	    }
 
-	  /* at this point ctrl session must be valid */
-	  ASSERT (vsm->ctrl);
+	  /* drop event if we don't have ctrl session in place first */
+	  if (!vsm->ctrl)
+	    continue;
 
 	  if (ep_evts[i].data.u32 == VCL_TEST_DATA_LISTENER)
 	    {
@@ -743,7 +739,8 @@ vts_worker_loop (void *arg)
 	    }
 	  else if (vppcom_session_is_connectable_listener (conn->fd))
 	    {
-	      vts_accept_client (wrk, conn->fd);
+	      while (vts_accept_client (wrk, conn->fd))
+		;
 	      continue;
 	    }
 
@@ -753,7 +750,8 @@ vts_worker_loop (void *arg)
 
 	  if (!wrk->wrk_index && conn->fd == vsm->ctrl->fd)
 	    {
-	      rx_bytes = conn->read (conn, conn->rxbuf, conn->rxbuf_size);
+	      rx_bytes =
+		vppcom_session_read (conn->fd, conn->rxbuf, conn->rxbuf_size);
 	      rx_cfg = (hs_test_cfg_t *) conn->rxbuf;
 	      if (rx_cfg->magic == HS_TEST_CFG_CTRL_MAGIC)
 		{
@@ -903,11 +901,3 @@ main (int argc, char **argv)
 
   return vsm->worker_fails;
 }
-
-/*
- * fd.io coding-style-patch-verification: ON
- *
- * Local Variables:
- * eval: (c-set-style "gnu")
- * End:
- */

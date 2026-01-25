@@ -1,17 +1,8 @@
 /*
+ * SPDX-License-Identifier: Apache-2.0
  * Copyright (c) 2017-2020 Cisco and/or its affiliates.
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at:
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
  */
+
 #ifndef __included_udp_h__
 #define __included_udp_h__
 
@@ -214,6 +205,9 @@ void udp_connection_free (udp_connection_t * uc);
 udp_connection_t *udp_connection_alloc (clib_thread_index_t thread_index);
 void udp_connection_share_port (u16 lcl_port, u8 is_ip4);
 
+void udp_connection_handle_icmp (transport_connection_t *tconn, u8 icmp_type,
+				 u8 icmp_code);
+
 always_inline udp_connection_t *
 udp_connection_clone_safe (u32 connection_index,
 			   clib_thread_index_t thread_index)
@@ -248,14 +242,5 @@ format_function_t format_udp_connection;
 unformat_function_t unformat_udp_header;
 unformat_function_t unformat_udp_port;
 
-void udp_punt_unknown (vlib_main_t * vm, u8 is_ip4, u8 is_add);
-
-/*
- * fd.io coding-style-patch-verification: ON
- *
- * Local Variables:
- * eval: (c-set-style "gnu")
- * End:
- */
-
+void udp_punt_unknown (vlib_main_t *vm, u8 is_ip4, u8 is_add);
 #endif /* __included_udp_h__ */

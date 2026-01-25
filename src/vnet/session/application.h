@@ -1,16 +1,6 @@
 /*
+ * SPDX-License-Identifier: Apache-2.0
  * Copyright (c) 2017-2019 Cisco and/or its affiliates.
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at:
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
  */
 
 #ifndef SRC_VNET_SESSION_APPLICATION_H_
@@ -151,13 +141,6 @@ typedef struct application_
 
   u16 proxied_transports;
 
-  /** Preferred tls engine */
-  u8 tls_engine;
-
-  /** quic initialization vector */
-  char quic_iv[17];
-  u8 quic_iv_set;
-
   /** Segment where rx mqs were allocated */
   fifo_segment_t rx_mqs_segment;
 
@@ -176,6 +159,12 @@ typedef struct application_
   /** app crypto state */
   app_crypto_ctx_t crypto_ctx;
 } application_t;
+
+static inline app_crypto_ctx_t *
+app_crypto_ctx_get (application_t *app)
+{
+  return &app->crypto_ctx;
+}
 
 static inline app_crypto_wrk_t *
 app_crypto_wrk_get (application_t *app, clib_thread_index_t thread_index)
@@ -431,11 +420,3 @@ app_worker_application_is_builtin (app_worker_t *app_wrk)
 }
 
 #endif /* SRC_VNET_SESSION_APPLICATION_H_ */
-
-/*
- * fd.io coding-style-patch-verification: ON
- *
- * Local Variables:
- * eval: (c-set-style "gnu")
- * End:
- */

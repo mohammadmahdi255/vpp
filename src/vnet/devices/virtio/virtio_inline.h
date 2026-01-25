@@ -1,19 +1,8 @@
 /*
- * Copyright (c) 2015 Cisco and/or its affiliates.
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at:
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * SPDX-License-Identifier: Apache-2.0
+ * Copyright (c) 2015-2025 Cisco and/or its affiliates.
  */
-#ifndef __VIRTIO_INLINE_H__
-#define __VIRTIO_INLINE_H__
+#pragma once
 
 #define foreach_virtio_input_error                                            \
   _ (BUFFER_ALLOC, "buffer alloc error")                                      \
@@ -30,8 +19,8 @@ typedef enum
 
 static_always_inline void
 virtio_refill_vring_split (vlib_main_t *vm, virtio_if_t *vif,
-			   virtio_if_type_t type, vnet_virtio_vring_t *vring,
-			   const int hdr_sz, u32 node_index)
+			   vnet_virtio_vring_t *vring, const int hdr_sz,
+			   u32 node_index)
 {
   u16 used, next, avail, n_slots, n_refill;
   u16 sz = vring->queue_size;
@@ -72,9 +61,7 @@ more:
        */
       b->current_data = -hdr_sz;
       clib_memset (vlib_buffer_get_current (b), 0, hdr_sz);
-      d->addr = ((type == VIRTIO_IF_TYPE_PCI) ?
-		   vlib_buffer_get_current_pa (vm, b) :
-		   pointer_to_uword (vlib_buffer_get_current (b)));
+      d->addr = vlib_buffer_get_current_pa (vm, b);
       d->len = vlib_buffer_get_default_data_size (vm) + hdr_sz;
       d->flags = VRING_DESC_F_WRITE;
       vring->avail->ring[avail & mask] = next;
@@ -96,8 +83,8 @@ more:
 
 static_always_inline void
 virtio_refill_vring_packed (vlib_main_t *vm, virtio_if_t *vif,
-			    virtio_if_type_t type, vnet_virtio_vring_t *vring,
-			    const int hdr_sz, u32 node_index)
+			    vnet_virtio_vring_t *vring, const int hdr_sz,
+			    u32 node_index)
 {
   u16 used, next, n_slots, n_refill, flags = 0, first_desc_flags;
   u16 sz = vring->queue_size;
@@ -135,9 +122,7 @@ more:
        */
       b->current_data = -hdr_sz;
       clib_memset (vlib_buffer_get_current (b), 0, hdr_sz);
-      d->addr = ((type == VIRTIO_IF_TYPE_PCI) ?
-		   vlib_buffer_get_current_pa (vm, b) :
-		   pointer_to_uword (vlib_buffer_get_current (b)));
+      d->addr = vlib_buffer_get_current_pa (vm, b);
       d->len = vlib_buffer_get_default_data_size (vm) + hdr_sz;
 
       if (vring->avail_wrap_counter)
@@ -172,13 +157,3 @@ more:
 
   goto more;
 }
-
-#endif
-
-/*
- * fd.io coding-style-patch-verification: ON
- *
- * Local Variables:
- * eval: (c-set-style "gnu")
- * End:
- */

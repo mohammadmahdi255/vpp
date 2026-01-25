@@ -1,16 +1,6 @@
 /*
+ * SPDX-License-Identifier: Apache-2.0
  * Copyright (c) 2017-2021 Cisco and/or its affiliates.
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at:
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
  */
 
 #ifndef __vcl_test_h__
@@ -336,7 +326,7 @@ vcl_test_read (vcl_test_session_t *ts, void *buf, uint32_t nbytes)
 	    }
 
 	  vterr ("vppcom_session_read()", -errno);
-	  break;
+	  return -1;
 	}
 
       rx_bytes = rv;
@@ -473,11 +463,3 @@ dump_help (void)
 }
 
 #endif /* __vcl_test_h__ */
-
-/*
- * fd.io coding-style-patch-verification: ON
- *
- * Local Variables:
- * eval: (c-set-style "gnu")
- * End:
- */

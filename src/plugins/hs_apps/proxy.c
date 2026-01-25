@@ -1,17 +1,6 @@
-/*
-* Copyright (c) 2017-2019 Cisco and/or its affiliates.
-* Licensed under the Apache License, Version 2.0 (the "License");
-* you may not use this file except in compliance with the License.
-* You may obtain a copy of the License at:
-*
-*     http://www.apache.org/licenses/LICENSE-2.0
-*
-* Unless required by applicable law or agreed to in writing, software
-* distributed under the License is distributed on an "AS IS" BASIS,
-* WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-* See the License for the specific language governing permissions and
-* limitations under the License.
-*/
+/* SPDX-License-Identifier: Apache-2.0
+ * Copyright (c) 2017-2019 Cisco and/or its affiliates.
+ */
 
 #include <vnet/vnet.h>
 #include <vlibmemory/api.h>
@@ -312,6 +301,15 @@ proxy_try_close_session (session_t * s, int is_active_open)
 }
 
 static void
+proxy_do_reset_rpc (void *handlep)
+{
+  session_t *s;
+
+  s = session_get_from_handle (pointer_to_uword (handlep));
+  session_reset (s);
+}
+
+static void
 proxy_reset_session (session_t *s, int is_active_open)
 {
   proxy_main_t *pm = &proxy_main;
@@ -336,6 +334,10 @@ proxy_reset_session (session_t *s, int is_active_open)
       if (!ps->po_disconnected)
 	{
 	  ASSERT (ps->po.session_handle != SESSION_INVALID_HANDLE);
+	  session_send_rpc_evt_to_thread_force (
+	    session_thread_from_handle (ps->po.session_handle),
+	    proxy_do_reset_rpc,
+	    uword_to_pointer (ps->po.session_handle, void *));
 	  session_reset (session_get_from_handle (ps->po.session_handle));
 	  ps->po_disconnected = 1;
 	}
@@ -347,7 +349,10 @@ proxy_reset_session (session_t *s, int is_active_open)
       if (!ps->ao_disconnected)
 	{
 	  if (ps->ao.session_handle != SESSION_INVALID_HANDLE)
-	    session_reset (session_get_from_handle (ps->ao.session_handle));
+	    session_send_rpc_evt_to_thread_force (
+	      session_thread_from_handle (ps->ao.session_handle),
+	      proxy_do_reset_rpc,
+	      uword_to_pointer (ps->ao.session_handle, void *));
 	  ps->ao_disconnected = 1;
 	}
     }
@@ -1566,11 +1571,3 @@ proxy_main_init (vlib_main_t * vm)
 }
 
 VLIB_INIT_FUNCTION (proxy_main_init);
-
-/*
-* fd.io coding-style-patch-verification: ON
-*
-* Local Variables:
-* eval: (c-set-style "gnu")
-* End:
-*/

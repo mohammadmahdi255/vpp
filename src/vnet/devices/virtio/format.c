@@ -1,18 +1,6 @@
 /*
- *------------------------------------------------------------------
- * Copyright (c) 2018 Cisco and/or its affiliates.
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at:
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- *------------------------------------------------------------------
+ * SPDX-License-Identifier: Apache-2.0
+ * Copyright (c) 2018-2025 Cisco and/or its affiliates.
  */
 #include <vlib/vlib.h>
 #include <vlib/unix/unix.h>
@@ -33,16 +21,8 @@ format_virtio_device_name (u8 * s, va_list * args)
   if (vif->initial_if_name)
     return format (s, "%s", vif->initial_if_name);
 
-  if (vif->type == VIRTIO_IF_TYPE_TAP)
-    s = format (s, "tap%u", vif->id);
-  else if (vif->type == VIRTIO_IF_TYPE_PCI)
-    s = format (s, "virtio-%x/%x/%x/%x", vif->pci_addr.domain,
-		vif->pci_addr.bus, vif->pci_addr.slot,
-		vif->pci_addr.function);
-  else if (vif->type == VIRTIO_IF_TYPE_TUN)
-    s = format (s, "tun%u", vif->id);
-  else
-    s = format (s, "virtio-%lu", vif->dev_instance);
+  s = format (s, "virtio-%x/%x/%x/%x", vif->pci_addr.domain, vif->pci_addr.bus,
+	      vif->pci_addr.slot, vif->pci_addr.function);
 
   return s;
 }
@@ -52,22 +32,7 @@ format_virtio_log_name (u8 * s, va_list * args)
 {
   virtio_if_t *vif = va_arg (*args, virtio_if_t *);
 
-  if (vif->type == VIRTIO_IF_TYPE_TAP)
-    s = format (s, "tap%u", vif->id);
-  else if (vif->type == VIRTIO_IF_TYPE_TUN)
-    s = format (s, "tun%u", vif->id);
-  else if (vif->type == VIRTIO_IF_TYPE_PCI)
-    s = format (s, "%U", format_vlib_pci_addr, &vif->pci_addr);
-  else
-    s = format (s, "virtio-%lu", vif->dev_instance);
+  s = format (s, "%U", format_vlib_pci_addr, &vif->pci_addr);
 
   return s;
 }
-
-/*
- * fd.io coding-style-patch-verification: ON
- *
- * Local Variables:
- * eval: (c-set-style "gnu")
- * End:
- */

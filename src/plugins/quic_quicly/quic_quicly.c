@@ -60,6 +60,7 @@ static void
 quic_quicly_connection_delete (quic_ctx_t *ctx)
 {
   clib_bihash_kv_16_8_t kv;
+  clib_bihash_kv_24_8_t accepting_key = {};
   quicly_conn_t *conn;
   quic_quicly_main_t *qqm = &quic_quicly_main;
   quic_main_t *qm = qqm->qm;
@@ -82,29 +83,89 @@ quic_quicly_connection_delete (quic_ctx_t *ctx)
   ctx->conn = NULL;
   quic_quicly_make_connection_key (&kv, quicly_get_master_id (conn));
   QUIC_DBG (2, "Deleting conn with id %lu %lu from map", kv.key[0], kv.key[1]);
-  clib_bihash_add_del_16_8 (&qqm->connection_hash, &kv, 0 /* is_add */);
+  clib_bihash_add_del_16_8 (&qqm->connection_hash, &kv, 0 /* is_del */);
+  const quicly_cid_t *rcid = quicly_get_remote_cid (conn);
+  clib_memcpy_fast (&accepting_key.key, rcid->cid, rcid->len);
+  clib_bihash_add_del_24_8 (&qqm->conn_accepting_hash, &accepting_key,
+			    0 /* is del */);
 
   quic_disconnect_transport (ctx, qm->app_index);
   quicly_free (conn);
-  session_transport_delete_notify (&ctx->connection);
+  if (ctx->c_s_index != QUIC_SESSION_INVALID)
+    session_transport_delete_notify (&ctx->connection);
 }
 
-static void
-quic_quicly_notify_app_connect_failed (quic_ctx_t *ctx, session_error_t err)
+static int
+quic_quicly_notify_app_connected (quic_ctx_t *ctx, session_error_t err)
 {
+  session_t *app_session;
   app_worker_t *app_wrk;
-  int rv;
 
-  app_wrk = app_worker_get (ctx->parent_app_wrk_id);
+  app_wrk = app_worker_get_if_valid (ctx->parent_app_wrk_id);
   if (!app_wrk)
     {
-      QUIC_DBG (2, "no app worker: ctx_index %u, thread %u", ctx->c_c_index,
-		ctx->c_thread_index);
-      return;
+      ctx->flags |= QUIC_F_NO_APP_SESSION;
+      return -1;
     }
-  if ((rv = app_worker_connect_notify (app_wrk, 0, err, ctx->client_opaque)))
-    QUIC_ERR ("failed to notify app: err %d, ctx_index %u, thread %u", rv,
-	      ctx->c_c_index, ctx->c_thread_index);
+
+  /* Cleanup half-open session as we don't get notification from udp */
+  session_half_open_delete_notify (&ctx->connection);
+
+  if (err)
+    {
+      ctx->flags |= QUIC_F_NO_APP_SESSION;
+      goto send_reply;
+    }
+
+  app_session = session_alloc (ctx->c_thread_index);
+  app_session->session_state = SESSION_STATE_CREATED;
+  app_session->session_type =
+    session_type_from_proto_and_ip (TRANSPORT_PROTO_QUIC, ctx->udp_is_ip4);
+  app_session->listener_handle = SESSION_INVALID_HANDLE;
+  app_session->app_wrk_index = ctx->parent_app_wrk_id;
+  app_session->opaque = ctx->client_opaque;
+  app_session->connection_index = ctx->c_c_index;
+  ctx->c_s_index = app_session->session_index;
+
+  if (ctx->alpn_protos[0])
+    {
+      const char *proto =
+	ptls_get_negotiated_protocol (quicly_get_tls (ctx->conn));
+      if (proto)
+	{
+	  QUIC_DBG (2, "alpn proto selected %s", proto);
+	  tls_alpn_proto_id_t id = { .base = (u8 *) proto,
+				     .len = strlen (proto) };
+	  ctx->alpn_selected = tls_alpn_proto_by_str (&id);
+	}
+    }
+
+  if ((err = app_worker_init_connected (app_wrk, app_session)))
+    {
+      QUIC_ERR ("failed to app_worker_init_connected");
+      app_worker_connect_notify (app_wrk, 0, err, ctx->client_opaque);
+      ctx->flags |= QUIC_F_NO_APP_SESSION;
+      session_free (app_session);
+      return -1;
+    }
+
+  svm_fifo_init_ooo_lookup (app_session->rx_fifo, 0 /* ooo enq */);
+  svm_fifo_init_ooo_lookup (app_session->tx_fifo, 1 /* ooo deq */);
+
+  session_set_state (app_session, SESSION_STATE_READY);
+  if ((err = app_worker_connect_notify (app_wrk, app_session, SESSION_E_NONE,
+					ctx->client_opaque)))
+    {
+      QUIC_ERR ("failed to notify app %d", err);
+      session_free (session_get (ctx->c_s_index, ctx->c_thread_index));
+      ctx->flags |= QUIC_F_NO_APP_SESSION;
+      return -1;
+    }
+
+  return 0;
+
+send_reply:
+  return app_worker_connect_notify (app_wrk, 0, err, ctx->client_opaque);
 }
 
 /**
@@ -114,8 +175,8 @@ quic_quicly_notify_app_connect_failed (quic_ctx_t *ctx, session_error_t err)
 static void
 quic_quicly_connection_closed (quic_ctx_t *ctx)
 {
-  QUIC_DBG (2, "QUIC connection %u/%u closed", ctx->c_thread_index,
-	    ctx->c_c_index);
+  QUIC_DBG (2, "QUIC connection %u/%u closed, state %d", ctx->c_thread_index,
+	    ctx->c_c_index, ctx->conn_state);
 
   switch (ctx->conn_state)
     {
@@ -139,7 +200,7 @@ quic_quicly_connection_closed (quic_ctx_t *ctx)
       break;
     case QUIC_CONN_STATE_HANDSHAKE:
       /* handshake failed notify app that connect failed */
-      quic_quicly_notify_app_connect_failed (ctx, SESSION_E_TLS_HANDSHAKE);
+      quic_quicly_notify_app_connected (ctx, SESSION_E_TLS_HANDSHAKE);
       quic_quicly_connection_delete (ctx);
       break;
     case QUIC_CONN_STATE_OPENED:
@@ -150,6 +211,16 @@ quic_quicly_connection_closed (quic_ctx_t *ctx)
       QUIC_DBG (0, "BUG %d", ctx->conn_state);
       break;
     }
+}
+
+static void
+quic_quicly_reschedule_ctx (quic_ctx_t *ctx)
+{
+  int64_t next_timeout = quicly_get_first_timeout (ctx->conn);
+  QUIC_ASSERT (!quic_ctx_is_stream (ctx));
+  quic_update_timer (
+    quic_wrk_ctx_get (quic_quicly_main.qm, ctx->c_thread_index), ctx,
+    next_timeout);
 }
 
 static int
@@ -166,12 +237,7 @@ quic_quicly_send_datagram (session_t *udp_session, struct iovec *packet,
   f = udp_session->tx_fifo;
   tc = session_get_transport (udp_session);
   max_enqueue = svm_fifo_max_enqueue (f);
-  if (max_enqueue < SESSION_CONN_HDR_LEN + len)
-    {
-      QUIC_ERR ("Too much data to send, max_enqueue %u, len %u", max_enqueue,
-		len + SESSION_CONN_HDR_LEN);
-      return QUIC_QUICLY_ERROR_FULL_FIFO;
-    }
+  ASSERT (max_enqueue >= SESSION_CONN_HDR_LEN + len);
 
   /*  Build packet header for fifo */
   hdr.data_length = len;
@@ -195,11 +261,7 @@ quic_quicly_send_datagram (session_t *udp_session, struct iovec *packet,
 			     { packet->iov_base, len } };
 
   ret = svm_fifo_enqueue_segments (f, segs, 2, 0 /* allow partial */);
-  if (PREDICT_FALSE (ret < 0))
-    {
-      QUIC_ERR ("Not enough space to enqueue dgram");
-      return QUIC_QUICLY_ERROR_FULL_FIFO;
-    }
+  ASSERT (ret > 0);
 
   quic_increment_counter (quic_quicly_main.qm, QUIC_ERROR_TX_PACKETS, 1);
 
@@ -250,10 +312,9 @@ quic_quicly_send_packets (quic_ctx_t *ctx)
   session_t *udp_session;
   quicly_conn_t *conn;
   size_t num_packets, i, max_packets;
-  u32 n_sent = 0;
+  u32 n_sent = 0, buf_size;
   int err = 0;
   quicly_address_t quicly_rmt_ip, quicly_lcl_ip;
-  int64_t next_timeout;
 
   /* We have sctx, get qctx */
   if (quic_ctx_is_stream (ctx))
@@ -265,68 +326,64 @@ quic_quicly_send_packets (quic_ctx_t *ctx)
   QUIC_ASSERT (!quic_ctx_is_stream (ctx));
 
   udp_session = session_get_from_handle_if_valid (ctx->udp_session_handle);
-  if (!udp_session)
-    {
-      goto quicly_error;
-    }
+  if (PREDICT_FALSE (!udp_session))
+    goto quicly_error;
 
   conn = ctx->conn;
-  if (!conn)
+  ASSERT (conn);
+
+  /* TODO : quicly can assert it can send min_packets up to 2 */
+  max_packets = quic_quicly_sendable_packet_count (udp_session);
+  if (max_packets < 2)
     {
+      svm_fifo_add_want_deq_ntf (udp_session->tx_fifo,
+				 SVM_FIFO_WANT_DEQ_NOTIF);
       return 0;
     }
 
-  do
+  /* Shrink buf_size if we have less dgrams than QUIC_SEND_PACKET_VEC_SIZE */
+  buf_size = clib_min (sizeof (buf), max_packets * max_udp_payload_size);
+
+  /* If under memory pressure and chunks cannot be allocated try reschedule */
+  if (svm_fifo_provision_chunks (udp_session->tx_fifo, 0, 0, buf_size))
+    goto try_reschedule;
+
+  num_packets = max_packets;
+  QUIC_DBG (3, "num_packets %u, packets %p, buf %p, buf_size %u", num_packets,
+	    packets, buf, sizeof (buf));
+  if ((err = quicly_send (conn, &quicly_rmt_ip, &quicly_lcl_ip, packets,
+			  &num_packets, buf, buf_size)))
+    goto quicly_error;
+
+  if (num_packets > 0)
     {
-      /* TODO : quicly can assert it can send min_packets up to 2 */
-      max_packets = quic_quicly_sendable_packet_count (udp_session);
-      if (max_packets < 2)
+      quic_quicly_addr_to_ip46_addr (&quicly_rmt_ip, &ctx->rmt_ip,
+				     &ctx->rmt_port);
+      for (i = 0; i < num_packets; i++)
 	{
-	  break;
+	  if ((err = quic_quicly_send_datagram (udp_session, &packets[i],
+						&ctx->rmt_ip, ctx->rmt_port)))
+	    goto quicly_error;
 	}
-
-      num_packets = max_packets;
-      QUIC_DBG (3, "num_packets %u, packets %p, buf %p, buf_size %u",
-		num_packets, packets, buf, sizeof (buf));
-      if ((err = quicly_send (conn, &quicly_rmt_ip, &quicly_lcl_ip, packets,
-			      &num_packets, buf, sizeof (buf))))
-	{
-	  goto quicly_error;
-	}
-      if (num_packets > 0)
-	{
-	  quic_quicly_addr_to_ip46_addr (&quicly_rmt_ip, &ctx->rmt_ip,
-					 &ctx->rmt_port);
-	  for (i = 0; i != num_packets; ++i)
-	    {
-	      if ((err = quic_quicly_send_datagram (
-		     udp_session, &packets[i], &ctx->rmt_ip, ctx->rmt_port)))
-		{
-		  goto quicly_error;
-		}
-	    }
-	  n_sent += num_packets;
-	}
+      n_sent += num_packets;
     }
-  while (num_packets > 0 && num_packets == max_packets);
 
-  quic_quicly_set_udp_tx_evt (udp_session);
+  if (n_sent)
+    quic_quicly_set_udp_tx_evt (udp_session);
 
   QUIC_DBG (3, "%u[TX] %u[RX]", svm_fifo_max_dequeue (udp_session->tx_fifo),
 	    svm_fifo_max_dequeue (udp_session->rx_fifo));
 
-  next_timeout = quicly_get_first_timeout (conn);
-  quic_update_timer (
-    quic_wrk_ctx_get (quic_quicly_main.qm, ctx->c_thread_index), ctx,
-    next_timeout);
+try_reschedule:
+  quic_quicly_reschedule_ctx (ctx);
+
   return n_sent;
 
 quicly_error:
+
   if (err && err != QUICLY_ERROR_PACKET_IGNORED &&
       err != QUICLY_ERROR_FREE_CONNECTION)
-    {
-      clib_warning ("Quic error '%U'.", quic_quicly_format_err, err);
-    }
+    QUIC_ERR ("Quic error '%U'.", quic_quicly_format_err, err);
   quic_quicly_connection_closed (ctx);
   return 0;
 }
@@ -393,22 +450,51 @@ quic_quicly_fifo_egress_shift (quicly_stream_t *stream, size_t delta)
 {
   quic_stream_data_t *stream_data;
   session_t *stream_session;
-  quic_ctx_t *ctx;
+  quic_ctx_t *sctx;
   svm_fifo_t *f;
-  u32 rv;
+  u32 rv, max_deq;
 
   stream_data = (quic_stream_data_t *) stream->data;
-  stream_session = get_stream_session_and_ctx_from_stream (stream, &ctx);
+  stream_session = get_stream_session_and_ctx_from_stream (stream, &sctx);
   f = stream_session->tx_fifo;
 
   QUIC_ASSERT (stream_data->app_tx_data_len >= delta);
-  stream_data->app_tx_data_len -= delta;
-  ctx->bytes_written += delta;
+  sctx->bytes_written += delta;
   rv = svm_fifo_dequeue_drop (f, delta);
   QUIC_ASSERT (rv == delta);
 
-  rv = quicly_stream_sync_sendbuf (stream, 0);
-  QUIC_ASSERT (!rv);
+  if (svm_fifo_needs_deq_ntf (f, delta))
+    session_dequeue_notify (stream_session);
+
+  max_deq = svm_fifo_max_dequeue (f);
+  if (max_deq)
+    {
+      if (max_deq > stream_data->app_tx_data_len - delta)
+	{
+	  rv = quicly_stream_sync_sendbuf (stream, 1);
+	  QUIC_ASSERT (!rv);
+	  quic_quicly_reschedule_ctx (quic_quicly_get_quic_ctx (
+	    sctx->quic_connection_ctx_id, sctx->c_thread_index));
+	}
+      stream_data->app_tx_data_len = max_deq;
+    }
+  else
+    {
+      ASSERT (sctx->flags & QUIC_F_STREAM_TX_DRAINED);
+      /* All data drained and acked, clear fifo flag to allow new events from
+       * app. Then check if we need to reschedule as session layer would */
+      svm_fifo_unset_event (f);
+      if (svm_fifo_max_dequeue (f))
+	if (svm_fifo_set_event (f))
+	  {
+	    /* New data added as we cleared the flag, reschedule ctx */
+	    sctx->flags &= ~QUIC_F_STREAM_TX_DRAINED;
+	    stream_data->app_tx_data_len = svm_fifo_max_dequeue (f);
+	    rv = quicly_stream_sync_sendbuf (stream, 1);
+	    quic_quicly_reschedule_ctx (quic_quicly_get_quic_ctx (
+	      sctx->quic_connection_ctx_id, sctx->c_thread_index));
+	  }
+    }
 }
 
 static void
@@ -437,6 +523,7 @@ quic_quicly_fifo_egress_emit (quicly_stream_t *stream, size_t off, void *dst,
     {
       *wrote_all = 1;
       *len = deq_max - off;
+      ctx->flags |= QUIC_F_STREAM_TX_DRAINED;
     }
   QUIC_ASSERT (*len > 0);
 
@@ -484,6 +571,13 @@ quic_quicly_ack_rx_data (session_t *stream_session)
   quicly_stream_sync_recvbuf (stream, stream_data->app_rx_data_len - max_deq);
   QUIC_DBG (3, "Acking %u bytes", stream_data->app_rx_data_len - max_deq);
   stream_data->app_rx_data_len = max_deq;
+
+  /* Need to send packets (acks may never be sent otherwise) */
+  if (sctx->flags & QUIC_F_STREAM_TX_DRAINED)
+    {
+      quic_quicly_reschedule_ctx (quic_quicly_get_quic_ctx (
+	sctx->quic_connection_ctx_id, sctx->c_thread_index));
+    }
 }
 
 static void
@@ -499,10 +593,8 @@ quic_quicly_on_receive (quicly_stream_t *stream, size_t off, const void *src,
   quic_stream_data_t *stream_data;
   int rlen;
 
-  if (!len)
-    {
-      return;
-    }
+  if (PREDICT_FALSE (!len))
+    return;
 
   stream_data = (quic_stream_data_t *) stream->data;
   sctx =
@@ -556,12 +648,15 @@ quic_quicly_on_receive (quicly_stream_t *stream, size_t off, const void *src,
 		stream_session->thread_index, f, len, rlen, off, max_enq);
       stream_data->app_rx_data_len += rlen;
       QUIC_ASSERT (rlen >= len);
-      app_wrk = app_worker_get_if_valid (stream_session->app_wrk_index);
-      if (PREDICT_TRUE (app_wrk != 0))
+      if (!(stream_session->flags & SESSION_F_RX_EVT))
 	{
-	  app_worker_rx_notify (app_wrk, stream_session);
+	  app_wrk = app_worker_get_if_valid (stream_session->app_wrk_index);
+	  if (PREDICT_TRUE (app_wrk != 0))
+	    {
+	      stream_session->flags |= SESSION_F_RX_EVT;
+	      app_worker_rx_notify (app_wrk, stream_session);
+	    }
 	}
-      quic_quicly_ack_rx_data (stream_session);
     }
   else
     {
@@ -633,6 +728,184 @@ quic_quicly_update_conn_ctx (quicly_conn_t *conn,
   *tls = quicly_context->tls;
 }
 
+static int
+quic_quicly_on_stream_open (quicly_stream_open_t *self,
+			    quicly_stream_t *stream)
+{
+  /* Return code for this function ends either
+   * - in quicly_receive : if not QUICLY_ERROR_PACKET_IGNORED, will close
+   * connection
+   * - in quicly_open_stream, returned directly
+   */
+
+  session_t *stream_session, *quic_session;
+  quic_stream_data_t *stream_data;
+  app_worker_t *app_wrk;
+  quic_ctx_t *qctx, *sctx;
+  u32 sctx_id;
+  int rv;
+
+  QUIC_DBG (2, "on_stream_open called");
+  stream->data = clib_mem_alloc (sizeof (quic_stream_data_t));
+  stream->callbacks = &quic_quicly_stream_callbacks;
+  /* Notify accept on parent qsession, but only if this is not a locally
+   * initiated stream */
+  if (quicly_stream_is_self_initiated (stream))
+    {
+      QUIC_DBG (2, "Nothing to do on locally initiated stream");
+      return 0;
+    }
+
+  sctx_id = quic_ctx_alloc (quic_quicly_main.qm, vlib_get_thread_index ());
+  qctx = quic_quicly_get_conn_ctx (stream->conn);
+
+  /* Might need to signal that the connection is ready if the first thing the
+   * server does is open a stream */
+  quic_quicly_check_quic_session_connected (qctx);
+  /* ctx might be invalidated */
+  qctx = quic_quicly_get_conn_ctx (stream->conn);
+  QUIC_DBG (2, "qctx->c_s_index %u, qctx->c_c_index %u", qctx->c_s_index,
+	    qctx->c_c_index);
+
+  if (qctx->c_s_index == QUIC_SESSION_INVALID)
+    {
+      QUIC_DBG (2, "Invalid session index on quic c_index %u",
+		qctx->c_c_index);
+      return 0;
+    }
+  stream_session = session_alloc (qctx->c_thread_index);
+  stream_session->flags |= SESSION_F_STREAM;
+  QUIC_DBG (2, "ACCEPTED stream_session 0x%lx ctx %u",
+	    session_handle (stream_session), sctx_id);
+  sctx = quic_quicly_get_quic_ctx (sctx_id, qctx->c_thread_index);
+  sctx->parent_app_wrk_id = qctx->parent_app_wrk_id;
+  sctx->parent_app_id = qctx->parent_app_id;
+  sctx->quic_connection_ctx_id = qctx->c_c_index;
+  sctx->c_c_index = sctx_id;
+  sctx->c_s_index = stream_session->session_index;
+  sctx->stream = stream;
+  sctx->c_flags |= TRANSPORT_CONNECTION_F_NO_LOOKUP;
+  sctx->flags |= QUIC_F_IS_STREAM;
+  sctx->crypto_context_index = qctx->crypto_context_index;
+  sctx->udp_session_handle = qctx->udp_session_handle;
+
+  if (quicly_stream_is_unidirectional (stream->stream_id))
+    stream_session->flags |= SESSION_F_UNIDIRECTIONAL;
+
+  stream_data = (quic_stream_data_t *) stream->data;
+  stream_data->ctx_id = sctx_id;
+  stream_data->thread_index = sctx->c_thread_index;
+  stream_data->app_rx_data_len = 0;
+  stream_data->app_tx_data_len = 0;
+
+  stream_session->session_state = SESSION_STATE_CREATED;
+  stream_session->app_wrk_index = sctx->parent_app_wrk_id;
+  stream_session->connection_index = sctx->c_c_index;
+  stream_session->session_type =
+    session_type_from_proto_and_ip (TRANSPORT_PROTO_QUIC, qctx->udp_is_ip4);
+  quic_session = session_get (qctx->c_s_index, qctx->c_thread_index);
+  stream_session->listener_handle = listen_session_get_handle (quic_session);
+
+  app_wrk = app_worker_get (stream_session->app_wrk_index);
+  if ((rv = app_worker_init_connected (app_wrk, stream_session)))
+    {
+      QUIC_ERR ("failed to allocate fifos");
+      quicly_reset_stream (stream, QUIC_QUICLY_APP_ALLOCATION_ERROR);
+      return 0; /* Frame is still valid */
+    }
+  svm_fifo_add_want_deq_ntf (stream_session->rx_fifo,
+			     SVM_FIFO_WANT_DEQ_NOTIF_IF_FULL |
+			       SVM_FIFO_WANT_DEQ_NOTIF_IF_EMPTY);
+  svm_fifo_init_ooo_lookup (stream_session->rx_fifo, 0 /* ooo enq */);
+  svm_fifo_init_ooo_lookup (stream_session->tx_fifo, 1 /* ooo deq */);
+
+  stream_session->session_state = SESSION_STATE_ACCEPTING;
+  if ((rv = app_worker_accept_notify (app_wrk, stream_session)))
+    {
+      QUIC_ERR ("failed to notify accept worker app");
+      quicly_reset_stream (stream, QUIC_QUICLY_APP_ACCEPT_NOTIFY_ERROR);
+      return 0; /* Frame is still valid */
+    }
+
+  return 0;
+}
+
+static void
+quic_quicly_on_closed_by_remote (quicly_closed_by_remote_t *self,
+				 quicly_conn_t *conn, int code,
+				 uint64_t frame_type, const char *reason,
+				 size_t reason_len)
+{
+  quic_ctx_t *ctx = quic_quicly_get_conn_ctx (conn);
+#if QUIC_DEBUG >= 2
+  if (ctx->c_s_index == QUIC_SESSION_INVALID)
+    {
+      clib_warning ("Unopened Session closed by peer: error %U, reason %U, "
+		    "ctx_index %u, thread %u",
+		    quic_quicly_format_err, code, format_ascii_bytes, reason,
+		    reason_len, ctx->c_c_index, ctx->c_thread_index);
+    }
+  else
+    {
+      session_t *quic_session =
+	session_get (ctx->c_s_index, ctx->c_thread_index);
+      clib_warning ("Session closed by peer: session 0x%lx, error %U, reason "
+		    "%U, ctx_index %u, thread %u",
+		    session_handle (quic_session), quic_quicly_format_err,
+		    code, format_ascii_bytes, reason, reason_len,
+		    ctx->c_c_index, ctx->c_thread_index);
+    }
+#endif
+  if (ctx->conn_state == QUIC_CONN_STATE_HANDSHAKE)
+    {
+      QUIC_DBG (2, "Handshake failed: ctx_index %u, thread %u", ctx->c_c_index,
+		ctx->c_thread_index);
+      return;
+    }
+  ctx->conn_state = QUIC_CONN_STATE_PASSIVE_CLOSING;
+  if (ctx->c_s_index != QUIC_SESSION_INVALID)
+    {
+      session_transport_closing_notify (&ctx->connection);
+    }
+}
+
+static int64_t
+quic_quicly_get_time (quicly_now_t *self)
+{
+  return (int64_t) quic_wrk_ctx_get (quic_quicly_main.qm,
+				     vlib_get_thread_index ())
+    ->time_now;
+}
+
+static quicly_stream_open_t on_stream_open = { quic_quicly_on_stream_open };
+static quicly_closed_by_remote_t on_closed_by_remote = {
+  quic_quicly_on_closed_by_remote
+};
+static quicly_now_t quicly_vpp_now_cb = { quic_quicly_get_time };
+
+static int
+quic_quicly_crypto_context_acquire (quic_ctx_t *ctx)
+{
+  quicly_context_t *quicly_ctx;
+  int rv;
+
+  if ((rv = quic_quicly_crypto_context_init (ctx)))
+    return rv;
+
+  quicly_ctx = quic_quicly_get_quicly_ctx_from_ctx (ctx);
+  quicly_ctx->stream_open = &on_stream_open;
+  quicly_ctx->closed_by_remote = &on_closed_by_remote;
+  quicly_ctx->now = &quicly_vpp_now_cb;
+
+  return 0;
+}
+
+static void
+quic_quicly_crypto_context_release (u32 crctx_ndx, u8 thread_index)
+{
+  quic_quicly_crypto_context_free (crctx_ndx, thread_index);
+}
+
 static void
 quic_quicly_connection_migrate (quic_ctx_t *ctx)
 {
@@ -642,7 +915,6 @@ quic_quicly_connection_migrate (quic_ctx_t *ctx)
   quicly_conn_t *conn;
   quicly_context_t *quicly_context;
   session_t *udp_session;
-  int64_t next_timeout;
 
   new_ctx_index = quic_ctx_alloc (quic_quicly_main.qm, thread_index);
   new_ctx = quic_quicly_get_quic_ctx (new_ctx_index, thread_index);
@@ -671,10 +943,8 @@ quic_quicly_connection_migrate (quic_ctx_t *ctx)
   clib_bihash_add_del_16_8 (&quic_quicly_main.connection_hash, &kv,
 			    1 /* is_add */);
   new_ctx->timer_handle = QUIC_TIMER_HANDLE_INVALID;
-  next_timeout = quicly_get_first_timeout (ctx->conn);
 
-  quic_update_timer (quic_wrk_ctx_get (quic_quicly_main.qm, thread_index),
-		     new_ctx, next_timeout);
+  quic_quicly_reschedule_ctx (new_ctx);
 
   /*  Trigger write on this connection if necessary */
   udp_session = session_get_from_handle (new_ctx->udp_session_handle);
@@ -744,7 +1014,6 @@ quic_quicly_get_quic_ctx_if_valid (u32 ctx_index,
 static void
 quic_quicly_proto_on_close (u32 ctx_index, clib_thread_index_t thread_index)
 {
-  int err;
   quic_ctx_t *ctx =
     quic_quicly_get_quic_ctx_if_valid (ctx_index, thread_index);
   if (!ctx)
@@ -754,7 +1023,8 @@ quic_quicly_proto_on_close (u32 ctx_index, clib_thread_index_t thread_index)
   session_t *stream_session =
     session_get (ctx->c_s_index, ctx->c_thread_index);
 #if QUIC_DEBUG >= 2
-  clib_warning ("Closing session 0x%lx", session_handle (stream_session));
+  clib_warning ("Closing session 0x%lx ctx_index %u",
+		session_handle (stream_session), ctx->c_c_index);
 #endif
   if (quic_ctx_is_stream (ctx))
     {
@@ -762,19 +1032,21 @@ quic_quicly_proto_on_close (u32 ctx_index, clib_thread_index_t thread_index)
       if (!quicly_stream_has_send_side (quicly_is_client (stream->conn),
 					stream->stream_id))
 	{
+	  QUIC_ERR ("stream doesn't have send side: ctx_index %u, thread %u",
+		    ctx_index, thread_index);
 	  return;
 	}
       quicly_sendstate_shutdown (
 	&stream->sendstate,
 	ctx->bytes_written + svm_fifo_max_dequeue (stream_session->tx_fifo));
-      err = quicly_stream_sync_sendbuf (stream, 1);
-      if (err)
+      if (quicly_stream_sync_sendbuf (stream, 1))
 	{
 	  QUIC_DBG (1, "sendstate_shutdown failed for stream session %lu",
 		    session_handle (stream_session));
 	  quicly_reset_stream (stream, QUIC_QUICLY_APP_ERROR_CLOSE_NOTIFY);
 	}
-      quic_quicly_send_packets (ctx);
+      quic_quicly_reschedule_ctx (quic_quicly_get_quic_ctx (
+	ctx->quic_connection_ctx_id, ctx->c_thread_index));
       return;
     }
 
@@ -790,10 +1062,10 @@ quic_quicly_proto_on_close (u32 ctx_index, clib_thread_index_t thread_index)
 
       quic_increment_counter (quic_quicly_main.qm,
 			      QUIC_ERROR_CLOSED_CONNECTION, 1);
-      quicly_close (conn, QUIC_QUICLY_APP_ERROR_CLOSE_NOTIFY,
-		    "Closed by peer");
+      /* TODO: we should be able to pass error code from app */
+      quicly_close (conn, 0, "shutting down");
       /* This also causes all streams to be closed (and the cb called) */
-      quic_quicly_send_packets (ctx);
+      quic_quicly_reschedule_ctx (ctx);
       break;
     case QUIC_CONN_STATE_PASSIVE_CLOSING:
       ctx->conn_state = QUIC_CONN_STATE_PASSIVE_CLOSING_APP_CLOSED;
@@ -823,6 +1095,7 @@ quic_quicly_find_packet_ctx (quic_quicly_rx_packet_ctx_t *pctx,
 {
   clib_bihash_kv_16_8_t kv;
   clib_bihash_16_8_t *h;
+  clib_bihash_kv_24_8_t accepting_key = {};
   quic_ctx_t *ctx;
   u32 index, thread_id;
   quic_quicly_main_t *qqm = &quic_quicly_main;
@@ -833,6 +1106,19 @@ quic_quicly_find_packet_ctx (quic_quicly_rx_packet_ctx_t *pctx,
 
   if (clib_bihash_search_16_8 (h, &kv, &kv))
     {
+      if (QUICLY_PACKET_IS_LONG_HEADER (pctx->packet.octets.base[0]))
+	{
+	  QUIC_DBG (3, "Searching in accepting connections");
+	  clib_memcpy_fast (&accepting_key.key, pctx->packet.cid.src.base,
+			    pctx->packet.cid.src.len);
+	  if (!clib_bihash_search_24_8 (&qqm->conn_accepting_hash,
+					&accepting_key, &accepting_key))
+	    {
+	      index = accepting_key.value & UINT32_MAX;
+	      thread_id = accepting_key.value >> 32;
+	      goto conn_found;
+	    }
+	}
       QUIC_DBG (3, "connection not found");
       return QUIC_PACKET_TYPE_NONE;
     }
@@ -841,6 +1127,7 @@ quic_quicly_find_packet_ctx (quic_quicly_rx_packet_ctx_t *pctx,
   thread_id = kv.value >> 32;
   /* Check if this connection belongs to this thread, otherwise
    * ask for it to be moved */
+conn_found:
   if (thread_id != caller_thread_index)
     {
       QUIC_DBG (2, "Connection is on wrong thread");
@@ -867,16 +1154,75 @@ quic_quicly_find_packet_ctx (quic_quicly_rx_packet_ctx_t *pctx,
 }
 
 static void
+quic_quicly_on_quic_session_accepted (quic_ctx_t *ctx)
+{
+  session_t *quic_session;
+  app_worker_t *app_wrk;
+  quic_ctx_t *lctx;
+  int rv;
+
+  quic_session = session_alloc (ctx->c_thread_index);
+  QUIC_DBG (2,
+	    "Accept connection (new quic_session): session 0x%lx, "
+	    "session_index %u, ctx_index %u, thread %u",
+	    session_handle (quic_session), quic_session->session_index,
+	    ctx->c_c_index, ctx->c_thread_index);
+  ctx->c_s_index = quic_session->session_index;
+
+  lctx = quic_quicly_get_quic_ctx (ctx->listener_ctx_id, 0);
+
+  quic_session->connection_index = ctx->c_c_index;
+  quic_session->session_type =
+    session_type_from_proto_and_ip (TRANSPORT_PROTO_QUIC, ctx->udp_is_ip4);
+  quic_session->listener_handle = lctx->c_s_index;
+
+  if (lctx->alpn_protos[0])
+    {
+      const char *proto =
+	ptls_get_negotiated_protocol (quicly_get_tls (ctx->conn));
+      if (proto)
+	{
+	  tls_alpn_proto_id_t id = { .base = (u8 *) proto,
+				     .len = strlen (proto) };
+	  ctx->alpn_selected = tls_alpn_proto_by_str (&id);
+	}
+    }
+
+  /* If notify fails, reset connection immediatly */
+  rv = app_worker_init_accepted (quic_session);
+  if (rv)
+    {
+      QUIC_ERR ("Accept connection: failed to allocate fifos");
+      quic_quicly_proto_on_close (ctx->c_c_index, ctx->c_thread_index);
+      return;
+    }
+
+  svm_fifo_init_ooo_lookup (quic_session->rx_fifo, 0 /* ooo enq */);
+  svm_fifo_init_ooo_lookup (quic_session->tx_fifo, 1 /* ooo deq */);
+
+  app_wrk = app_worker_get (quic_session->app_wrk_index);
+  quic_session->session_state = SESSION_STATE_ACCEPTING;
+  rv = app_worker_accept_notify (app_wrk, quic_session);
+  if (rv)
+    {
+      QUIC_ERR ("Accept connection: failed to notify accept worker app");
+      quic_quicly_proto_on_close (ctx->c_c_index, ctx->c_thread_index);
+      return;
+    }
+
+  ctx->parent_app_wrk_id = quic_session->app_wrk_index;
+  ctx->conn_state = QUIC_CONN_STATE_READY;
+}
+
+static void
 quic_quicly_accept_connection (quic_quicly_rx_packet_ctx_t *pctx)
 {
   quicly_context_t *quicly_ctx;
-  session_t *quic_session;
   clib_bihash_kv_16_8_t kv;
-  app_worker_t *app_wrk;
+  clib_bihash_kv_24_8_t accepting_key = {};
   quicly_conn_t *conn;
   quic_ctx_t *ctx;
-  quic_ctx_t *lctx;
-  int rv;
+  int rv, quicly_state;
   quic_quicly_main_t *qqm = &quic_quicly_main;
 
   QUIC_DBG (2, "Accept connection: pkt ctx_index %u, thread %u",
@@ -912,74 +1258,39 @@ quic_quicly_accept_connection (quic_quicly_rx_packet_ctx_t *pctx)
   quic_quicly_store_conn_ctx (conn, ctx);
   ctx->conn = conn;
 
-  /* if handshake failed (e.g. ALPN negotiation failed) quicly connection is in
-   * closing state, in this case we don't need to create session and notify
-   * app, connection will be closed when error response is sent */
-  if (quicly_get_state (conn) >= QUICLY_STATE_CLOSING)
-    {
-      QUIC_DBG (2, "Handshake failed, closing: ctx_index %u, thread %u",
-		ctx->c_c_index, ctx->c_thread_index);
-      return;
-    }
-
-  quic_session = session_alloc (ctx->c_thread_index);
-  QUIC_DBG (2,
-	    "Accept connection (new quic_session): session 0x%lx, "
-	    "session_index %u, ctx_index %u, thread %u",
-	    session_handle (quic_session), quic_session->session_index,
-	    ctx->c_c_index, ctx->c_thread_index);
-  ctx->c_s_index = quic_session->session_index;
-
-  lctx = quic_quicly_get_quic_ctx (ctx->listener_ctx_id, 0);
-
-  quic_session->app_wrk_index = lctx->parent_app_wrk_id;
-  quic_session->connection_index = ctx->c_c_index;
-  quic_session->session_type =
-    session_type_from_proto_and_ip (TRANSPORT_PROTO_QUIC, ctx->udp_is_ip4);
-  quic_session->listener_handle = lctx->c_s_index;
-
   /* Register connection in connections map */
   quic_quicly_make_connection_key (&kv, quicly_get_master_id (conn));
   kv.value = ((u64) pctx->thread_index) << 32 | (u64) pctx->ctx_index;
   clib_bihash_add_del_16_8 (&qqm->connection_hash, &kv, 1 /* is_add */);
+  clib_memcpy_fast (&accepting_key.key, pctx->packet.cid.src.base,
+		    pctx->packet.cid.src.len);
+  accepting_key.value = kv.value;
+  clib_bihash_add_del_24_8 (&qqm->conn_accepting_hash, &accepting_key,
+			    1 /* is add */);
   QUIC_DBG (
     2, "Accept connection: conn key value 0x%llx, ctx_index %u, thread %u",
     kv.value, pctx->ctx_index, pctx->thread_index);
 
-  if (lctx->alpn_protos[0])
+  quicly_state = quicly_get_state (conn);
+  /* if handshake failed (e.g. ALPN negotiation failed) quicly connection is in
+   * closing state, in this case we don't need to create session and notify
+   * app, connection will be closed when error response is sent */
+  if (quicly_state >= QUICLY_STATE_CLOSING)
     {
-      const char *proto = ptls_get_negotiated_protocol (quicly_get_tls (conn));
-      if (proto)
-	{
-	  tls_alpn_proto_id_t id = { .base = (u8 *) proto,
-				     .len = strlen (proto) };
-	  ctx->alpn_selected = tls_alpn_proto_by_str (&id);
-	}
+      QUIC_DBG (2, "Handshake failed, closing: ctx_index %u, thread %u",
+		ctx->c_c_index, ctx->c_thread_index);
+      ctx->conn_state = QUIC_CONN_STATE_ACTIVE_CLOSING;
+      return;
     }
-
-  /* If notify fails, reset connection immediatly */
-  rv = app_worker_init_accepted (quic_session);
-  if (rv)
+  if (!quicly_connection_is_ready (conn))
     {
-      QUIC_ERR ("Accept connection: failed to allocate fifos");
-      quic_quicly_proto_on_close (pctx->ctx_index, pctx->thread_index);
+      QUIC_DBG (2, "Handshake not yet completed: ctx_index %u, thread %u",
+		ctx->c_c_index, ctx->c_thread_index);
+      ctx->conn_state = QUIC_CONN_STATE_HANDSHAKE;
       return;
     }
 
-  svm_fifo_init_ooo_lookup (quic_session->rx_fifo, 0 /* ooo enq */);
-  svm_fifo_init_ooo_lookup (quic_session->tx_fifo, 1 /* ooo deq */);
-
-  app_wrk = app_worker_get (quic_session->app_wrk_index);
-  quic_session->session_state = SESSION_STATE_ACCEPTING;
-  rv = app_worker_accept_notify (app_wrk, quic_session);
-  if (rv)
-    {
-      QUIC_ERR ("Accept connection: failed to notify accept worker app");
-      quic_quicly_proto_on_close (pctx->ctx_index, pctx->thread_index);
-      return;
-    }
-
-  ctx->conn_state = QUIC_CONN_STATE_READY;
+  quic_quicly_on_quic_session_accepted (ctx);
 }
 
 static int
@@ -1026,6 +1337,7 @@ quic_quicly_process_one_rx_packet (u64 udp_session_handle, svm_fifo_t *f,
 			       pctx->ph.data_length, &off);
   if (plen == SIZE_MAX)
     {
+      QUIC_DBG (0, "invalid plen");
       return 1;
     }
 
@@ -1105,33 +1417,24 @@ quic_quicly_connect (quic_ctx_t *ctx, u32 ctx_index,
   return (ret);
 }
 
-static u8 *
-quic_quicly_format_quicly_conn_id (u8 *s, va_list *args)
+static i64
+quic_quicly_stream_get_stream_id (quic_ctx_t *ctx)
 {
-  quicly_cid_plaintext_t *mid = va_arg (*args, quicly_cid_plaintext_t *);
-  s = format (s, "C%x_%x", mid->master_id, mid->thread_id);
-  return s;
+  quicly_stream_t *stream = (quicly_stream_t *) ctx->stream;
+
+  return stream->stream_id;
 }
 
 static u8 *
-quic_quicly_format_stream_ctx_stream_id (u8 *s, va_list *args)
+quic_quicly_format_stream_stats (u8 *s, va_list *args)
 {
   quic_ctx_t *ctx = va_arg (*args, quic_ctx_t *);
   quicly_stream_t *stream = (quicly_stream_t *) ctx->stream;
+  quic_stream_data_t *stream_data = (quic_stream_data_t *) stream->data;
 
-  s = format (s, "%U S%lx", quic_quicly_format_quicly_conn_id,
-	      quicly_get_master_id (stream->conn), stream->stream_id);
-  return s;
-}
-
-static u8 *
-quic_quicly_format_stream_connection (u8 *s, va_list *args)
-{
-  quic_ctx_t *ctx = va_arg (*args, quic_ctx_t *);
-  quicly_stream_t *stream = (quicly_stream_t *) ctx->stream;
-
-  s = format (s, "Stream %ld conn %d", stream->stream_id,
-	      ctx->quic_connection_ctx_id);
+  s = format (s, " snd-wnd %lu rcv-wnd %lu app_rx_data_len %u\n",
+	      stream->_send_aux.max_stream_data, stream->_recv_aux.window,
+	      stream_data->app_rx_data_len);
   return s;
 }
 
@@ -1158,37 +1461,34 @@ quic_quicly_format_connection_stats (u8 *s, va_list *args)
   quic_ctx_t *ctx = va_arg (*args, quic_ctx_t *);
   quicly_stats_t quicly_stats;
 
-  s = format (s, "[%U]", quic_quicly_format_quicly_conn_id,
-	      quicly_get_master_id (ctx->conn));
-
   quicly_get_stats (ctx->conn, &quicly_stats);
 
-  s = format (s, "[RTT >%3d, ~%3d, V%3d, last %3d]", quicly_stats.rtt.minimum,
-	      quicly_stats.rtt.smoothed, quicly_stats.rtt.variance,
-	      quicly_stats.rtt.latest);
-  s = format (s, " TX:%d RX:%d loss:%d ack:%d", quicly_stats.num_packets.sent,
-	      quicly_stats.num_packets.received, quicly_stats.num_packets.lost,
-	      quicly_stats.num_packets.ack_received);
+  s = format (s, " rtt: min %lu smoothed %lu var %lu last %lu\n",
+	      quicly_stats.rtt.minimum, quicly_stats.rtt.smoothed,
+	      quicly_stats.rtt.variance, quicly_stats.rtt.latest);
   s =
-    format (s, "\ncwnd:%u ssthresh:%u recovery_end:%lu", quicly_stats.cc.cwnd,
-	    quicly_stats.cc.ssthresh, quicly_stats.cc.recovery_end);
-
-  quicly_context_t *quicly_ctx = quic_quicly_get_quicly_ctx_from_ctx (ctx);
-  if (quicly_ctx->init_cc == &quicly_cc_cubic_init)
-    {
-      s = format (s,
-		  "\nk:%d w_max:%u w_last_max:%u avoidance_start:%ld "
-		  "last_sent_time:%ld",
-		  quicly_stats.cc.state.cubic.k,
-		  quicly_stats.cc.state.cubic.w_max,
-		  quicly_stats.cc.state.cubic.w_last_max,
-		  quicly_stats.cc.state.cubic.avoidance_start,
-		  quicly_stats.cc.state.cubic.last_sent_time);
-    }
-  else if (quicly_ctx->init_cc == &quicly_cc_reno_init)
-    {
-      s = format (s, " stash:%u", quicly_stats.cc.state.reno.stash);
-    }
+    format (s, " rx: pkt %lu initial %lu zero-rtt %lu handshake %lu ack %lu\n",
+	    quicly_stats.num_packets.received,
+	    quicly_stats.num_packets.initial_received,
+	    quicly_stats.num_packets.zero_rtt_received,
+	    quicly_stats.num_packets.handshake_received,
+	    quicly_stats.num_packets.ack_received);
+  s = format (s, " tx: pkt %lu initial %lu zero-rtt %lu handshake %lu\n",
+	      quicly_stats.num_packets.sent,
+	      quicly_stats.num_packets.initial_sent,
+	      quicly_stats.num_packets.zero_rtt_sent,
+	      quicly_stats.num_packets.handshake_sent);
+  s =
+    format (s, " pkt-lost %lu late-ack %lu decrypt-failed %lu pkt-ooo %lu\n",
+	    quicly_stats.num_packets.lost, quicly_stats.num_packets.late_acked,
+	    quicly_stats.num_packets.decryption_failed,
+	    quicly_stats.num_packets.received_out_of_order);
+  s = format (s, " cc-algo %s cwnd %u ssthresh: %u recovery_end %lu\n",
+	      quicly_stats.cc.type->name, quicly_stats.cc.cwnd,
+	      quicly_stats.cc.ssthresh, quicly_stats.cc.recovery_end);
+  s = format (s, " cwnd-init %u cwnd-min %u cwnd-max %u\n",
+	      quicly_stats.cc.cwnd_initial, quicly_stats.cc.cwnd_minimum,
+	      quicly_stats.cc.cwnd_maximum);
   return s;
 }
 
@@ -1216,13 +1516,6 @@ quic_quicly_connect_stream (void *quic_conn, void **quic_stream,
   quicly_conn_t *conn = quic_conn;
   quicly_stream_t *quicly_stream;
   int rv;
-
-  if (!quicly_connection_is_ready (conn))
-    {
-      /* TODO: Define appropriate QUIC return values for QUIC VFT's!
-       */
-      return -1;
-    }
 
   rv = quicly_open_stream (conn, (quicly_stream_t **) quic_stream, is_unidir);
   if (rv)
@@ -1267,18 +1560,25 @@ quic_quicly_stream_tx (quic_ctx_t *ctx, session_t *stream_session)
   stream_data = (quic_stream_data_t *) stream->data;
   max_deq = svm_fifo_max_dequeue (stream_session->tx_fifo);
   QUIC_ASSERT (max_deq >= stream_data->app_tx_data_len);
+
+  /* Spurious send, nothing else to do */
   if (max_deq == stream_data->app_tx_data_len)
     {
-      QUIC_DBG (3,
-		"No data: max_deq %d, app_tx_data_len %d, ctx_index "
-		"%u, thread %u",
-		max_deq, stream_data->app_tx_data_len,
-		stream_session->connection_index,
-		stream_session->thread_index);
+      QUIC_DBG (3, "No new data: %u max_deq %d", stream_session->session_index,
+		max_deq);
       return 0;
     }
+
   stream_data->app_tx_data_len = max_deq;
-  return quicly_stream_sync_sendbuf (stream, 1);
+  int rv = quicly_stream_sync_sendbuf (stream, 1);
+  ASSERT (!rv);
+
+  /* Just in case engine is waiting for new app data */
+  quic_quicly_reschedule_ctx (quic_quicly_get_quic_ctx (
+    ctx->quic_connection_ctx_id, ctx->c_thread_index));
+  ctx->flags &= ~QUIC_F_STREAM_TX_DRAINED;
+
+  return 1;
 }
 
 static void
@@ -1305,6 +1605,9 @@ quic_quicly_engine_init (quic_main_t *qm)
 		     app_crypto_engine_n_types ());
   clib_bihash_init_16_8 (&qqm->connection_hash,
 			 "quic (quicly engine) connections", 1024, 4 << 20);
+  clib_bihash_init_24_8 (&qqm->conn_accepting_hash,
+			 "quic (quicly engine) accepting connections", 1024,
+			 4 << 20);
   quic_quicly_register_cipher_suite (CRYPTO_ENGINE_PICOTLS,
 				     ptls_openssl_cipher_suites);
 
@@ -1322,61 +1625,6 @@ quic_quicly_engine_init (quic_main_t *qm)
       next_cid[i].thread_id = i;
       clib_bihash_init_24_8 (&crctx_hash[i], "quic crypto contexts", 64,
 			     128 << 10);
-    }
-}
-
-static void
-quic_quicly_on_quic_session_connected (quic_ctx_t *ctx)
-{
-  session_t *quic_session;
-  app_worker_t *app_wrk;
-  u32 ctx_id = ctx->c_c_index;
-  clib_thread_index_t thread_index = ctx->c_thread_index;
-  int rv;
-
-  quic_session = session_alloc (thread_index);
-
-  QUIC_DBG (2, "Allocated quic session 0x%lx", session_handle (quic_session));
-  ctx->c_s_index = quic_session->session_index;
-  quic_session->app_wrk_index = ctx->parent_app_wrk_id;
-  quic_session->connection_index = ctx->c_c_index;
-  quic_session->listener_handle = SESSION_INVALID_HANDLE;
-  quic_session->session_type =
-    session_type_from_proto_and_ip (TRANSPORT_PROTO_QUIC, ctx->udp_is_ip4);
-
-  if (ctx->alpn_protos[0])
-    {
-      const char *proto =
-	ptls_get_negotiated_protocol (quicly_get_tls (ctx->conn));
-      if (proto)
-	{
-	  QUIC_DBG (2, "alpn proto selected %s", proto);
-	  tls_alpn_proto_id_t id = { .base = (u8 *) proto,
-				     .len = strlen (proto) };
-	  ctx->alpn_selected = tls_alpn_proto_by_str (&id);
-	}
-    }
-
-  /* If quic session connected fails, immediatly close connection */
-  app_wrk = app_worker_get (ctx->parent_app_wrk_id);
-  if ((rv = app_worker_init_connected (app_wrk, quic_session)))
-    {
-      QUIC_ERR ("failed to app_worker_init_connected");
-      quic_quicly_proto_on_close (ctx_id, thread_index);
-      app_worker_connect_notify (app_wrk, NULL, rv, ctx->client_opaque);
-      return;
-    }
-
-  svm_fifo_init_ooo_lookup (quic_session->rx_fifo, 0 /* ooo enq */);
-  svm_fifo_init_ooo_lookup (quic_session->tx_fifo, 1 /* ooo deq */);
-
-  quic_session->session_state = SESSION_STATE_CONNECTING;
-  if ((rv = app_worker_connect_notify (app_wrk, quic_session, SESSION_E_NONE,
-				       ctx->client_opaque)))
-    {
-      QUIC_ERR ("failed to notify app %d", rv);
-      quic_quicly_proto_on_close (ctx_id, thread_index);
-      return;
     }
 }
 
@@ -1399,8 +1647,11 @@ quic_quicly_check_quic_session_connected (quic_ctx_t *ctx)
   ctx->conn_state = QUIC_CONN_STATE_READY;
   if (session_connected == QUIC_SESSION_CONNECTED_CLIENT)
     {
-      quic_quicly_on_quic_session_connected (ctx);
+      if (quic_quicly_notify_app_connected (ctx, SESSION_E_NONE))
+	quic_quicly_proto_on_close (ctx->c_c_index, ctx->c_thread_index);
     }
+  else
+    quic_quicly_on_quic_session_accepted (ctx);
 }
 
 static int
@@ -1446,13 +1697,14 @@ rx_start:
       packets_ctx[i].ptype = QUIC_PACKET_TYPE_DROP;
 
       cur_deq = max_deq - fifo_offset;
-      if (cur_deq == 0)
-	{
-	  max_packets = i + 1;
-	  break;
-	}
+
       if (cur_deq < SESSION_CONN_HDR_LEN)
 	{
+	  if (cur_deq == 0)
+	    {
+	      max_packets = i;
+	      break;
+	    }
 	  fifo_offset = max_deq;
 	  max_packets = i + 1;
 	  QUIC_ERR ("Fifo %d < header size in RX", cur_deq);
@@ -1500,9 +1752,12 @@ rx_start:
 	case QUIC_PACKET_TYPE_RECEIVE:
 	  ctx = quic_quicly_get_quic_ctx (packets_ctx[i].ctx_index,
 					  packets_ctx[i].thread_index);
-	  quic_quicly_check_quic_session_connected (ctx);
-	  ctx = quic_quicly_get_quic_ctx (packets_ctx[i].ctx_index,
-					  packets_ctx[i].thread_index);
+	  if (ctx->conn_state <= QUIC_CONN_STATE_HANDSHAKE)
+	    {
+	      quic_quicly_check_quic_session_connected (ctx);
+	      ctx = quic_quicly_get_quic_ctx (packets_ctx[i].ctx_index,
+					      packets_ctx[i].thread_index);
+	    }
 	  break;
 	case QUIC_PACKET_TYPE_ACCEPT:
 	  ctx = quic_quicly_get_quic_ctx (packets_ctx[i].ctx_index,
@@ -1514,26 +1769,32 @@ rx_start:
 	}
       if (ctx != prev_ctx)
 	{
-	  quic_quicly_send_packets (ctx);
+	  if (!quic_ctx_is_stream (ctx))
+	    quic_quicly_send_packets (ctx);
+	  else
+	    quic_quicly_reschedule_ctx (ctx);
 	}
     }
 
-  /*  session alloc might have happened, so get session again */
+  /* session alloc might have happened, so get session again */
   udp_session = session_get_from_handle (udp_session_handle);
   f = udp_session->rx_fifo;
   svm_fifo_dequeue_drop (f, fifo_offset);
 
   if (svm_fifo_max_dequeue (f))
-    {
-      goto rx_start;
-    }
+    goto rx_start;
 
   return 0;
 }
 
+static void
+quic_quicly_transport_closed (quic_ctx_t *ctx)
+{
+  quic_quicly_connection_closed (ctx);
+}
+
 const static quic_engine_vft_t quic_quicly_engine_vft = {
   .engine_init = quic_quicly_engine_init,
-  .app_cert_key_pair_delete = quic_quicly_app_cert_key_pair_delete,
   .crypto_context_acquire = quic_quicly_crypto_context_acquire,
   .crypto_context_release = quic_quicly_crypto_context_release,
   .connect = quic_quicly_connect,
@@ -1546,9 +1807,10 @@ const static quic_engine_vft_t quic_quicly_engine_vft = {
   .stream_tx = quic_quicly_stream_tx,
   .send_packets = quic_quicly_send_packets,
   .format_connection_stats = quic_quicly_format_connection_stats,
-  .format_stream_connection = quic_quicly_format_stream_connection,
-  .format_stream_ctx_stream_id = quic_quicly_format_stream_ctx_stream_id,
+  .format_stream_stats = quic_quicly_format_stream_stats,
+  .stream_get_stream_id = quic_quicly_stream_get_stream_id,
   .proto_on_close = quic_quicly_proto_on_close,
+  .transport_closed = quic_quicly_transport_closed,
 };
 
 static clib_error_t *

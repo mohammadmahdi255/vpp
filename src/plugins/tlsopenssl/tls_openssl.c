@@ -1,16 +1,6 @@
 /*
+ * SPDX-License-Identifier: Apache-2.0
  * Copyright (c) 2018 Cisco and/or its affiliates.
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at:
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
  */
 
 #include <openssl/ssl.h>
@@ -703,7 +693,8 @@ openssl_init_certkey_init_ctx (app_cert_key_pair_t *ckpair,
   X509 *cert;
   BIO *bio;
 
-  cki = app_certkey_alloc_int_ctx (ckpair, thread_index);
+  cki =
+    app_certkey_alloc_int_ctx (ckpair, thread_index, CRYPTO_ENGINE_OPENSSL);
   bio = BIO_new (BIO_s_mem ());
   BIO_write (bio, ckpair->cert, vec_len (ckpair->cert));
   cert = PEM_read_bio_X509 (bio, NULL, NULL, NULL);
@@ -750,7 +741,7 @@ openssl_set_ckpair (SSL *ssl, u32 ckpair_index,
       return -1;
     }
 
-  cki = app_certkey_get_int_ctx (ckpair, thread_index);
+  cki = app_certkey_get_int_ctx (ckpair, thread_index, CRYPTO_ENGINE_OPENSSL);
   if (!cki || !cki->cert)
     {
       cki = openssl_init_certkey_init_ctx (ckpair, thread_index);
@@ -1155,7 +1146,8 @@ openssl_start_listen (tls_ctx_t * lctx)
 	  return -1;
 	}
 
-      cki = app_certkey_get_int_ctx (ckpair, lctx->c_thread_index);
+      cki = app_certkey_get_int_ctx (ckpair, lctx->c_thread_index,
+				     CRYPTO_ENGINE_OPENSSL);
       if (!cki || !cki->cert)
 	{
 	  cki = openssl_init_certkey_init_ctx (ckpair, lctx->c_thread_index);
@@ -1314,7 +1306,7 @@ openssl_server_async_cert_cb (app_crypto_async_reply_t *reply)
     }
 
   /* Get or initialize certificate context */
-  cki = app_certkey_get_int_ctx (ckpair, thread_index);
+  cki = app_certkey_get_int_ctx (ckpair, thread_index, CRYPTO_ENGINE_OPENSSL);
   if (!cki || !cki->cert)
     {
       cki = openssl_init_certkey_init_ctx (ckpair, thread_index);
@@ -1789,14 +1781,6 @@ VLIB_CLI_COMMAND (tls_openssl_set_tls, static) = {
 };
 
 VLIB_PLUGIN_REGISTER () = {
-    .version = VPP_BUILD_VER,
-    .description = "Transport Layer Security (TLS) Engine, OpenSSL Based",
+  .version = VPP_BUILD_VER,
+  .description = "Transport Layer Security (TLS) Engine, OpenSSL Based",
 };
-
-/*
- * fd.io coding-style-patch-verification: ON
- *
- * Local Variables:
- * eval: (c-set-style "gnu")
- * End:
- */

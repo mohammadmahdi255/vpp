@@ -1,18 +1,5 @@
-/*
- *------------------------------------------------------------------
+/* SPDX-License-Identifier: Apache-2.0
  * Copyright (c) 2025 Cisco and/or its affiliates.
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at:
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- *------------------------------------------------------------------
  */
 
 #ifndef __sha2_h__
@@ -39,12 +26,12 @@ crypto_native_ops_hmac_sha2 (vlib_main_t *vm, vnet_crypto_op_t *ops[],
 	&ctx, type, (clib_sha2_hmac_key_data_t *) cm->key_data[op->key_index]);
       if (op->flags & VNET_CRYPTO_OP_FLAG_CHAINED_BUFFERS)
 	{
-	  vnet_crypto_op_chunk_t *chp = chunks + op->chunk_index;
-	  for (int j = 0; j < op->n_chunks; j++, chp++)
+	  vnet_crypto_op_chunk_t *chp = chunks + op->integ_chunk_index;
+	  for (int j = 0; j < op->integ_n_chunks; j++, chp++)
 	    clib_sha2_hmac_update (&ctx, chp->src, chp->len);
 	}
       else
-	clib_sha2_hmac_update (&ctx, op->src, op->len);
+	clib_sha2_hmac_update (&ctx, op->integ_src, op->integ_len);
 
       clib_sha2_hmac_final (&ctx, buffer);
 
@@ -84,4 +71,30 @@ crypto_native_ops_hmac_sha2 (vlib_main_t *vm, vnet_crypto_op_t *ops[],
 
   return n_ops - n_fail;
 }
+
+static int
+sha2_probe ()
+{
+#if defined(__x86_64__)
+
+#if defined(__SHA__) && defined(__AVX512F__)
+  if (clib_cpu_supports_sha () && clib_cpu_supports_avx512f ())
+    return 30;
+#elif defined(__SHA__) && defined(__AVX2__)
+  if (clib_cpu_supports_sha () && clib_cpu_supports_avx2 ())
+    return 20;
+#elif defined(__SHA__)
+  if (clib_cpu_supports_sha ())
+    return 10;
+#endif
+
+#elif defined(__aarch64__)
+#if defined(__ARM_FEATURE_SHA2)
+  if (clib_cpu_supports_sha2 ())
+    return 10;
+#endif
+#endif
+  return -1;
+}
+
 #endif /* __sha2_h__ */

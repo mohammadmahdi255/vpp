@@ -104,6 +104,7 @@ typedef struct
   _ (tunnels_reset_by_client, "tunnels reset by client")                      \
   _ (tunnels_reset_by_target, "tunnels reset by target")                      \
   _ (max_streams_hit, "max streams hit")                                      \
+  _ (http_conns_reset_by_server, "http connections reset by server")          \
   _ (target_unreachable, "target unreachable")                                \
   _ (client_closed_before_stream_opened, "client closed before stream "       \
 					 "opened")                            \
@@ -122,7 +123,8 @@ typedef struct
   hcpc_wrk_stats_t stats;
 } hcpc_worker_t;
 
-typedef void (*hsi_intercept_proto_fn) (transport_proto_t proto, u8 is_ip4);
+typedef void (*hsi_intercept_proto_fn) (transport_proto_t proto, u8 is_ip4,
+					u8 is_enable);
 
 typedef enum
 {
@@ -444,6 +446,15 @@ hcpc_timer_update (hcpc_session_t *ps)
 }
 
 static void
+hcpc_reset_session_rpc (void *handlep)
+{
+  session_t *s;
+
+  s = session_get_from_handle (pointer_to_uword (handlep));
+  session_reset (s);
+}
+
+static void
 hcpc_session_postponed_free_rpc (void *arg)
 {
   uword session_index = pointer_to_uword (arg);
@@ -522,23 +533,6 @@ hcpc_delete_session (session_t *s, u8 is_http)
     }
 
   clib_spinlock_unlock_if_init (&hcpc_main.sessions_lock);
-}
-
-static void
-hcpc_http_stop_listeners ()
-{
-  hcpc_main_t *hcpcm = &hcpc_main;
-  hcpc_listener_t *l;
-
-  pool_foreach (l, hcpcm->listeners)
-    {
-      if (l->session_handle != SESSION_INVALID_HANDLE)
-	{
-	  vnet_unlisten_args_t a = { .handle = l->session_handle,
-				     .app_index = hcpcm->listener_app_index };
-	  vnet_unlisten (&a);
-	}
-    }
 }
 
 static void
@@ -687,57 +681,6 @@ hcpc_close_session (session_t *s, u8 is_http)
   clib_spinlock_unlock_if_init (&hcpc_main.sessions_lock);
 }
 
-static void
-hcpc_listen (hcpc_listener_t *l)
-{
-  hcpc_main_t *hcpcm = &hcpc_main;
-  vnet_listen_args_t _a, *a = &_a;
-  session_error_t rv;
-
-  clib_memset (a, 0, sizeof (*a));
-  a->app_index = hcpcm->listener_app_index;
-  clib_memcpy (&a->sep_ext, &l->sep, sizeof (l->sep));
-  /* Make sure listener is marked connected for transports like udp */
-  a->sep_ext.transport_flags = TRANSPORT_CFG_F_CONNECTED;
-  if ((rv = vnet_listen (a)))
-    {
-      clib_warning ("listen returned: %U", format_session_error, rv);
-      return;
-    }
-  l->session_handle = a->handle;
-  HCPC_DBG ("listener started %U:%u", format_ip46_address, &l->sep.ip,
-	    l->sep.is_ip4, clib_net_to_host_u16 (l->sep.port));
-
-  /* if listen all (wildcard ip and port) enable it in hsi */
-  if (l->sep.port == 0)
-    {
-      if (l->sep.is_ip4)
-	{
-	  if (l->sep.ip.ip4.as_u32 != 0)
-	    return;
-	  hcpcm->intercept_proto_fn (l->sep.transport_proto, 1);
-	}
-      else
-	{
-	  if (!(l->sep.ip.ip6.as_u64[0] == 0 || l->sep.ip.ip6.as_u64[1] == 0))
-	    return;
-	  hcpcm->intercept_proto_fn (l->sep.transport_proto, 0);
-	}
-    }
-}
-
-void
-hcpc_start_listen ()
-{
-  hcpc_main_t *hcpcm = &hcpc_main;
-  hcpc_listener_t *l;
-
-  pool_foreach (l, hcpcm->listeners)
-    {
-      hcpc_listen (l);
-    }
-}
-
 #define HCPC_ARC_IP4  "ip4-unicast"
 #define HCPC_ARC_IP6  "ip6-unicast"
 #define HCPC_NODE_IP4 "hsi4-in"
@@ -786,6 +729,88 @@ hcpc_enable_hsi (u8 is_ip4)
   else
     hcpcm->hsi6_enabled = 1;
   return 0;
+}
+
+static void
+hcpc_listen (hcpc_listener_t *l)
+{
+  hcpc_main_t *hcpcm = &hcpc_main;
+  vnet_listen_args_t _a, *a = &_a;
+  session_error_t rv;
+
+  clib_memset (a, 0, sizeof (*a));
+  a->app_index = hcpcm->listener_app_index;
+  clib_memcpy (&a->sep_ext, &l->sep, sizeof (l->sep));
+  /* Make sure listener is marked connected for transports like udp */
+  a->sep_ext.transport_flags = TRANSPORT_CFG_F_CONNECTED;
+  if ((rv = vnet_listen (a)))
+    {
+      clib_warning ("listen returned: %U", format_session_error, rv);
+      return;
+    }
+  l->session_handle = a->handle;
+  HCPC_DBG ("listener started %U:%u", format_ip46_address, &l->sep.ip,
+	    l->sep.is_ip4, clib_net_to_host_u16 (l->sep.port));
+
+  /* if listen all (wildcard ip and port) enable it in hsi */
+  if (l->sep.port == 0)
+    {
+      if (l->sep.is_ip4)
+	{
+	  if (l->sep.ip.ip4.as_u32 != 0)
+	    return;
+	  hcpcm->intercept_proto_fn (l->sep.transport_proto, 1,
+				     1 /* is_enable */);
+	}
+      else
+	{
+	  if (!(l->sep.ip.ip6.as_u64[0] == 0 || l->sep.ip.ip6.as_u64[1] == 0))
+	    return;
+	  hcpcm->intercept_proto_fn (l->sep.transport_proto, 0,
+				     1 /* is_enable */);
+	}
+    }
+}
+
+void
+hcpc_start_listen ()
+{
+  hcpc_main_t *hcpcm = &hcpc_main;
+  hcpc_listener_t *l;
+
+  pool_foreach (l, hcpcm->listeners)
+    {
+      hcpc_listen (l);
+    }
+}
+
+static void
+hcpc_http_stop_listeners ()
+{
+  hcpc_main_t *hcpcm = &hcpc_main;
+  hcpc_listener_t *l;
+
+  pool_foreach (l, hcpcm->listeners)
+    {
+      if (l->session_handle == SESSION_INVALID_HANDLE)
+	continue;
+
+      /* if listen all (wildcard ip and port) disable it in hsi */
+      if (l->sep.port == 0)
+	{
+	  if (l->sep.is_ip4 && l->sep.ip.ip4.as_u32 == 0)
+	    hcpcm->intercept_proto_fn (l->sep.transport_proto, 0,
+				       0 /* is_enable */);
+	  else if (!l->sep.is_ip4 && l->sep.ip.ip6.as_u64[0] == 0 &&
+		   l->sep.ip.ip6.as_u64[1] == 0)
+	    hcpcm->intercept_proto_fn (l->sep.transport_proto, 0,
+				       0 /* is_enable */);
+	}
+
+      vnet_unlisten_args_t a = { .handle = l->session_handle,
+				 .app_index = hcpcm->listener_app_index };
+      vnet_unlisten (&a);
+    }
 }
 
 static clib_error_t *
@@ -875,8 +900,10 @@ hcpc_open_http_stream (u32 session_index)
 	    ps->intercept.tx_fifo->master_thread_index;
 	  if (ps->intercept.session_handle != SESSION_INVALID_HANDLE)
 	    {
-	      session_reset (
-		session_get_from_handle (ps->intercept.session_handle));
+	      session_send_rpc_evt_to_thread_force (
+		session_thread_from_handle (ps->intercept.session_handle),
+		hcpc_reset_session_rpc,
+		uword_to_pointer (ps->intercept.session_handle, void *));
 	      ps->intercept_diconnected = 1;
 	    }
 	  else
@@ -1189,10 +1216,12 @@ hcpc_http_session_reset_callback (session_t *s)
   HCPC_DBG ("session [%u]", s->opaque);
   clib_spinlock_lock_if_init (&hcpcm->sessions_lock);
   ps = hcpc_session_get (s->opaque);
+  ASSERT (ps);
   if (ps->flags & HCPC_SESSION_F_IS_PARENT)
     {
       hcpc_http_connection_closed (ps);
       clib_spinlock_unlock_if_init (&hcpcm->sessions_lock);
+      hcpc_worker_stats_inc (s->thread_index, http_conns_reset_by_server, 1);
       return;
     }
   ps->state = HCPC_SESSION_CLOSED;
@@ -1200,7 +1229,10 @@ hcpc_http_session_reset_callback (session_t *s)
   if (!ps->intercept_diconnected &&
       ps->intercept.session_handle != SESSION_INVALID_HANDLE)
     {
-      session_reset (session_get_from_handle (ps->intercept.session_handle));
+      session_send_rpc_evt_to_thread_force (
+	session_thread_from_handle (ps->intercept.session_handle),
+	hcpc_reset_session_rpc,
+	uword_to_pointer (ps->intercept.session_handle, void *));
       ps->intercept_diconnected = 1;
     }
   clib_spinlock_unlock_if_init (&hcpcm->sessions_lock);
@@ -1260,8 +1292,10 @@ hcpc_http_rx_callback (session_t *s)
 	  if (!ps->intercept_diconnected)
 	    {
 	      if (ps->intercept.session_handle != SESSION_INVALID_HANDLE)
-		session_reset (
-		  session_get_from_handle (ps->intercept.session_handle));
+		session_send_rpc_evt_to_thread_force (
+		  session_thread_from_handle (ps->intercept.session_handle),
+		  hcpc_reset_session_rpc,
+		  uword_to_pointer (ps->intercept.session_handle, void *));
 	      ps->intercept_diconnected = 1;
 	    }
 	  else
@@ -1541,7 +1575,10 @@ hcpc_intercept_session_reset_callback (session_t *s)
   if (!ps->http_disconnected &&
       ps->http.session_handle != SESSION_INVALID_HANDLE)
     {
-      session_reset (session_get_from_handle (ps->http.session_handle));
+      session_send_rpc_evt_to_thread_force (
+	session_thread_from_handle (ps->http.session_handle),
+	hcpc_reset_session_rpc,
+	uword_to_pointer (ps->http.session_handle, void *));
       ps->http_disconnected = 1;
     }
   clib_spinlock_unlock_if_init (&hcpcm->sessions_lock);

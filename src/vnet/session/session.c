@@ -1,17 +1,8 @@
 /*
+ * SPDX-License-Identifier: Apache-2.0
  * Copyright (c) 2017-2019 Cisco and/or its affiliates.
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at:
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
  */
+
 /**
  * @file
  * @brief Session and session manager
@@ -355,23 +346,6 @@ session_program_cleanup (session_t *s)
   session_cleanup_notify (s, SESSION_CLEANUP_SESSION);
 }
 
-/**
- * Cleans up session and lookup table.
- *
- * Transport connection must still be valid.
- */
-static void
-session_delete (session_t * s)
-{
-  int rv;
-
-  /* Delete from the main lookup table. */
-  if ((rv = session_lookup_del_session (s)))
-    clib_warning ("session %u hash delete rv %d", s->session_index, rv);
-
-  session_program_cleanup (s);
-}
-
 void
 session_cleanup_half_open (session_handle_t ho_handle)
 {
@@ -514,10 +488,13 @@ session_alloc_for_stream (session_handle_t parent_handle)
 
   ASSERT (thread_index == vlib_get_thread_index ());
 
+  s = session_alloc (thread_index);
   ps = session_get_from_handle_if_valid (parent_handle);
   if (!ps)
-    return 0;
-  s = session_alloc (thread_index);
+    {
+      session_free (s);
+      return 0;
+    }
   s->listener_handle = SESSION_INVALID_HANDLE;
   s->session_type = ps->session_type;
   session_set_state (s, SESSION_STATE_CLOSED);
@@ -967,9 +944,7 @@ session_transport_delete_notify (transport_connection_t * tc)
 {
   session_t *s;
 
-  /* App might've been removed already */
-  if (!(s = session_get_if_valid (tc->s_index, tc->thread_index)))
-    return;
+  s = session_get (tc->s_index, tc->thread_index);
 
   switch (s->session_state)
     {
@@ -1007,15 +982,17 @@ session_transport_delete_notify (transport_connection_t * tc)
     case SESSION_STATE_TRANSPORT_DELETED:
       break;
     case SESSION_STATE_CLOSED:
-      session_cleanup_notify (s, SESSION_CLEANUP_TRANSPORT);
+      session_lookup_del_session (s);
       session_set_state (s, SESSION_STATE_TRANSPORT_DELETED);
-      session_delete (s);
+      session_cleanup_notify (s, SESSION_CLEANUP_TRANSPORT);
+      session_program_cleanup (s);
       break;
     default:
       clib_warning ("session %u state %u", s->session_index, s->session_state);
+      session_lookup_del_session (s);
       session_set_state (s, SESSION_STATE_TRANSPORT_DELETED);
       session_cleanup_notify (s, SESSION_CLEANUP_TRANSPORT);
-      session_delete (s);
+      session_program_cleanup (s);
       break;
     }
 }
@@ -1034,12 +1011,7 @@ session_transport_delete_request (transport_connection_t *tc,
 {
   session_t *s;
 
-  /* App might've been removed already */
-  if (!(s = session_get_if_valid (tc->s_index, tc->thread_index)))
-    {
-      transport_cleanup_cb (cb_fn, tc);
-      return;
-    }
+  s = session_get (tc->s_index, tc->thread_index);
 
   switch (s->session_state)
     {
@@ -1079,15 +1051,17 @@ session_transport_delete_request (transport_connection_t *tc,
       transport_cleanup_cb (cb_fn, tc);
       break;
     case SESSION_STATE_CLOSED:
-      session_cleanup_notify_custom (s, SESSION_CLEANUP_TRANSPORT, cb_fn);
+      session_lookup_del_session (s);
       session_set_state (s, SESSION_STATE_TRANSPORT_DELETED);
-      session_delete (s);
+      session_cleanup_notify_custom (s, SESSION_CLEANUP_TRANSPORT, cb_fn);
+      session_program_cleanup (s);
       break;
     default:
       clib_warning ("session %u state %u", s->session_index, s->session_state);
+      session_lookup_del_session (s);
       session_set_state (s, SESSION_STATE_TRANSPORT_DELETED);
       session_cleanup_notify_custom (s, SESSION_CLEANUP_TRANSPORT, cb_fn);
-      session_delete (s);
+      session_program_cleanup (s);
       break;
     }
 }
@@ -1286,7 +1260,9 @@ session_open_cl (session_endpoint_cfg_t *rmt, session_handle_t *rsh)
   sh = session_handle (s);
   *rsh = sh;
 
-  session_lookup_add_connection (tc, sh);
+  if (!(tc->flags & TRANSPORT_CONNECTION_F_NO_LOOKUP))
+    session_lookup_add_connection (tc, sh);
+
   return app_worker_connect_notify (app_wrk, s, SESSION_E_NONE, rmt->opaque);
 }
 
@@ -1331,23 +1307,12 @@ session_open_vc (session_endpoint_cfg_t *rmt, session_handle_t *rsh)
   return 0;
 }
 
-int
-session_open_app (session_endpoint_cfg_t *rmt, session_handle_t *rsh)
-{
-  transport_endpoint_cfg_t *tep_cfg = session_endpoint_to_transport_cfg (rmt);
-
-  /* Not supported for now */
-  *rsh = SESSION_INVALID_HANDLE;
-  return transport_connect (rmt->transport_proto, tep_cfg);
-}
-
 typedef int (*session_open_service_fn) (session_endpoint_cfg_t *,
 					session_handle_t *);
 
 static session_open_service_fn session_open_srv_fns[TRANSPORT_N_SERVICES] = {
   session_open_vc,
   session_open_cl,
-  session_open_app,
 };
 
 /**
@@ -1557,8 +1522,10 @@ session_close (session_t * s)
 void
 session_reset (session_t * s)
 {
-  if (s->session_state >= SESSION_STATE_CLOSING)
+  if (s->flags & SESSION_F_APP_CLOSED)
     return;
+  s->flags |= SESSION_F_APP_CLOSED;
+  s->flags &= ~SESSION_F_CUSTOM_FIFO_TUNING;
   /* Drop all outstanding tx data
    * App might disconnect session before connected, in this case,
    * tx_fifo may not be setup yet, so clear only it's inited. */
@@ -1875,16 +1842,27 @@ session_get_transport (session_t * s)
 				   s->connection_index);
 }
 
+session_handle_t
+session_get_next_transport (session_t *s)
+{
+  if (s->session_state != SESSION_STATE_LISTENING)
+    return transport_get_next_transport (session_get_transport_proto (s),
+					 s->connection_index, s->thread_index);
+  else
+    return SESSION_INVALID_HANDLE;
+}
+
 void
-session_get_endpoint (session_t * s, transport_endpoint_t * tep, u8 is_lcl)
+session_get_endpoint (session_t *s, transport_endpoint_t *tep_rmt,
+		      transport_endpoint_t *tep_lcl)
 {
   if (s->session_state != SESSION_STATE_LISTENING)
     return transport_get_endpoint (session_get_transport_proto (s),
-				   s->connection_index, s->thread_index, tep,
-				   is_lcl);
+				   s->connection_index, s->thread_index,
+				   tep_rmt, tep_lcl);
   else
-    return transport_get_listener_endpoint (session_get_transport_proto (s),
-					    s->connection_index, tep, is_lcl);
+    return transport_get_listener_endpoint (
+      session_get_transport_proto (s), s->connection_index, tep_rmt, tep_lcl);
 }
 
 int
@@ -2400,11 +2378,3 @@ session_config_fn (vlib_main_t * vm, unformat_input_t * input)
 }
 
 VLIB_CONFIG_FUNCTION (session_config_fn, "session");
-
-/*
- * fd.io coding-style-patch-verification: ON
- *
- * Local Variables:
- * eval: (c-set-style "gnu")
- * End:
- */

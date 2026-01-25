@@ -1,20 +1,10 @@
 
-/*
- * nsim.h - skeleton vpp engine plug-in header file
- *
+/* SPDX-License-Identifier: Apache-2.0
  * Copyright (c) <current-year> <your-organization>
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at:
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
  */
+
+/* nsim.h - skeleton vpp engine plug-in header file */
+
 #ifndef __included_nsim_h__
 #define __included_nsim_h__
 
@@ -126,11 +116,3 @@ extern vlib_node_registration_t nsim_node;
 extern vlib_node_registration_t nsim_input_node;
 
 #endif /* __included_nsim_h__ */
-
-/*
- * fd.io coding-style-patch-verification: ON
- *
- * Local Variables:
- * eval: (c-set-style "gnu")
- * End:
- */

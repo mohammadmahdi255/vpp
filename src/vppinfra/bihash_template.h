@@ -1,18 +1,6 @@
-/*
-  Copyright (c) 2014 Cisco and/or its affiliates.
-
-  * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at:
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
-*/
+/* SPDX-License-Identifier: Apache-2.0
+ * Copyright (c) 2014 Cisco and/or its affiliates.
+ */
 
 /** @cond DOCUMENTATION_IS_IN_BIHASH_DOC_H */
 
@@ -477,6 +465,15 @@ bucket_changed_retry:
 	  if (BV (clib_bihash_is_free) (&rv))
 	    return -1;
 
+	  if (PREDICT_FALSE (
+		!BV (clib_bihash_key_compare) (rv.key, key_result->key)))
+	    {
+	      if (PREDICT_FALSE (
+		    BV (clib_bihash_search_need_retry) (b, &localb)))
+		goto bucket_changed_retry;
+	      continue;
+	    }
+
 	  *key_result = rv;
 
 	  if (PREDICT_FALSE (BV (clib_bihash_search_need_retry) (b, &localb)))
@@ -587,6 +584,15 @@ bucket_changed_retry:
 	  if (BV (clib_bihash_is_free) (&rv))
 	    return -1;
 
+	  if (PREDICT_FALSE (
+		!BV (clib_bihash_key_compare) (rv.key, search_key->key)))
+	    {
+	      if (PREDICT_FALSE (
+		    BV (clib_bihash_search_need_retry) (b, &localb)))
+		goto bucket_changed_retry;
+	      continue;
+	    }
+
 	  *valuep = rv;
 
 	  if (PREDICT_FALSE (BV (clib_bihash_search_need_retry) (b, &localb)))
@@ -619,11 +625,3 @@ static inline int BV (clib_bihash_search_inline_2)
 #endif /* __included_bihash_template_h__ */
 
 /** @endcond */
-
-/*
- * fd.io coding-style-patch-verification: ON
- *
- * Local Variables:
- * eval: (c-set-style "gnu")
- * End:
- */

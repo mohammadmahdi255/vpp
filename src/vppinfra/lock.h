@@ -1,16 +1,6 @@
 /*
+ * SPDX-License-Identifier: Apache-2.0
  * Copyright (c) 2017 Cisco and/or its affiliates.
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at:
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
  */
 
 #ifndef included_clib_lock_h
@@ -90,6 +80,13 @@ clib_spinlock_free (clib_spinlock_t * p)
       }                                                                       \
   }
 
+#define CLIB_SPINLOCK_TRYLOCK(x)                                              \
+  ({                                                                          \
+    typeof (x) __free = 0;                                                    \
+    __atomic_compare_exchange_n (&(x), &__free, 1, 0, __ATOMIC_ACQUIRE,       \
+				 __ATOMIC_RELAXED);                           \
+  })
+
 #define CLIB_SPINLOCK_UNLOCK(x) __atomic_store_n (&(x), 0, __ATOMIC_RELEASE)
 
 static_always_inline void
@@ -102,10 +99,10 @@ clib_spinlock_lock (clib_spinlock_t * p)
 static_always_inline int
 clib_spinlock_trylock (clib_spinlock_t * p)
 {
-  if (PREDICT_FALSE (CLIB_SPINLOCK_IS_LOCKED (p)))
-    return 0;
-  clib_spinlock_lock (p);
-  return 1;
+  int rv = CLIB_SPINLOCK_TRYLOCK ((*p)->lock);
+  if (rv)
+    CLIB_LOCK_DBG (p);
+  return rv;
 }
 
 static_always_inline void
@@ -216,11 +213,3 @@ clib_rwlock_writer_unlock (clib_rwlock_t * p)
 }
 
 #endif
-
-/*
- * fd.io coding-style-patch-verification: ON
- *
- * Local Variables:
- * eval: (c-set-style "gnu")
- * End:
- */

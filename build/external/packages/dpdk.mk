@@ -21,11 +21,11 @@ DPDK_MLX_IBV_LINK            ?= static
 # On most of the systems, default value for max lcores is 128
 DPDK_MAX_LCORES              ?=
 
-dpdk_version                 ?= 25.07
+dpdk_version                 ?= 25.11
 dpdk_base_url                ?= http://fast.dpdk.org/rel
 dpdk_tarball                 := dpdk-$(dpdk_version).tar.xz
 
-dpdk_tarball_sha256sum_25.07 := 6886cbedc350bb8cbef347d10367d6259e36435627fbb27d578adbdc0d3b410d
+dpdk_tarball_sha256sum_25.11 := 52e90d2a531ef3ded0283bd91abc94980698f1f6471fa09658a0217cf6609526
 
 dpdk_tarball_sha256sum       := $(dpdk_tarball_sha256sum_$(dpdk_version))
 dpdk_url                     := $(dpdk_base_url)/$(dpdk_tarball)
@@ -180,8 +180,6 @@ DPDK_MESON_ARGS = \
 	--libdir lib \
 	--prefix $(dpdk_install_dir) \
 	-Dtests=false \
-	-Dc_args="-I$(dpdk_root_dir)/$(dpdk_install_dir)/include" \
-	-Dc_link_args="-L$(dpdk_root_dir)/$(dpdk_install_dir)/lib" \
 	-Denable_driver_sdk=true \
 	"-Ddisable_drivers=$(DPDK_DRIVERS_DISABLED)" \
 	"-Ddisable_libs=$(DPDK_LIBS_DISABLED)" \
@@ -203,7 +201,12 @@ define dpdk_config_cmds
 	source ../dpdk-meson-venv/bin/activate && \
 	(if ! ls $(PIP_DOWNLOAD_DIR)meson* ; then pip3 download -d $(PIP_DOWNLOAD_DIR) -f $(DL_CACHE_DIR) meson==0.57.2 setuptools wheel pyelftools; fi) && \
 	pip3 install --no-index --find-links=$(PIP_DOWNLOAD_DIR) meson==0.57.2 pyelftools && \
-	meson setup $(dpdk_src_dir) $(dpdk_build_dir) $(DPDK_MESON_ARGS) | tee $(dpdk_config_log) && \
+	PKG_CONFIG_PATH=$(dpdk_root_dir)/$(dpdk_install_dir)/lib/pkgconfig \
+	PKG_CONFIG_SYSROOT_DIR=$(dpdk_root_dir) \
+	meson setup $(dpdk_src_dir) \
+		$(dpdk_build_dir) \
+		$(DPDK_MESON_ARGS) \
+			| tee $(dpdk_config_log) && \
 	deactivate && \
 	echo "DPDK post meson configuration" && \
 	echo "Altering rte_build_config.h" && \

@@ -1,16 +1,6 @@
 /*
+ * SPDX-License-Identifier: Apache-2.0
  * Copyright (c) 2016-2019 Cisco and/or its affiliates.
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at:
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
  */
 
 #include <vnet/tcp/tcp.h>
@@ -1359,7 +1349,7 @@ tcp_timer_retransmit_handler (tcp_connection_t * tc)
 	{
 	  tcp_send_reset (tc);
 	  tcp_connection_set_state (tc, TCP_STATE_CLOSED);
-	  session_transport_closing_notify (&tc->connection);
+	  session_transport_reset_notify (&tc->connection);
 	  session_transport_closed_notify (&tc->connection);
 	  tcp_connection_timers_reset (tc);
 	  tcp_program_cleanup (wrk, tc);
@@ -2440,9 +2430,14 @@ tcp46_reset_inline (vlib_main_t *vm, vlib_node_runtime_t *node,
 
       /* IP lookup in fib where it was received. Previous value
        * was overwritten by tcp-input */
-      vnet_buffer (b[0])->sw_if_index[VLIB_TX] =
-	vec_elt (ip4_main.fib_index_by_sw_if_index,
-		 vnet_buffer (b[0])->sw_if_index[VLIB_RX]);
+      if (is_ip4)
+	vnet_buffer (b[0])->sw_if_index[VLIB_TX] =
+	  vec_elt (ip4_main.fib_index_by_sw_if_index,
+		   vnet_buffer (b[0])->sw_if_index[VLIB_RX]);
+      else
+	vnet_buffer (b[0])->sw_if_index[VLIB_TX] =
+	  vec_elt (ip6_main.fib_index_by_sw_if_index,
+		   vnet_buffer (b[0])->sw_if_index[VLIB_RX]);
 
       b[0]->flags |= VNET_BUFFER_F_LOCALLY_ORIGINATED;
       next[0] = TCP_RESET_NEXT_IP_LOOKUP;
@@ -2502,11 +2497,3 @@ VLIB_REGISTER_NODE (tcp6_reset_node) = {
   },
   .format_trace = format_tcp_tx_trace,
 };
-
-/*
- * fd.io coding-style-patch-verification: ON
- *
- * Local Variables:
- * eval: (c-set-style "gnu")
- * End:
- */

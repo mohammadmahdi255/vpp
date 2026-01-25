@@ -1,16 +1,6 @@
 /*
+ * SPDX-License-Identifier: Apache-2.0
  * Copyright (c) 2015 Cisco and/or its affiliates.
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at:
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
  */
 
 #include <sys/random.h>
@@ -32,6 +22,57 @@ vlib_combined_counter_main_t ipsec_sa_counters = {
 };
 /* Per-SA error counters */
 vlib_simple_counter_main_t ipsec_sa_err_counters[IPSEC_SA_N_ERRORS];
+
+static_always_inline void
+ipsec_sa_inb_refresh_op_tmpl (ipsec_sa_inb_rt_t *irt)
+{
+  if (!irt)
+    return;
+
+  if (irt->is_async || irt->key_index == ~0 || !irt->op_id)
+    {
+      irt->op_tmpl_single = (vnet_crypto_op_t){};
+      irt->op_tmpl_chained = (vnet_crypto_op_t){};
+      return;
+    }
+
+  vnet_crypto_op_init (&irt->op_tmpl_single, irt->op_id);
+  vnet_crypto_op_init (&irt->op_tmpl_chained, irt->op_id);
+
+  irt->op_tmpl_single.key_index = irt->key_index;
+  irt->op_tmpl_chained.key_index = irt->key_index;
+
+  irt->op_tmpl_chained.flags = VNET_CRYPTO_OP_FLAG_CHAINED_BUFFERS;
+  irt->op_tmpl_single.flags = 0;
+
+  if (irt->is_aead)
+    {
+      u8 aad_len = irt->use_esn ? 12 : 8;
+      irt->op_tmpl_single.aad_len = aad_len;
+      irt->op_tmpl_chained.aad_len = aad_len;
+      irt->op_tmpl_single.digest_len = 0;
+      irt->op_tmpl_chained.digest_len = 0;
+      u8 tag_len = irt->integ_icv_size;
+      irt->op_tmpl_single.tag_len = tag_len;
+      irt->op_tmpl_chained.tag_len = tag_len;
+    }
+  else if (irt->integ_icv_size)
+    {
+      irt->op_tmpl_single.aad_len = 0;
+      irt->op_tmpl_chained.aad_len = 0;
+      irt->op_tmpl_single.flags |= VNET_CRYPTO_OP_FLAG_HMAC_CHECK;
+      irt->op_tmpl_chained.flags |= VNET_CRYPTO_OP_FLAG_HMAC_CHECK;
+      irt->op_tmpl_single.digest_len = irt->integ_icv_size;
+      irt->op_tmpl_chained.digest_len = irt->integ_icv_size;
+    }
+  else
+    {
+      irt->op_tmpl_single.aad_len = 0;
+      irt->op_tmpl_chained.aad_len = 0;
+      irt->op_tmpl_single.digest_len = 0;
+      irt->op_tmpl_chained.digest_len = 0;
+    }
+}
 
 static clib_error_t *
 ipsec_call_add_del_callbacks (ipsec_main_t * im, ipsec_sa_t * sa,
@@ -96,49 +137,61 @@ ipsec_sa_stack (ipsec_sa_t * sa)
 void
 ipsec_sa_set_async_mode (ipsec_sa_t *sa, int is_enabled)
 {
-  u32 cipher_key_index, integ_key_index;
-  vnet_crypto_op_id_t inb_cipher_op_id, outb_cipher_op_id, integ_op_id;
+  u32 key_index;
+  vnet_crypto_op_id_t inb_op_id, outb_op_id;
   u32 is_async;
-  if (is_enabled)
-    {
-      if (sa->linked_key_index != ~0)
-	cipher_key_index = sa->linked_key_index;
-      else
-	cipher_key_index = sa->crypto_sync_key_index;
 
-      outb_cipher_op_id = sa->crypto_async_enc_op_id;
-      inb_cipher_op_id = sa->crypto_async_dec_op_id;
-      integ_key_index = ~0;
-      integ_op_id = ~0;
+      if (sa->linked_key_index != ~0)
+    key_index = sa->linked_key_index;
+      else
+    key_index = sa->crypto_sync_key_index;
+
+      if (is_enabled)
+    {
+      outb_op_id = sa->crypto_async_enc_op_id;
+      inb_op_id = sa->crypto_async_dec_op_id;
       is_async = 1;
     }
   else
     {
-      cipher_key_index = sa->crypto_sync_key_index;
-      outb_cipher_op_id = sa->crypto_sync_enc_op_id;
-      inb_cipher_op_id = sa->crypto_sync_dec_op_id;
-      integ_key_index = sa->integ_sync_key_index;
-      integ_op_id = sa->integ_sync_op_id;
+      if (key_index == ~0)
+	key_index = sa->integ_sync_key_index;
+
+      if (key_index == ~0)
+	{
+	  outb_op_id = sa->crypto_sync_enc_op_id;
+	  inb_op_id = sa->crypto_sync_dec_op_id;
+	}
+      else
+	{
+	  vnet_crypto_key_t *key = vnet_crypto_get_key (key_index);
+	  vnet_crypto_op_id_t *op_ids = vnet_crypto_ops_from_alg (key->alg);
+	  outb_op_id = op_ids[VNET_CRYPTO_OP_TYPE_HMAC];
+	  inb_op_id = op_ids[VNET_CRYPTO_OP_TYPE_HMAC];
+
+	  if (!outb_op_id || !inb_op_id)
+	    {
+	      outb_op_id = op_ids[VNET_CRYPTO_OP_TYPE_ENCRYPT];
+	      inb_op_id = op_ids[VNET_CRYPTO_OP_TYPE_DECRYPT];
+	    }
+	}
       is_async = 0;
     }
 
   if (ipsec_sa_get_inb_rt (sa))
     {
       ipsec_sa_inb_rt_t *irt = ipsec_sa_get_inb_rt (sa);
-      irt->cipher_key_index = cipher_key_index;
-      irt->integ_key_index = integ_key_index;
-      irt->cipher_op_id = inb_cipher_op_id;
-      irt->integ_op_id = integ_op_id;
+      irt->key_index = key_index;
+      irt->op_id = inb_op_id;
       irt->is_async = is_async;
+      ipsec_sa_inb_refresh_op_tmpl (irt);
     }
 
   if (ipsec_sa_get_outb_rt (sa))
     {
       ipsec_sa_outb_rt_t *ort = ipsec_sa_get_outb_rt (sa);
-      ort->cipher_key_index = cipher_key_index;
-      ort->integ_key_index = integ_key_index;
-      ort->cipher_op_id = outb_cipher_op_id;
-      ort->integ_op_id = integ_op_id;
+      ort->key_index = key_index;
+      ort->op_id = outb_op_id;
       ort->is_async = is_async;
     }
 }
@@ -223,10 +276,14 @@ ipsec_sa_init_runtime (ipsec_sa_t *sa)
       irt->is_ctr = alg->is_ctr;
       irt->is_aead = alg->is_aead;
       irt->is_null_gmac = alg->is_null_gmac;
+      irt->op_id = alg->is_null_gmac ? sa->crypto_sync_dec_op_id : irt->op_id;
       irt->cipher_iv_size = im->crypto_algs[sa->crypto_alg].iv_size;
+      irt->esp_advance = irt->cipher_iv_size + sizeof (esp_header_t);
       irt->integ_icv_size = integ_icv_size;
+      irt->tail_base = sizeof (esp_footer_t) + irt->integ_icv_size;
       irt->salt = sa->salt;
       irt->async_op_id = sa->crypto_async_dec_op_id;
+      ipsec_sa_inb_refresh_op_tmpl (irt);
       ASSERT (irt->cipher_iv_size <= ESP_MAX_IV_SIZE);
     }
 
@@ -238,18 +295,55 @@ ipsec_sa_init_runtime (ipsec_sa_t *sa)
       ort->is_ctr = alg->is_ctr;
       ort->is_aead = alg->is_aead;
       ort->is_null_gmac = alg->is_null_gmac;
+      ort->op_id = alg->is_null_gmac ? sa->crypto_sync_enc_op_id : ort->op_id;
       ort->is_tunnel = ipsec_sa_is_set_IS_TUNNEL (sa);
       ort->is_tunnel_v6 = ipsec_sa_is_set_IS_TUNNEL_V6 (sa);
       ort->udp_encap = ipsec_sa_is_set_UDP_ENCAP (sa);
       ort->esp_block_align =
 	clib_max (4, im->crypto_algs[sa->crypto_alg].block_align);
+      ort->need_udp_cksum = ort->udp_encap && ort->is_tunnel_v6;
       ort->cipher_iv_size = im->crypto_algs[sa->crypto_alg].iv_size;
       ort->integ_icv_size = integ_icv_size;
       ort->salt = sa->salt;
       ort->spi_be = clib_host_to_net_u32 (sa->spi);
       ort->tunnel_flags = sa->tunnel.t_encap_decap_flags;
+      ort->need_tunnel_fixup = (ort->tunnel_flags != 0);
       ort->async_op_id = sa->crypto_async_enc_op_id;
       ort->t_dscp = sa->tunnel.t_dscp;
+      vnet_crypto_op_init (&ort->op_tmpl_single, ort->op_id);
+      vnet_crypto_op_init (&ort->op_tmpl_chained, ort->op_id);
+      ort->op_tmpl_single.key_index = ort->key_index;
+      ort->op_tmpl_chained.key_index = ort->key_index;
+      ort->op_tmpl_chained.flags |= VNET_CRYPTO_OP_FLAG_CHAINED_BUFFERS;
+      if (ort->is_aead)
+	{
+	  u8 aad_len = ort->use_esn ? 12 : 8;
+	  ort->op_tmpl_single.aad_len = aad_len;
+	  ort->op_tmpl_chained.aad_len = aad_len;
+	  ort->op_tmpl_single.digest_len = 0;
+	  ort->op_tmpl_chained.digest_len = 0;
+	  u8 tag_len = ort->integ_icv_size;
+	  ort->op_tmpl_single.tag_len = tag_len;
+	  ort->op_tmpl_chained.tag_len = tag_len;
+	}
+      else if (ort->integ_icv_size)
+	{
+	  ort->op_tmpl_single.digest_len = ort->integ_icv_size;
+	  ort->op_tmpl_chained.digest_len = ort->integ_icv_size;
+	}
+      else
+	{
+	  ort->op_tmpl_single.digest_len = 0;
+	  ort->op_tmpl_chained.digest_len = 0;
+	}
+      ort->bld_op_tmpl[VNET_CRYPTO_OP_TYPE_ENCRYPT] =
+	im->crypto_algs[sa->crypto_alg].bld_enc_op_tmpl;
+      ort->bld_op_tmpl[VNET_CRYPTO_OP_TYPE_HMAC] =
+	im->integ_algs[sa->integ_alg].bld_integ_op_tmpl;
+      if (ort->key_index == ~0 || !ort->op_id || ort->is_async)
+	ort->prepare_sync_op = 0;
+      else
+	ort->prepare_sync_op = 1;
 
       ASSERT (ort->cipher_iv_size <= ESP_MAX_IV_SIZE);
       ASSERT (ort->esp_block_align <= ESP_MAX_BLOCK_SIZE);
@@ -355,6 +449,8 @@ ipsec_sa_update (u32 id, u16 src_port, u16 dst_port, const tunnel_t *tun,
 	  dpo_reset (&ort->dpo);
 
 	  ort->tunnel_flags = sa->tunnel.t_encap_decap_flags;
+	  ort->need_tunnel_fixup = (ort->tunnel_flags != 0);
+	  ort->need_udp_cksum = ort->udp_encap && ort->is_tunnel_v6;
 
 	  rv = tunnel_resolve (&sa->tunnel, FIB_NODE_TYPE_IPSEC_SA, sa_index);
 
@@ -420,7 +516,6 @@ ipsec_sa_add_and_lock (u32 id, u32 spi, ipsec_protocol_t proto,
 {
   vlib_main_t *vm = vlib_get_main ();
   ipsec_main_t *im = &ipsec_main;
-  ipsec_main_crypto_alg_t *alg = im->crypto_algs + crypto_alg;
   ipsec_sa_inb_rt_t *irt;
   ipsec_sa_outb_rt_t *ort;
   clib_error_t *err;
@@ -489,6 +584,8 @@ ipsec_sa_add_and_lock (u32 id, u32 spi, ipsec_protocol_t proto,
   sa->stat_index = sa_index;
   sa->protocol = proto;
   sa->salt = salt;
+  sa->crypto_sync_key_index = ~0;
+  sa->integ_sync_key_index = ~0;
 
   if (integ_alg != IPSEC_INTEG_ALG_NONE)
     {
@@ -522,7 +619,7 @@ ipsec_sa_add_and_lock (u32 id, u32 spi, ipsec_protocol_t proto,
 	}
     }
 
-  if (sa->crypto_async_enc_op_id && alg->is_aead == 0)
+  if (sa->crypto_sync_enc_op_id && sa->integ_sync_op_id)
     sa->linked_key_index =
       vnet_crypto_key_add_linked (vm, sa->crypto_sync_key_index,
 				  sa->integ_sync_key_index); // AES-CBC & HMAC
@@ -853,11 +950,3 @@ ipsec_sa_init (vlib_main_t *vm)
 }
 
 VLIB_INIT_FUNCTION (ipsec_sa_init);
-
-/*
- * fd.io coding-style-patch-verification: ON
- *
- * Local Variables:
- * eval: (c-set-style "gnu")
- * End:
- */

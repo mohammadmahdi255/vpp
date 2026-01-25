@@ -1,17 +1,8 @@
 /*
+ * SPDX-License-Identifier: Apache-2.0
  * Copyright (c) 2017-2019 Cisco and/or its affiliates.
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at:
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
  */
+
 #ifndef __included_session_h__
 #define __included_session_h__
 
@@ -571,8 +562,9 @@ void session_add_self_custom_tx_evt (transport_connection_t * tc,
 				     u8 has_prio);
 void sesssion_reschedule_tx (transport_connection_t * tc);
 transport_connection_t *session_get_transport (session_t * s);
-void session_get_endpoint (session_t * s, transport_endpoint_t * tep,
-			   u8 is_lcl);
+session_handle_t session_get_next_transport (session_t *s);
+void session_get_endpoint (session_t *s, transport_endpoint_t *tep_rmt,
+			   transport_endpoint_t *tep_lcl);
 int session_transport_attribute (session_t *s, u8 is_get,
 				 transport_endpt_attr_t *attr);
 u64 session_segment_handle (session_t *s);
@@ -1253,11 +1245,3 @@ session_rule_table_is_enabled (void)
 }
 
 #endif /* __included_session_h__ */
-
-/*
- * fd.io coding-style-patch-verification: ON
- *
- * Local Variables:
- * eval: (c-set-style "gnu")
- * End:
- */

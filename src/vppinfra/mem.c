@@ -1,16 +1,6 @@
 /*
+ * SPDX-License-Identifier: Apache-2.0
  * Copyright (c) 2020 Cisco and/or its affiliates.
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at:
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
  */
 
 #include <vppinfra/clib.h>
@@ -24,6 +14,18 @@
 #endif
 
 __clib_export clib_mem_main_t clib_mem_main;
+__clib_export __thread clib_mem_thread_main_t clib_mem_thread_main;
+
+__clib_export void
+clib_mem_thread_init ()
+{
+  clib_mem_thread_main_t *m = &clib_mem_thread_main;
+
+  clib_mem_thread_main.active_heap = clib_mem_main.main_heap;
+  m = __atomic_exchange_n (&clib_mem_main.threads, m, __ATOMIC_RELAXED);
+  clib_mem_thread_main.next = m;
+  clib_mem_thread_main.thread_index = os_get_thread_index ();
+}
 
 __clib_export uword
 clib_mem_vm_reserve (uword start, uword size, u8 log2_align)
@@ -125,9 +127,11 @@ format_clib_mem_page_stats (u8 * s, va_list * va)
   clib_mem_page_stats_t *stats = va_arg (*va, clib_mem_page_stats_t *);
   u32 indent = format_get_indent (s) + 2;
 
-  s = format (s, "page stats: page-size %U, total %lu, mapped %lu, "
-	      "not-mapped %lu", format_log2_page_size, stats->log2_page_sz,
-	      stats->total, stats->mapped, stats->not_mapped);
+  s = format (s,
+	      "page stats: page-size %U, total %lu, populated %lu, "
+	      "not-populated %lu",
+	      format_log2_page_size, stats->log2_page_sz, stats->total,
+	      stats->populated, stats->not_populated);
 
   if (stats->unknown)
     s = format (s, ", unknown %lu", stats->unknown);
@@ -142,11 +146,3 @@ format_clib_mem_page_stats (u8 * s, va_list * va)
 
   return s;
 }
-
-/*
- * fd.io coding-style-patch-verification: ON
- *
- * Local Variables:
- * eval: (c-set-style "gnu")
- * End:
- */

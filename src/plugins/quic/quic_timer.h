@@ -17,14 +17,8 @@ quic_update_time (f64 now, u8 thread_index)
   tw_timer_wheel_1t_3w_1024sl_ov_t *tw =
     &quic_wrk_ctx_get (qm, thread_index)->timer_wheel;
 
-  if (PREDICT_TRUE (qm->engine_is_initialized[qm->engine_type] != 0))
-    {
-      vlib_main_t *vlib_main = vlib_get_main ();
-      f64 time = vlib_time_now (vlib_main);
-      quic_wrk_ctx_get (qm, thread_index)->time_now =
-	(int64_t) (time * 1000.f);
-      tw_timer_expire_timers_1t_3w_1024sl_ov (tw, now);
-    }
+  quic_wrk_ctx_get (qm, thread_index)->time_now = (int64_t) (now * 1000.f);
+  tw_timer_expire_timers_1t_3w_1024sl_ov (tw, now);
 }
 
 static_always_inline void
@@ -45,9 +39,9 @@ quic_update_timer (quic_worker_ctx_t *wc, quic_ctx_t *ctx,
   session_t *quic_session;
   int rv;
 
+  ASSERT (!quic_ctx_is_stream (ctx));
   /*  This timeout is in ms which is the unit of our timer */
   next_interval = next_timeout - wc->time_now;
-
   if (next_timeout == 0 || next_interval <= 0)
     {
       if (ctx->c_s_index == QUIC_SESSION_INVALID)

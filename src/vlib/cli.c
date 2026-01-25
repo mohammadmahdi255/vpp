@@ -1,41 +1,9 @@
-/*
+/* SPDX-License-Identifier: Apache-2.0 OR MIT
  * Copyright (c) 2015 Cisco and/or its affiliates.
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at:
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
-/*
- * cli.c: command line interface
- *
  * Copyright (c) 2008 Eliot Dresselhaus
- *
- * Permission is hereby granted, free of charge, to any person obtaining
- * a copy of this software and associated documentation files (the
- * "Software"), to deal in the Software without restriction, including
- * without limitation the rights to use, copy, modify, merge, publish,
- * distribute, sublicense, and/or sell copies of the Software, and to
- * permit persons to whom the Software is furnished to do so, subject to
- * the following conditions:
- *
- * The above copyright notice and this permission notice shall be
- * included in all copies or substantial portions of the Software.
- *
- *  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
- *  EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
- *  MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
- *  NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE
- *  LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
- *  OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
- *  WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
+
+/* cli.c: command line interface */
 
 #include <vlib/vlib.h>
 #include <vlib/stats/stats.h>
@@ -806,7 +774,7 @@ show_memory_usage (vlib_main_t * vm,
 {
   clib_mem_main_t *mm = &clib_mem_main;
   int verbose __attribute__ ((unused)) = 0;
-  int api_segment = 0, stats_segment = 0, main_heap = 0, numa_heaps = 0;
+  int api_segment = 0, stats_segment = 0, main_heap = 0;
   int map = 0;
   clib_error_t *error;
   uword clib_mem_trace_enable_disable (uword enable);
@@ -823,8 +791,6 @@ show_memory_usage (vlib_main_t * vm,
 	stats_segment = 1;
       else if (unformat (input, "main-heap"))
 	main_heap = 1;
-      else if (unformat (input, "numa-heaps"))
-	numa_heaps = 1;
       else if (unformat (input, "map"))
 	map = 1;
       else
@@ -835,10 +801,15 @@ show_memory_usage (vlib_main_t * vm,
 	}
     }
 
-  if ((api_segment + stats_segment + main_heap + numa_heaps + map) == 0)
-    return clib_error_return
-      (0, "Need one of api-segment, stats-segment, main-heap, numa-heaps "
-       "or map");
+  if ((api_segment + stats_segment + main_heap + map) == 0)
+    {
+      was_enabled = clib_mem_trace_enable_disable (0);
+      vec_foreach_pointer (h, clib_mem_main.heaps)
+	vlib_cli_output (vm, "%U\n\n", format_clib_mem_heap, h, 1);
+
+      clib_mem_trace_enable_disable (was_enabled);
+      return 0;
+    }
 
   if (api_segment)
     {
@@ -881,10 +852,6 @@ show_memory_usage (vlib_main_t * vm,
   {
     if (main_heap)
       {
-	/*
-	 * Note: the foreach_vlib_main causes allocator traffic,
-	 * so shut off tracing before we go there...
-	 */
 	was_enabled = clib_mem_trace_enable_disable (0);
 
 	vlib_cli_output (vm, "  %U\n", format_clib_mem_heap, mm->main_heap,
@@ -904,7 +871,7 @@ show_memory_usage (vlib_main_t * vm,
 		    "StartAddr", "size", "FD", "PageSz", "Pages");
 	while ((numa = vlib_mem_get_next_numa_node (numa)) != -1)
 	  s = format (s, " Numa%u", numa);
-	s = format (s, " NotMap");
+	s = format (s, " NotPop");
 	s = format (s, " Name");
 	vlib_cli_output (vm, "%v", s);
 	vec_reset_length (s);
@@ -928,7 +895,7 @@ show_memory_usage (vlib_main_t * vm,
 			hdr->num_pages);
 	    while ((numa = vlib_mem_get_next_numa_node (numa)) != -1)
 	      s = format (s, "%6lu", stats.per_numa[numa]);
-	    s = format (s, "%7lu", stats.not_mapped);
+	    s = format (s, "%7lu", stats.not_populated);
 	    s = format (s, " %s", hdr->name);
 	    vlib_cli_output (vm, "%v", s);
 	    vec_reset_length (s);
@@ -942,7 +909,7 @@ show_memory_usage (vlib_main_t * vm,
 VLIB_CLI_COMMAND (show_memory_usage_command, static) = {
   .path = "show memory",
   .short_help = "show memory [api-segment][stats-segment][verbose]\n"
-		"            [numa-heaps][map][main-heap]",
+		"            [map][main-heap]",
   .function = show_memory_usage,
 };
 
@@ -1074,7 +1041,7 @@ save_memory_trace (vlib_main_t *vm, unformat_input_t *input,
 {
   char *file, *chroot_file;
   uword was_enabled;
-  mheap_trace_t *t, *mem_traces = 0;
+  clib_mem_trace_t *t, *mem_traces = 0;
   u8 *tmp;
   cJSON *traces, *trace, *traceback, *symbol;
   int i;
@@ -1927,11 +1894,3 @@ vlib_cli_init (vlib_main_t * vm)
 }
 
 VLIB_INIT_FUNCTION (vlib_cli_init);
-
-/*
- * fd.io coding-style-patch-verification: ON
- *
- * Local Variables:
- * eval: (c-set-style "gnu")
- * End:
- */

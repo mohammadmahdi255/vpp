@@ -1,16 +1,6 @@
 /*
+ * SPDX-License-Identifier: Apache-2.0
  * Copyright (c) 2017-2019 Cisco and/or its affiliates.
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at:
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
  */
 
 /** Generate typed init functions for multiple hash table styles... */
@@ -544,7 +534,11 @@ session_lookup_endpoint_listener (u32 table_index, session_endpoint_t * sep,
 	    session_rules_table_lookup4 (st->srtg_handle, sep->transport_proto,
 					 &lcl4, &sep->ip.ip4, 0, sep->port);
 	  if (session_lookup_action_index_is_valid (ai))
-	    return session_lookup_action_to_handle (ai);
+	    {
+	      session_t *ls = session_lookup_action_to_session (
+		ai, FIB_PROTOCOL_IP4, sep->transport_proto);
+	      return ls ? ls->handle : SESSION_INVALID_HANDLE;
+	    }
 	}
     }
   else
@@ -567,7 +561,11 @@ session_lookup_endpoint_listener (u32 table_index, session_endpoint_t * sep,
 	    session_rules_table_lookup6 (st->srtg_handle, sep->transport_proto,
 					 &lcl6, &sep->ip.ip6, 0, sep->port);
 	  if (session_lookup_action_index_is_valid (ai))
-	    return session_lookup_action_to_handle (ai);
+	    {
+	      session_t *ls = session_lookup_action_to_session (
+		ai, FIB_PROTOCOL_IP6, sep->transport_proto);
+	      return ls ? ls->handle : SESSION_INVALID_HANDLE;
+	    }
 	}
     }
   return SESSION_INVALID_HANDLE;
@@ -2041,11 +2039,3 @@ session_lookup_table_cleanup (u32 fib_proto, u32 fib_index, u32 ns_index)
 	  vec_del1 (st->appns_index, i);
       }
 }
-
-/*
- * fd.io coding-style-patch-verification: ON
- *
- * Local Variables:
- * eval: (c-set-style "gnu")
- * End:
- */

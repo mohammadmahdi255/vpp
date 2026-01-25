@@ -1,16 +1,5 @@
-/*
+/* SPDX-License-Identifier: Apache-2.0
  * Copyright (c) 2020 Intel and/or its affiliates.
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at:
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
  */
 
 #include <vnet/crypto/crypto.h>
@@ -48,9 +37,7 @@ typedef struct
   u8 last_serve_encrypt;
   u8 last_return_queue;
   vnet_crypto_op_t *crypto_ops;
-  vnet_crypto_op_t *integ_ops;
   vnet_crypto_op_t *chained_crypto_ops;
-  vnet_crypto_op_t *chained_integ_ops;
   vnet_crypto_op_chunk_t *chunks;
   u8 self_crypto_enabled;
 } crypto_sw_scheduler_per_thread_data_t;
@@ -70,11 +57,3 @@ extern int crypto_sw_scheduler_set_worker_crypto (u32 worker_idx, u8 enabled);
 extern clib_error_t *crypto_sw_scheduler_api_init (vlib_main_t * vm);
 
 #endif // __crypto_native_h__
-
-/*
- * fd.io coding-style-patch-verification: ON
- *
- * Local Variables:
- * eval: (c-set-style "gnu")
- * End:
- */

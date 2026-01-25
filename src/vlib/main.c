@@ -1,41 +1,9 @@
-/*
+/* SPDX-License-Identifier: Apache-2.0 OR MIT
  * Copyright (c) 2015 Cisco and/or its affiliates.
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at:
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
-/*
- * main.c: main vector processing loop
- *
  * Copyright (c) 2008 Eliot Dresselhaus
- *
- * Permission is hereby granted, free of charge, to any person obtaining
- * a copy of this software and associated documentation files (the
- * "Software"), to deal in the Software without restriction, including
- * without limitation the rights to use, copy, modify, merge, publish,
- * distribute, sublicense, and/or sell copies of the Software, and to
- * permit persons to whom the Software is furnished to do so, subject to
- * the following conditions:
- *
- * The above copyright notice and this permission notice shall be
- * included in all copies or substantial portions of the Software.
- *
- *  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
- *  EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
- *  MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
- *  NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE
- *  LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
- *  OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
- *  WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
+
+/* main.c: main vector processing loop */
 
 #include <math.h>
 #include <vppinfra/format.h>
@@ -1465,6 +1433,8 @@ process_expired_timers (u32 *v)
       else if (e.type == VLIB_TW_EVENT_T_SCHED_NODE)
 	{
 	  vec_add1 (nm->sched_node_pending, e.index);
+	  vlib_node_runtime_t *nr = vlib_node_get_runtime (vm, e.index);
+	  nr->stop_timer_handle_plus_1 = CLIB_U32_MAX;
 	}
       else
 	ASSERT (0);
@@ -1596,7 +1566,13 @@ vlib_main_or_worker_loop (vlib_main_t * vm, int is_main)
 		  vlib_node_runtime_t *n;
 		  n = vec_elt_at_index (nm->nodes_by_type[nt], int_num);
 		  if (n->stop_timer_handle_plus_1)
-		  vlib_node_unschedule (vm, n->node_index);
+		  {
+		    /* CLIB_U32_MAX means just expired */
+		    if (n->stop_timer_handle_plus_1 == CLIB_U32_MAX)
+		      n->stop_timer_handle_plus_1 = 0;
+		    else
+		      vlib_node_unschedule (vm, n->node_index);
+		  }
 		  cpu_time_now = dispatch_node (
 		    vm, n, nt,
 		    /* frame */ 0, VLIB_NODE_DISPATCH_REASON_INTERRUPT,
@@ -1615,7 +1591,7 @@ vlib_main_or_worker_loop (vlib_main_t * vm, int is_main)
 		{
 		  vlib_node_runtime_t *nr =
 		    vlib_node_get_runtime (vm, n->index);
-		  if (nr->stop_timer_handle_plus_1)
+		  if (nr->stop_timer_handle_plus_1 == CLIB_U32_MAX)
 		  {
 		    nr->stop_timer_handle_plus_1 = 0;
 		    cpu_time_now = dispatch_node (
@@ -2121,11 +2097,3 @@ vlib_exit_with_status (vlib_main_t *vm, int status)
   vm->main_loop_exit_status = status;
   __atomic_store_n (&vm->main_loop_exit_now, 1, __ATOMIC_RELEASE);
 }
-
-/*
- * fd.io coding-style-patch-verification: ON
- *
- * Local Variables:
- * eval: (c-set-style "gnu")
- * End:
- */

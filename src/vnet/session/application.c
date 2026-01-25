@@ -1,16 +1,6 @@
 /*
+ * SPDX-License-Identifier: Apache-2.0
  * Copyright (c) 2017-2019 Cisco and/or its affiliates.
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at:
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
  */
 
 #include <vnet/session/application.h>
@@ -847,7 +837,7 @@ application_alloc_and_init (app_init_args_t *a)
   if (opts[APP_OPTIONS_FLAGS] & APP_OPTIONS_FLAGS_EVT_MQ_USE_EVENTFD)
     props->use_mq_eventfd = 1;
   if (opts[APP_OPTIONS_TLS_ENGINE])
-    app->tls_engine = opts[APP_OPTIONS_TLS_ENGINE];
+    app->crypto_ctx.tls_engine = opts[APP_OPTIONS_TLS_ENGINE];
   if (opts[APP_OPTIONS_MAX_FIFO_SIZE])
     props->max_fifo_size = opts[APP_OPTIONS_MAX_FIFO_SIZE];
   if (opts[APP_OPTIONS_HIGH_WATERMARK])
@@ -955,16 +945,16 @@ application_detach_process (application_t * app, u32 api_client_index)
   APP_DBG ("Detaching for app %v index %u api client index %u", app->name,
 	   app->app_index, api_client_index);
 
-  pool_foreach (wrk_map, app->worker_maps)  {
-    app_wrk = app_worker_get (wrk_map->wrk_index);
-    if (app_wrk->api_client_index == api_client_index)
-      vec_add1 (wrks, app_wrk->wrk_index);
-  }
+  pool_foreach (wrk_map, app->worker_maps)
+    {
+      app_wrk = app_worker_get (wrk_map->wrk_index);
+      if (app_wrk->api_client_index == api_client_index)
+	vec_add1 (wrks, app_wrk->wrk_index);
+    }
 
   if (!vec_len (wrks))
     {
-      clib_warning ("no workers for app %u api_index %u", app->app_index,
-		    api_client_index);
+      application_free (app);
       return;
     }
 
@@ -1821,16 +1811,6 @@ application_format_connects (application_t * app, int verbose)
 }
 
 u8 *
-format_crypto_context (u8 * s, va_list * args)
-{
-  crypto_context_t *crctx = va_arg (*args, crypto_context_t *);
-  s = format (s, "[0x%x][sub%d,ckpair%x]", crctx->ctx_index,
-	      crctx->n_subscribers, crctx->ckpair_index);
-  s = format (s, "[engine:%U]", format_crypto_engine, crctx->crypto_engine);
-  return s;
-}
-
-u8 *
 format_application (u8 * s, va_list * args)
 {
   application_t *app = va_arg (*args, application_t *);
@@ -2083,11 +2063,3 @@ VLIB_CLI_COMMAND (show_app_command, static) = {
 		"[transports]",
   .function = show_app_command_fn,
 };
-
-/*
- * fd.io coding-style-patch-verification: ON
- *
- * Local Variables:
- * eval: (c-set-style "gnu")
- * End:
- */

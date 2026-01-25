@@ -1,16 +1,6 @@
 /*
+ * SPDX-License-Identifier: Apache-2.0
  * Copyright (c) 2021 Cisco and/or its affiliates.
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at:
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
  */
 
 #include <hs_apps/vcl/vcl_test.h>
@@ -653,6 +643,14 @@ vt_quic_connect (vcl_test_session_t *ts, vppcom_endpt_t *endpt)
       return ts->fd;
     }
 
+  if (vt->cfg.test == HS_TEST_TYPE_UNI)
+    {
+      flags = VPPCOM_STREAM_F_UNIDIRECTIONAL;
+      flen = sizeof (flags);
+      vppcom_session_attr (ts->fd, VPPCOM_ATTR_SET_STREAM_FLAGS, &flags,
+			   &flen);
+    }
+
   /* Choose qession to use for stream */
   tq = &wrk->qsessions[ts->session_index / vt->cfg.num_test_sessions_perq];
 
@@ -717,13 +715,34 @@ static int
 vt_quic_accept (int listen_fd, vcl_test_session_t *ts)
 {
   int client_fd;
+  uint32_t flags, flen;
 
   client_fd = vppcom_session_accept (listen_fd, &ts->endpt, 0);
   if (client_fd < 0)
     {
-      vterr ("vppcom_session_accept()", client_fd);
+      if (client_fd != VPPCOM_EAGAIN)
+	vterr ("vppcom_session_accept()", client_fd);
       return client_fd;
     }
+
+  if (vppcom_session_is_stream (client_fd))
+    {
+      flen = sizeof (flags);
+      vppcom_session_attr (client_fd, VPPCOM_ATTR_GET_STREAM_FLAGS, &flags,
+			   &flen);
+      if (ts->cfg.test == HS_TEST_TYPE_UNI &&
+	  !(flags & VPPCOM_STREAM_F_UNIDIRECTIONAL))
+	{
+	  vtwrn ("expected unidirectional stream");
+	  vppcom_session_close (client_fd);
+	  return VPPCOM_EINVAL;
+	}
+    }
+
+  flen = sizeof (flags);
+  flags = O_NONBLOCK;
+  vppcom_session_attr (client_fd, VPPCOM_ATTR_SET_FLAGS, &flags, &flen);
+
   ts->fd = client_fd;
   ts->is_open = 1;
   ts->read = vcl_test_read;
@@ -737,7 +756,7 @@ vt_quic_close (vcl_test_session_t *ts)
 {
   int listener_fd = vppcom_session_listener (ts->fd);
 
-  if ((vppcom_session_n_accepted (listener_fd) == 0) &
+  if ((vppcom_session_n_accepted (listener_fd) == 0) &&
       vppcom_session_is_connectable_listener (listener_fd))
     {
       vtinf ("Connected Listener fd %x has no more sessions", listener_fd);
@@ -1447,11 +1466,3 @@ static const vcl_test_proto_vft_t vcl_test_http = {
 };
 
 VCL_TEST_REGISTER_PROTO (VPPCOM_PROTO_HTTP, vcl_test_http);
-
-/*
- * fd.io coding-style-patch-verification: ON
- *
- * Local Variables:
- * eval: (c-set-style "gnu")
- * End:
- */

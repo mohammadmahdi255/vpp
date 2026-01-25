@@ -1,17 +1,8 @@
 /*
+ * SPDX-License-Identifier: Apache-2.0
  * Copyright (c) 2016-2019 Cisco and/or its affiliates.
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at:
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
  */
+
 #ifndef __included_uri_h__
 #define __included_uri_h__
 
@@ -66,9 +57,6 @@ typedef struct session_cb_vft_
 
   /** Direct TX callback for built-in application */
   int (*builtin_app_tx_callback) (session_t * session);
-
-  /** Cert and key pair delete notification */
-  int (*app_cert_key_pair_delete_callback) (app_cert_key_pair_t * ckpair);
 
   /** Delegate fifo-tuning-logic to application */
   int (*fifo_tuning_callback) (session_t * s, svm_fifo_t * f,
@@ -271,8 +259,6 @@ session_error_t vnet_disconnect_session (vnet_disconnect_args_t *a);
 
 int vnet_app_add_cert_key_pair (vnet_app_add_cert_key_pair_args_t * a);
 int vnet_app_del_cert_key_pair (u32 index);
-/** Ask for app cb on pair deletion */
-int vnet_app_add_cert_key_interest (u32 index, u32 app_index);
 
 uword unformat_vnet_uri (unformat_input_t *input, va_list *args);
 
@@ -372,7 +358,7 @@ typedef struct session_accepted_msg_
   u32 mq_index;
   transport_endpoint_t lcl;
   transport_endpoint_t rmt;
-  u8 flags;
+  u16 flags;
   /* TODO(fcoras) maybe refactor to pass as transport attr */
   u32 original_dst_ip4;
   u16 original_dst_port;
@@ -763,23 +749,18 @@ app_recv_dgram_raw (svm_fifo_t * f, u8 * buf, u32 len,
   u32 max_deq;
   int rv;
 
-  max_deq = svm_fifo_max_dequeue_cons (f);
-  if (max_deq <= sizeof (session_dgram_hdr_t))
-    {
-      if (clear_evt)
-	svm_fifo_unset_event (f);
-      return 0;
-    }
-
   if (clear_evt)
     svm_fifo_unset_event (f);
+
+  max_deq = svm_fifo_max_dequeue_cons (f);
+  if (max_deq <= sizeof (session_dgram_hdr_t))
+    return 0;
 
   svm_fifo_peek (f, 0, sizeof (ph), (u8 *) & ph);
   ASSERT (ph.data_length >= ph.data_offset);
 
   /* Check if we have the full dgram */
-  if (max_deq < (ph.data_length + SESSION_CONN_HDR_LEN)
-      && len >= ph.data_length)
+  if (max_deq < (ph.data_length + SESSION_CONN_HDR_LEN))
     return 0;
 
   svm_fifo_peek (f, sizeof (ph), sizeof (*at), (u8 *) at);
@@ -992,11 +973,3 @@ session_endpoint_free_ext_cfgs (session_endpoint_cfg_t *sep_ext)
 }
 
 #endif /* __included_uri_h__ */
-
-/*
- * fd.io coding-style-patch-verification: ON
- *
- * Local Variables:
- * eval: (c-set-style "gnu")
- * End:
- */

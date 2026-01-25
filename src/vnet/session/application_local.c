@@ -1,16 +1,6 @@
 /*
+ * SPDX-License-Identifier: Apache-2.0
  * Copyright (c) 2019 Cisco and/or its affiliates.
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at:
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
  */
 
 #include <vnet/session/application_local.h>
@@ -300,6 +290,7 @@ ct_accept_one (clib_thread_index_t thread_index, u32 ho_index)
   clib_memcpy (&sct->c_lcl_ip, &cct->c_rmt_ip, sizeof (cct->c_rmt_ip));
   sct->client_wrk = cct->client_wrk;
   sct->c_proto = TRANSPORT_PROTO_CT;
+  sct->c_flags |= TRANSPORT_CONNECTION_F_NO_LOOKUP;
   sct->client_opaque = cct->client_opaque;
   sct->actual_tp = cct->actual_tp;
 
@@ -639,11 +630,8 @@ ct_session_postponed_cleanup (ct_connection_t *ct)
       else
 	session_transport_closing_notify (&peer_ct->connection);
     }
-  /*
-   * Comment out session_transport_closed_notify. It caused an error spit out
-   * in session delete due to session_lookup_del_session returns an error.
-   * session_transport_closed_notify (&ct->connection);
-   */
+
+  session_transport_closed_notify (&ct->connection);
   session_transport_delete_request (&ct->connection, ct_connection_free);
 }
 
@@ -967,11 +955,3 @@ ct_transport_init (vlib_main_t * vm)
 }
 
 VLIB_INIT_FUNCTION (ct_transport_init);
-
-/*
- * fd.io coding-style-patch-verification: ON
- *
- * Local Variables:
- * eval: (c-set-style "gnu")
- * End:
- */

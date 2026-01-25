@@ -1,16 +1,6 @@
 /*
+ * SPDX-License-Identifier: Apache-2.0
  * Copyright (c) 2021 Cisco and/or its affiliates.
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at:
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
  */
 
 #include <srtp/srtp.h>
@@ -673,7 +663,7 @@ srtp_connect (transport_endpoint_cfg_t *tep)
     return rv;
 
   SRTP_DBG (1, "New connect request %u", ctx_index);
-  return 0;
+  return ctx_index;
 }
 
 static void
@@ -937,18 +927,20 @@ format_srtp_half_open (u8 *s, va_list *args)
 
 static void
 srtp_transport_endpoint_get (u32 ctx_handle, clib_thread_index_t thread_index,
-			     transport_endpoint_t *tep, u8 is_lcl)
+			     transport_endpoint_t *tep_rmt,
+			     transport_endpoint_t *tep_lcl)
 {
   srtp_tc_t *ctx = srtp_ctx_get_w_thread (ctx_handle, thread_index);
   session_t *udp_session;
 
   udp_session = session_get_from_handle (ctx->srtp_session_handle);
-  session_get_endpoint (udp_session, tep, is_lcl);
+  session_get_endpoint (udp_session, tep_rmt, tep_lcl);
 }
 
 static void
 srtp_transport_listener_endpoint_get (u32 ctx_handle,
-				      transport_endpoint_t *tep, u8 is_lcl)
+				      transport_endpoint_t *tep_rmt,
+				      transport_endpoint_t *tep_lcl)
 {
   session_t *srtp_listener;
   app_listener_t *al;
@@ -956,7 +948,7 @@ srtp_transport_listener_endpoint_get (u32 ctx_handle,
 
   al = app_listener_get_w_handle (ctx->srtp_session_handle);
   srtp_listener = app_listener_get_session (al);
-  session_get_endpoint (srtp_listener, tep, is_lcl);
+  session_get_endpoint (srtp_listener, tep_rmt, tep_lcl);
 }
 
 static const transport_proto_vft_t srtp_proto = {
@@ -977,7 +969,7 @@ static const transport_proto_vft_t srtp_proto = {
     .name = "srtp",
     .short_name = "R",
     .tx_type = TRANSPORT_TX_INTERNAL,
-    .service_type = TRANSPORT_SERVICE_APP,
+    .service_type = TRANSPORT_SERVICE_CL,
   },
 };
 
@@ -998,11 +990,3 @@ VLIB_PLUGIN_REGISTER () = {
   .description = "Secure Real-time Transport Protocol (SRTP)",
   .default_disabled = 1,
 };
-
-/*
- * fd.io coding-style-patch-verification: ON
- *
- * Local Variables:
- * eval: (c-set-style "gnu")
- * End:
- */

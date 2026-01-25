@@ -1,16 +1,6 @@
 /*
+ * SPDX-License-Identifier: Apache-2.0
  * Copyright (c) 2017-2019 Cisco and/or its affiliates.
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at:
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
  */
 
 #include <math.h>
@@ -1111,11 +1101,11 @@ session_tx_fifo_chain_tail (session_worker_t *wrk, session_tx_context_t *ctx,
 		{
 		  offset = hdr->data_length + SESSION_CONN_HDR_LEN;
 		  svm_fifo_dequeue_drop (f, offset);
-		  if (ctx->left_to_snd > n_bytes_read)
+		  if (to_deq > n_bytes_read)
 		    svm_fifo_peek (ctx->s->tx_fifo, 0, sizeof (ctx->hdr),
 				   (u8 *) & ctx->hdr);
 		}
-	      else if (ctx->left_to_snd == n_bytes_read)
+	      else if (to_deq == n_bytes_read)
 		svm_fifo_overwrite_head (ctx->s->tx_fifo, (u8 *) & ctx->hdr,
 					 sizeof (session_dgram_pre_hdr_t));
 	    }
@@ -2284,18 +2274,9 @@ session_queue_pre_input_inline (vlib_main_t * vm, vlib_node_runtime_t * node,
   return session_queue_node_fn (vm, node, frame);
 }
 
-VLIB_REGISTER_NODE (session_queue_pre_input_node) =
-{
+VLIB_REGISTER_NODE (session_queue_pre_input_node) = {
   .function = session_queue_pre_input_inline,
   .type = VLIB_NODE_TYPE_PRE_INPUT,
   .name = "session-queue-main",
   .state = VLIB_NODE_STATE_DISABLED,
 };
-
-/*
- * fd.io coding-style-patch-verification: ON
- *
- * Local Variables:
- * eval: (c-set-style "gnu")
- * End:
- */

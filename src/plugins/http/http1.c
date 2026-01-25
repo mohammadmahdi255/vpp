@@ -1452,8 +1452,6 @@ http1_req_state_wait_app_method (http_conn_t *hc, http_req_t *req,
 			/* Content-Length */
 			msg.data.body_len);
 
-      http_req_tx_buffer_init (req, &msg);
-
       next_state = HTTP_REQ_STATE_APP_IO_MORE_DATA;
       sm_result = HTTP_SM_CONTINUE;
     }
@@ -1473,8 +1471,6 @@ http1_req_state_wait_app_method (http_conn_t *hc, http_req_t *req,
 		    hc->host,
 		    /* User-Agent */
 		    hc->app_name);
-
-	  http_req_tx_buffer_init (req, &msg);
 
 	  /* For streaming, we need a different state */
 	  next_state = HTTP_REQ_STATE_APP_IO_MORE_STREAMING_DATA;
@@ -1500,8 +1496,6 @@ http1_req_state_wait_app_method (http_conn_t *hc, http_req_t *req,
 		    hc->app_name,
 		    /* Content-Length */
 		    msg.data.body_len);
-
-	  http_req_tx_buffer_init (req, &msg);
 
 	  next_state = HTTP_REQ_STATE_APP_IO_MORE_DATA;
 	  sm_result = HTTP_SM_CONTINUE;
@@ -1532,6 +1526,9 @@ http1_req_state_wait_app_method (http_conn_t *hc, http_req_t *req,
       goto error;
     }
   http_io_ts_write (hc, request, vec_len (request), sp);
+
+  if (next_state != HTTP_REQ_STATE_WAIT_TRANSPORT_REPLY)
+    http_req_tx_buffer_init (req, &msg);
 
   http_req_state_change (req, next_state);
 
@@ -1868,7 +1865,7 @@ http1_format_req (u8 *s, va_list *args)
       s =
 	format (s, "%-" SESSION_CLI_STATE_LEN "U", format_http_conn_state, hc);
       if (verbose > 1)
-	s = format (s, "\n");
+	s = format (s, " \nconn_flags: %U\n", format_http_conn_flags, hc);
     }
 
   return s;
@@ -2055,6 +2052,12 @@ http1_transport_conn_reschedule_callback (http_conn_t *hc)
 }
 
 static void
+http1_conn_accept_callback (http_conn_t *hc)
+{
+  /* nothing to do */
+}
+
+static void
 http1_conn_cleanup_callback (http_conn_t *hc)
 {
   http_req_t *req;
@@ -2095,6 +2098,7 @@ const static http_engine_vft_t http1_engine = {
   .transport_conn_reschedule_callback =
     http1_transport_conn_reschedule_callback,
   .transport_reset_callback = http1_transport_reset_callback,
+  .conn_accept_callback = http1_conn_accept_callback,
   .conn_cleanup_callback = http1_conn_cleanup_callback,
   .enable_callback = http1_enable_callback,
 };

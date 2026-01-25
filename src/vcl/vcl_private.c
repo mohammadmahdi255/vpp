@@ -1,16 +1,5 @@
-/*
+/* SPDX-License-Identifier: Apache-2.0
  * Copyright (c) 2018-2019 Cisco and/or its affiliates.
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this
- * You may obtain a copy of the License at:
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
  */
 
 #include <vcl/vcl_private.h>
@@ -905,6 +894,66 @@ vcl_format_ip46_address (u8 *s, va_list *args)
 		  format (s, "%U", vcl_format_ip6_address, &ip46->ip6);
 }
 
+u8 *
+vcl_format_accepted_session (u8 *s, va_list *args)
+{
+  vcl_session_t *client_session = va_arg (*args, vcl_session_t *);
+  vcl_session_t *listener_session = va_arg (*args, vcl_session_t *);
+  vcl_worker_t *wrk = vcl_worker_get_current ();
+
+  if (listener_session->session_type == VPPCOM_PROTO_QUIC &&
+      !vcl_session_is_connectable_listener (wrk, client_session))
+    {
+      s =
+	format (s, "stream %u [0x%llx] connection %u [0x%llx]",
+		client_session->session_index, client_session->vpp_handle,
+		listener_session->session_index, listener_session->vpp_handle);
+    }
+  else
+    {
+      s = format (
+	s,
+	"session %u [0x%llx] peer: %U:%u local: %U:%u listener %u "
+	"[0x%llx] ",
+	client_session->session_index, client_session->vpp_handle,
+	vcl_format_ip46_address, &client_session->transport.rmt_ip,
+	client_session->transport.is_ip4 ? IP46_TYPE_IP4 : IP46_TYPE_IP6,
+	clib_net_to_host_u16 (client_session->transport.rmt_port),
+	vcl_format_ip46_address, &client_session->transport.lcl_ip,
+	client_session->transport.is_ip4 ? IP46_TYPE_IP4 : IP46_TYPE_IP6,
+	clib_net_to_host_u16 (client_session->transport.lcl_port),
+	listener_session->session_index, listener_session->vpp_handle);
+    }
+
+  return s;
+}
+
+u8 *
+vcl_format_connected_session (u8 *s, va_list *args)
+{
+  vcl_session_t *session = va_arg (*args, vcl_session_t *);
+
+  if (session->session_type == VPPCOM_PROTO_QUIC &&
+      session->parent_handle != SESSION_INVALID_HANDLE)
+    {
+      s = format (s, "stream %u [0x%llx]", session->session_index,
+		  session->vpp_handle);
+    }
+  else
+    {
+      s = format (s, "session %u [0x%llx] local: %U:%u remote %U:%u",
+		  session->session_index, session->vpp_handle,
+		  vcl_format_ip46_address, &session->transport.lcl_ip,
+		  session->transport.is_ip4 ? IP46_TYPE_IP4 : IP46_TYPE_IP6,
+		  clib_net_to_host_u16 (session->transport.lcl_port),
+		  vcl_format_ip46_address, &session->transport.rmt_ip,
+		  session->transport.is_ip4 ? IP46_TYPE_IP4 : IP46_TYPE_IP6,
+		  clib_net_to_host_u16 (session->transport.rmt_port));
+    }
+
+  return s;
+}
+
 void
 vcl_heap_alloc (void)
 {
@@ -948,11 +997,3 @@ vcl_heap_alloc (void)
 	     (unsigned long) vcl_cfg->heapsize,
 	     (unsigned long) vcl_cfg->heapsize);
 }
-
-/*
- * fd.io coding-style-patch-verification: ON
- *
- * Local Variables:
- * eval: (c-set-style "gnu")
- * End:
- */

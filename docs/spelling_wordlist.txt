@@ -567,6 +567,7 @@ kbps
 keepalives
 keychain
 kflows
+KinD
 KMG
 kni
 KOC
@@ -611,6 +612,7 @@ libmemifs
 libsrtp
 libvirt
 libvppapiclient
+lifecycle
 ligato
 LimitCORE
 linearization
@@ -987,6 +989,7 @@ restack
 reStructured
 reStructuredText
 resync
+retransmit
 retransmits
 rfc
 rint
@@ -1010,6 +1013,8 @@ rwlocks
 rx
 rxandtx
 sa
+sasc
+SASC
 sbin
 scalable
 scanf

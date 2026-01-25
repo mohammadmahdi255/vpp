@@ -1,17 +1,8 @@
 /*
+ * SPDX-License-Identifier: Apache-2.0
  * Copyright (c) 2015 Cisco and/or its affiliates.
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at:
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
  */
+
 #include <vnet/ip/ip.h>
 #include <vnet/classify/vnet_classify.h>
 #include <vnet/classify/in_out_acl.h>
@@ -394,15 +385,7 @@ VLIB_CLI_COMMAND (show_inacl_command, static) = {
     .function = show_inacl_command_fn,
 };
 VLIB_CLI_COMMAND (show_outacl_command, static) = {
-    .path = "show outacl",
-    .short_help = "show outacl type [ip4|ip6|l2]",
-    .function = show_outacl_command_fn,
+  .path = "show outacl",
+  .short_help = "show outacl type [ip4|ip6|l2]",
+  .function = show_outacl_command_fn,
 };
-
-/*
- * fd.io coding-style-patch-verification: ON
- *
- * Local Variables:
- * eval: (c-set-style "gnu")
- * End:
- */

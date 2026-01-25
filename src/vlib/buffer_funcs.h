@@ -1,41 +1,9 @@
-/*
+/* SPDX-License-Identifier: Apache-2.0 OR MIT
  * Copyright (c) 2015 Cisco and/or its affiliates.
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at:
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
-/*
- * buffer_funcs.h: VLIB buffer related functions/inlines
- *
  * Copyright (c) 2008 Eliot Dresselhaus
- *
- * Permission is hereby granted, free of charge, to any person obtaining
- * a copy of this software and associated documentation files (the
- * "Software"), to deal in the Software without restriction, including
- * without limitation the rights to use, copy, modify, merge, publish,
- * distribute, sublicense, and/or sell copies of the Software, and to
- * permit persons to whom the Software is furnished to do so, subject to
- * the following conditions:
- *
- * The above copyright notice and this permission notice shall be
- * included in all copies or substantial portions of the Software.
- *
- *  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
- *  EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
- *  MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
- *  NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE
- *  LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
- *  OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
- *  WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
+
+/* buffer_funcs.h: VLIB buffer related functions/inlines */
 
 #ifndef included_vlib_buffer_funcs_h
 #define included_vlib_buffer_funcs_h
@@ -1213,22 +1181,26 @@ vlib_buffer_move (vlib_main_t * vm, vlib_buffer_t * b, i16 offset)
     memmove (destination, source, length);
 }
 
-/** \brief Create a maximum of 256 clones of buffer and store them
+/** \brief Create a maximum of 255 clones of buffer and store them
     in the supplied array
 
     @param vm - (vlib_main_t *) vlib main data structure pointer
     @param src_buffer - (u32) source buffer index
     @param buffers - (u32 * ) buffer index array
-    @param n_buffers - (u16) number of buffer clones requested (<=256)
+    @param n_buffers - (u16) number of buffer clones requested (<=255)
     @param head_end_offset - (u16) offset relative to current position
-           where packet head ends
+	   where packet head ends
     @param offset - (i16) copy packet head at current position if 0,
-           else at offset position to change headroom space as specified
+	   else at offset position to change headroom space as specified
     @return - (u16) number of buffers actually cloned, may be
     less than the number requested or zero
 */
+
+/* vlib_buffer_t ref_count is u8, limit clone count to 255 to avoid overflow */
+#define VLIB_BUFFER_MAX_CLONE 255
+
 always_inline u16
-vlib_buffer_clone_256 (vlib_main_t * vm, u32 src_buffer, u32 * buffers,
+vlib_buffer_clone_255 (vlib_main_t *vm, u32 src_buffer, u32 *buffers,
 		       u16 n_buffers, u16 head_end_offset, i16 offset)
 {
   u16 i;
@@ -1236,7 +1208,7 @@ vlib_buffer_clone_256 (vlib_main_t * vm, u32 src_buffer, u32 * buffers,
 
   ASSERT (s->ref_count == 1);
   ASSERT (n_buffers);
-  ASSERT (n_buffers <= 256);
+  ASSERT (n_buffers <= VLIB_BUFFER_MAX_CLONE);
   ASSERT (offset + VLIB_BUFFER_PRE_DATA_SIZE >= 0);
   ASSERT ((offset + head_end_offset) <
 	  vlib_buffer_get_default_data_size (vm));
@@ -1327,18 +1299,16 @@ vlib_buffer_clone_at_offset (vlib_main_t * vm, u32 src_buffer, u32 * buffers,
   vlib_buffer_t *s = vlib_get_buffer (vm, src_buffer);
   u16 n_cloned = 0;
 
-  while (n_buffers > 256)
+  while (n_buffers > VLIB_BUFFER_MAX_CLONE)
     {
       vlib_buffer_t *copy;
       copy = vlib_buffer_copy (vm, s);
-      n_cloned += vlib_buffer_clone_256 (vm,
-					 vlib_get_buffer_index (vm, copy),
-					 (buffers + n_cloned),
-					 256, head_end_offset, offset);
-      n_buffers -= 256;
+      n_cloned += vlib_buffer_clone_255 (
+	vm, vlib_get_buffer_index (vm, copy), (buffers + n_cloned),
+	VLIB_BUFFER_MAX_CLONE, head_end_offset, offset);
+      n_buffers -= VLIB_BUFFER_MAX_CLONE;
     }
-  n_cloned += vlib_buffer_clone_256 (vm, src_buffer,
-				     buffers + n_cloned,
+  n_cloned += vlib_buffer_clone_255 (vm, src_buffer, buffers + n_cloned,
 				     n_buffers, head_end_offset, offset);
 
   return n_cloned;
@@ -1646,11 +1616,3 @@ vlib_buffer_chain_linearize (vlib_main_t * vm, vlib_buffer_t * b)
 }
 
 #endif /* included_vlib_buffer_funcs_h */
-
-/*
- * fd.io coding-style-patch-verification: ON
- *
- * Local Variables:
- * eval: (c-set-style "gnu")
- * End:
- */

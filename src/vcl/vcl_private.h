@@ -1,16 +1,5 @@
-/*
+/* SPDX-License-Identifier: Apache-2.0
  * Copyright (c) 2018-2019 Cisco and/or its affiliates.
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this
- * You may obtain a copy of the License at:
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
  */
 
 #ifndef SRC_VCL_VCL_PRIVATE_H_
@@ -148,6 +137,12 @@ typedef enum vcl_session_flags_
   VCL_SESSION_F_LISTEN_NO_MQ = 1 << 10,
 } __clib_packed vcl_session_flags_t;
 
+typedef enum
+{
+  VCL_SESSION_VPP_F_STREAM = 1 << 0,
+  VCL_SESSION_VPP_F_UNIDIRECTIONAL = 1 << 1,
+} vppcom_vpp_flags_t;
+
 typedef enum vcl_worker_wait_
 {
   VCL_WRK_WAIT_CTRL,
@@ -183,6 +178,7 @@ typedef struct vcl_session_
 
   transport_endpt_ext_cfg_t *ext_config;
   u8 dscp;
+  u8 vpp_flags;
 
   i32 vpp_error;
 
@@ -690,6 +686,24 @@ vcl_session_clear_attr (vcl_session_t * s, u8 attr)
   s->attributes &= ~(1 << attr);
 }
 
+static inline u8
+vcl_session_has_vpp_flag (vcl_session_t *s, u8 flag)
+{
+  return (s->vpp_flags & flag) ? 1 : 0;
+}
+
+static inline void
+vcl_session_set_vpp_flag (vcl_session_t *s, u8 flag)
+{
+  s->vpp_flags |= flag;
+}
+
+static inline void
+vcl_session_clear_vpp_flag (vcl_session_t *s, u8 flag)
+{
+  s->vpp_flags &= ~flag;
+}
+
 static inline transport_endpt_attr_t *
 vcl_session_tep_attr_get (vcl_session_t *s, transport_endpt_attr_type_t at)
 {
@@ -942,6 +956,8 @@ const char *vcl_session_state_str (vcl_session_state_t state);
 u8 *vcl_format_ip4_address (u8 *s, va_list *args);
 u8 *vcl_format_ip6_address (u8 *s, va_list *args);
 u8 *vcl_format_ip46_address (u8 *s, va_list *args);
+u8 *vcl_format_accepted_session (u8 *s, va_list *args);
+u8 *vcl_format_connected_session (u8 *s, va_list *args);
 
 /*
  * Heap management
@@ -950,11 +966,3 @@ void vcl_heap_alloc (void);
 void vcl_cfg_parse_heapsize (char *conf_fname);
 
 #endif /* SRC_VCL_VCL_PRIVATE_H_ */
-
-/*
- * fd.io coding-style-patch-verification: ON
- *
- * Local Variables:
- * eval: (c-set-style "gnu")
- * End:
- */
