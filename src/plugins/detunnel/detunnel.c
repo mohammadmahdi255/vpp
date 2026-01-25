@@ -109,12 +109,14 @@ u8 *format_detunnel_trace(u8 *s, va_list *args)
 }
 #endif
 
-static_always_inline clib_error_t *detunnel_worker_init(vlib_main_t *vm)
+static_always_inline clib_error_t *
+detunnel_worker_init(vlib_main_t *CLIB_UNUSED(vm))
 {
 	return 0;
 }
 
-static_always_inline clib_error_t *detunnel_init(vlib_main_t *vm)
+static_always_inline clib_error_t *
+detunnel_init(vlib_main_t *vm)
 {
 	return CLIB_MARCH_FN_SELECT (detunnel_init) (vm);
 }

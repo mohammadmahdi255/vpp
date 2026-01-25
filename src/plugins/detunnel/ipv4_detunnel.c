@@ -36,7 +36,8 @@ ipv4_detunnel_main_t ipv4_detunnel_main;
 extern ipv4_detunnel_main_t ipv4_detunnel_main;
 #endif
 
-static_always_inline void add_trace(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b,
+static_always_inline void
+add_trace(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b,
         const ip4_header_t *ip4)
 {
 	if (PREDICT_FALSE((node->flags & VLIB_NODE_FLAG_TRACE) && (b->flags & VLIB_BUFFER_IS_TRACED)))
@@ -47,7 +48,8 @@ static_always_inline void add_trace(vlib_main_t *vm, vlib_node_runtime_t *node, 
 	}
 }
 
-static_always_inline bool process_buffer_4x(vlib_main_t *vm, vlib_node_runtime_t *node,
+static_always_inline bool
+process_buffer_4x(vlib_main_t *vm, vlib_node_runtime_t *node,
 		vlib_buffer_t* b[4], u16 next[4])
 {
 	ipv4_detunnel_main_t *idm = &ipv4_detunnel_main;
@@ -140,7 +142,8 @@ static_always_inline bool process_buffer_4x(vlib_main_t *vm, vlib_node_runtime_t
 	return true;
 }
 
-static_always_inline void process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, u16 *next)
+static_always_inline void
+process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, u16 *next)
 {
 	ipv4_detunnel_main_t *idm = &ipv4_detunnel_main;
 	u32 sw_idx = vnet_buffer(b)->sw_if_index[VLIB_RX];
