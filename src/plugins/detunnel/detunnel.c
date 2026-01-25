@@ -100,16 +100,6 @@ CLIB_MARCH_FN (ip_protocol_to_next, void, u16 *nexts, u16 len)
 }
 
 #ifndef CLIB_MARCH_VARIANT
-void ethertype_to_next(u16 *next, u16 len)
-{
-	CLIB_MARCH_FN_SELECT (ethertype_to_next) (next, len);
-}
-
-void ip_protocol_to_next(u16 *nexts, u16 len)
-{
-	CLIB_MARCH_FN_SELECT (ip_protocol_to_next) (nexts, len);
-}
-
 u8 *format_detunnel_trace(u8 *s, va_list *args)
 {
 	vlib_main_t *CLIB_UNUSED(vm)   = va_arg(*args, vlib_main_t *);

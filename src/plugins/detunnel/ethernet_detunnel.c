@@ -209,7 +209,7 @@ VLIB_NODE_FN (ethernet_detunnel) (vlib_main_t *vm, vlib_node_runtime_t *node, vl
 		n_left_from--;
 	}
 
-	ethertype_to_next(nexts, frame->n_vectors);
+	CLIB_MARCH_FN_SELECT(ethertype_to_next) (nexts, frame->n_vectors);
 
 	vlib_buffer_enqueue_to_next(vm, node, from, nexts, frame->n_vectors);
 
