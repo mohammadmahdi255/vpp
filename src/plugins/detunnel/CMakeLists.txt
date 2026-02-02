@@ -34,3 +34,7 @@ add_vpp_plugin(detunnel
 	# LINK_LIBRARIES
 	# 	${DPDK_LIBRARIES}
 )
+
+set_target_properties(detunnel_plugin PROPERTIES
+    LINK_FLAGS "-Wl,--allow-shlib-undefined"
+)
