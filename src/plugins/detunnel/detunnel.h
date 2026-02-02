@@ -17,6 +17,11 @@
 	_(IP6_DETUNNEL, "ip6-drop")			\
 	_(UDP_DETUNNEL, "udp-detunnel")		\
 
+#define foreach_transport_detunnel_next	\
+	_(DROP, "drop")						\
+	_(L2TP_DETUNNEL, "ip4-drop")		\
+	_(GPRS_DETUNNEL, "ip6-drop")
+
 #if defined(CLIB_HAVE_VEC512)
 #define SIMD_VEC(name)		name##_u16x32
 #define SIMD_TYPE			u16x32
@@ -48,6 +53,28 @@ enum
 	foreach_detunnel_next_node
 #undef _
 	NEXT_NODE_N,
+};
+
+enum
+{
+#define _(id, name) TRANSPORT_NEXT_##id,
+	foreach_transport_detunnel_next
+#undef _
+	TRANSPORT_NEXT_N,
+};
+
+typedef struct {
+    u8 proto;
+    CLIB_ALIGN_MARK(pad, 4);
+    u16 src_port;
+    u16 dst_port;
+} transport_rule_t;
+
+enum {
+	TRANSPORT_FIELD_PROTO,
+	TRANSPORT_FIELD_SRC_PORT,
+	TRANSPORT_FIELD_DST_PORT,
+	TRANSPORT_NUM_FIELDS
 };
 
 typedef struct {

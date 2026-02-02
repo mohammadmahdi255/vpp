@@ -12,11 +12,6 @@
 #include "detunnel.h"
 #include "gtpu/gtpu.h"
 
-#define foreach_udp_detunnel_next_node	\
-	_(DROP, "drop")						\
-	_(L2TP_DETUNNEL, "ip4-drop")		\
-	_(GPRS_DETUNNEL, "ip6-drop")
-
 #define foreach_next_protocol	\
 	_(l2tp_protocol)			\
 	_(gprs_protocol)
@@ -56,14 +51,6 @@ enum
 	UDP_COUNTER_N,
 };
 
-enum
-{
-#define _(id, name) NEXT_NODE_##id,
-	foreach_udp_detunnel_next_node
-#undef _
-	UDP_NEXT_NODE_N,
-};
-
 typedef struct
 {
 	udp_header_t udp;
@@ -93,8 +80,8 @@ add_trace(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b,
 
 static_always_inline u32 get_next_node_1x(u16 src_port, u16 dst_port)
 {
-	return src_port == 0x6808 || dst_port == 0x6808 ? NEXT_NODE_GPRS_DETUNNEL :
-			src_port == 0xA506 || dst_port == 0xA506 ? NEXT_NODE_L2TP_DETUNNEL :
+	return src_port == 0x6808 || dst_port == 0x6808 ? TRANSPORT_NEXT_GPRS_DETUNNEL :
+			src_port == 0xA506 || dst_port == 0xA506 ? TRANSPORT_NEXT_L2TP_DETUNNEL :
 			NEXT_NODE_ERROR_DROP;
 }
 
@@ -289,10 +276,10 @@ VLIB_REGISTER_NODE (udp_detunnel) = {
 	.vector_size = sizeof(u32),
 	.format_trace = format_udp_detunnel_trace,
 	.type = VLIB_NODE_TYPE_INTERNAL,
-	.n_next_nodes = UDP_NEXT_NODE_N,
+	.n_next_nodes = TRANSPORT_NEXT_N,
 	.next_nodes = {
-#define _(id, name) [NEXT_NODE_##id] = (name),
-	foreach_udp_detunnel_next_node
+#define _(id, name) [TRANSPORT_NEXT_##id] = (name),
+	foreach_transport_detunnel_next
 #undef _
 	},
 };

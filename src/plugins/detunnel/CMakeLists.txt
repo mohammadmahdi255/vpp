@@ -25,12 +25,12 @@ add_vpp_plugin(detunnel
 		vlan_detunnel.c
 		udp_detunnel.c
 
-	LINK_FLAGS
-		${DPDK_LDFLAGS}
+	# LINK_FLAGS
+	# 	${DPDK_LDFLAGS}
 
 	INSTALL_HEADERS
         detunnel.h
 
-	LINK_LIBRARIES
-		${DPDK_LIBRARIES}
+	# LINK_LIBRARIES
+	# 	${DPDK_LIBRARIES}
 )
