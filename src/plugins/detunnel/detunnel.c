@@ -42,8 +42,6 @@ foreach_next_node
 #undef _
 #endif
 
-#define STR(x) #x
-
 CLIB_MARCH_FN (detunnel_init, clib_error_t *, vlib_main_t *CLIB_UNUSED(vm))
 {
 	clib_warning("size: %lu %s", SIMD_SIZE, STR(SIMD_TYPE));
@@ -58,6 +56,7 @@ CLIB_MARCH_FN (detunnel_init, clib_error_t *, vlib_main_t *CLIB_UNUSED(vm))
 	SIMD_VEC(vlan_next) = SIMD_SPLAT(NEXT_NODE_VLAN_DETUNNEL);
 	SIMD_VEC(ip4_next) = SIMD_SPLAT(NEXT_NODE_IP4_DETUNNEL);
 	SIMD_VEC(ip6_next) = SIMD_SPLAT(NEXT_NODE_IP6_DETUNNEL);
+	SIMD_VEC(udp_next) = SIMD_SPLAT(NEXT_NODE_UDP_DETUNNEL);
 
 	return 0;
 }
@@ -91,7 +90,7 @@ CLIB_MARCH_FN (ip_protocol_to_next, void, u16 *nexts, u16 len)
 		SIMD_TYPE drop_mask = ~(tcp_mask_vec | udp_mask_vec);
 
 		SIMD_TYPE result = (tcp_mask_vec & SIMD_VEC(drop_next)) |
-				(udp_mask_vec & SIMD_VEC(drop_next)) |
+				(udp_mask_vec & SIMD_VEC(udp_next)) |
 				(drop_mask & SIMD_VEC(drop_next));
 
 		SIMD_STORE(result, nexts + i);

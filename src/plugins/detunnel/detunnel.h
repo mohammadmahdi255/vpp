@@ -14,7 +14,8 @@
 	_(ERROR_DROP, "drop")			\
 	_(VLAN_DETUNNEL, "vlan-detunnel")	\
 	_(IP4_DETUNNEL, "ipv4-detunnel")	\
-	_(IP6_DETUNNEL, "ip6-drop")
+	_(IP6_DETUNNEL, "ip6-drop")			\
+	_(UDP_DETUNNEL, "udp-detunnel")		\
 
 #if defined(CLIB_HAVE_VEC512)
 #define SIMD_VEC(name)		name##_u16x32
@@ -38,6 +39,8 @@
 #define SIMD_LOAD			u16x8_load_unaligned
 #define SIMD_STORE			u16x8_store_unaligned
 #endif
+
+#define STR(x) #x
 
 enum
 {

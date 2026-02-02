@@ -1,7 +1,6 @@
 #include <stdbool.h>
 
 #include <vlib/vlib.h>
-#include <vnet/ethernet/ethernet.h>
 #include <vnet/vnet.h>
 #include <vppinfra/byte_order.h>
 #include <vppinfra/clib.h>
@@ -117,19 +116,19 @@ process_buffer_4x(vlib_main_t *vm, vlib_node_runtime_t *node,
 	vlib_increment_combined_counter(&idm->counters[IPV4_TOTAL],
 		vm->thread_index, sw_idx0, 1, ip4_hdr_len0);
 	vlib_increment_combined_counter(&idm->counters[IPV4_PROCESSED],
-		vm->thread_index, sw_idx0, 1, sizeof(ethernet_header_t));
+		vm->thread_index, sw_idx0, 1, ip4_hdr_len0);
 	vlib_increment_combined_counter(&idm->counters[IPV4_TOTAL],
 		vm->thread_index, sw_idx1, 1, ip4_hdr_len1);
 	vlib_increment_combined_counter(&idm->counters[IPV4_PROCESSED],
-		vm->thread_index, sw_idx1, 1, sizeof(ethernet_header_t));
+		vm->thread_index, sw_idx1, 1, ip4_hdr_len1);
 	vlib_increment_combined_counter(&idm->counters[IPV4_TOTAL],
 		vm->thread_index, sw_idx2, 1, ip4_hdr_len2);
 	vlib_increment_combined_counter(&idm->counters[IPV4_PROCESSED],
-		vm->thread_index, sw_idx2, 1, sizeof(ethernet_header_t));
+		vm->thread_index, sw_idx2, 1, ip4_hdr_len2);
 	vlib_increment_combined_counter(&idm->counters[IPV4_TOTAL],
 		vm->thread_index, sw_idx3, 1, ip4_hdr_len3);
 	vlib_increment_combined_counter(&idm->counters[IPV4_PROCESSED],
-		vm->thread_index, sw_idx3, 1, sizeof(ethernet_header_t));
+		vm->thread_index, sw_idx3, 1, ip4_hdr_len3);
 
 	if (PREDICT_FALSE(node->flags & VLIB_NODE_FLAG_TRACE))
 	{

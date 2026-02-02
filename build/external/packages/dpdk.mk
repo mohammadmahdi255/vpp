@@ -87,8 +87,7 @@ DPDK_DRIVERS_DISABLED := baseband/\*,	\
 	raw/ifpga,							\
 	net/af_xdp
 
-DPDK_LIBS_DISABLED := acl,				\
-	bbdev,								\
+DPDK_LIBS_DISABLED := bbdev,			\
 	bitratestats,						\
 	bpf,								\
 	cfgfile,							\

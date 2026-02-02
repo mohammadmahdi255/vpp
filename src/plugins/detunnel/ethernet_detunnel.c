@@ -29,7 +29,7 @@ typedef struct
 {
 	u32 counter_if_index;
 	vlib_combined_counter_main_t counters[ETHERNET_COUNTER_N];
-} __clib_packed ethernet_detunnel_main_t;
+} ethernet_detunnel_main_t;
 
 extern ethernet_detunnel_main_t ethernet_detunnel_main;
 extern vlib_node_registration_t ethernet_detunnel;
