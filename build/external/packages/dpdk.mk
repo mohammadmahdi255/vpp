@@ -229,8 +229,8 @@ define dpdk_install_cmds
 	source ../dpdk-meson-venv/bin/activate && \
 	meson install && \
 	cd $(dpdk_root_dir)/$(dpdk_install_dir)/lib && \
-	echo "GROUP ( $$(ls librte*.a ) )" > libdpdk.a && \
-	rm -rf librte*.so librte*.so.* dpdk/*/librte*.so dpdk/*/librte*.so.* && \
+	echo "GROUP ( $$(ls librte*.so ) )" > libdpdk.so && \
+	rm -rf librte*.a librte*.a.* dpdk/*/librte*.a dpdk/*/librte*.a.* && \
 	deactivate
 endef
 

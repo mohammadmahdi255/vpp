@@ -14,7 +14,7 @@
 ##############################################################################
 # Check if we want to use the system DPDK
 ##############################################################################
-option(VPP_USE_SYSTEM_DPDK "Use the system installation of DPDK." OFF)
+option(VPP_USE_SYSTEM_DPDK "Use the system installation of DPDK." ON)
 if(VPP_USE_SYSTEM_DPDK)
     find_package(PkgConfig REQUIRED)
     pkg_check_modules(DPDK REQUIRED libdpdk)

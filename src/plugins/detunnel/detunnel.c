@@ -149,24 +149,15 @@ u8 *format_detunnel_trace(u8 *s, va_list *args)
 	detunnel_trace_t *t = va_arg(*args, detunnel_trace_t *);
 	return format(s, "%s: if index %u next protocol 0x%04x", t->name, t->sw_if_index, t->next_protocol);
 }
-#endif
-
-static_always_inline clib_error_t *
-detunnel_worker_init(vlib_main_t *CLIB_UNUSED(vm))
-{
-	return 0;
-}
 
 #define GTPU_PORT	2152
 #define L2TP_PORT	1701
 
-static_always_inline clib_error_t *
-detunnel_init(vlib_main_t *vm)
+clib_error_t *
+detunnel_worker_init(vlib_main_t *CLIB_UNUSED(vm))
 {
-	// char *rte_eal_init_args[] = {"--in-memory", "--no-telemetry", "--file-prefix", "vpp", "-no-pci", "--no-huge"};
-
-	// if (rte_eal_init(sizeof(rte_eal_init_args) / sizeof(char *), rte_eal_init_args))
-	// 	return clib_error_return(0, "failed to init rte eal");
+	if (transport_to_next)
+		return 0;
 
 	struct rte_acl_param acl_param = {
 		.name = "transport_to_next",
@@ -265,8 +256,25 @@ detunnel_init(vlib_main_t *vm)
         return clib_error_return(0, "failed to build transport to next");
 	}
 
+	return 0;
+}
+
+clib_error_t *
+detunnel_init(vlib_main_t *vm)
+{
+	clib_warning("hello");
+	// char *rte_eal_init_args[] = {"--in-memory", "--no-telemetry", "--file-prefix", "vpp", "--iova-mode", "pa"};
+
+	// if (rte_eal_init(sizeof(rte_eal_init_args) / sizeof(char *), rte_eal_init_args))
+	// 	return clib_error_return(0, "failed to init rte eal");
+
+	transport_to_next = NULL;
+
 	return CLIB_MARCH_FN_SELECT (detunnel_init) (vm);
 }
 
 VLIB_WORKER_INIT_FUNCTION (detunnel_worker_init);
+
 VLIB_INIT_FUNCTION (detunnel_init);
+
+#endif
