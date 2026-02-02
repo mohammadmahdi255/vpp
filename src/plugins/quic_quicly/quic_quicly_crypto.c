@@ -699,7 +699,7 @@ quic_quicly_crypto_cipher_setup_crypto (ptls_cipher_context_t *_ctx,
   quic_quicly_main_t *qqm = &quic_quicly_main;
   struct cipher_context_t *ctx = (struct cipher_context_t *) _ctx;
 
-  vnet_crypto_alg_t algo;
+  vnet_crypto_alg_t algo = VNET_CRYPTO_ALG_NONE;
   if (!strcmp (ctx->super.algo->name, "AES128-CTR"))
     {
       algo = VNET_CRYPTO_ALG_AES_128_CTR;
@@ -760,7 +760,7 @@ quic_quicly_crypto_aead_setup_crypto (ptls_aead_context_t *_ctx, int is_enc,
   quic_quicly_main_t *qqm = &quic_quicly_main;
   struct aead_crypto_context_t *ctx = (struct aead_crypto_context_t *) _ctx;
 
-  vnet_crypto_alg_t algo;
+  vnet_crypto_alg_t algo = VNET_CRYPTO_ALG_NONE;
   if (!strcmp (ctx->super.algo->name, "AES128-GCM"))
     {
       algo = VNET_CRYPTO_ALG_AES_128_GCM;

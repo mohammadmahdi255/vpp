@@ -315,7 +315,7 @@ ptls_tcp_to_app_write (picotls_ctx_t *ptls_ctx, svm_fifo_t *app_rx_fifo,
 {
   u32 ai = 0, thread_index, min_buf_len, to_copy, left, wrote = 0;
   ptls_buffer_t *buf = &ptls_ctx->read_buffer;
-  int ret, i = 0, read = 0, tcp_len, n_fs_app;
+  int CLIB_UNUSED(ret), i = 0, read = 0, tcp_len, n_fs_app;
   u32 n_segs = 4, max_len = 1 << 16;
   svm_fifo_seg_t tcp_fs[n_segs], app_fs[n_segs];
   picotls_main_t *pm = &picotls_main;
@@ -497,7 +497,7 @@ ptls_app_to_tcp_write (picotls_ctx_t *ptls_ctx, session_t *app_session,
 		       svm_fifo_t *tcp_tx_fifo, u32 max_len)
 {
   u32 wrote = 0, max_enq, thread_index, app_buf_len, left, ti = 0;
-  int read = 0, rv, i = 0, len, n_tcp_segs = 4, deq_len;
+  int read = 0, CLIB_UNUSED(rv), i = 0, len, n_tcp_segs = 4, deq_len;
   u32 n_app_segs = 2, min_chunk = 2048;
   svm_fifo_seg_t app_fs[n_app_segs], tcp_fs[n_tcp_segs];
   picotls_main_t *pm = &picotls_main;

@@ -81,7 +81,7 @@ ptls_vpp_crypto_cipher_setup_crypto (ptls_cipher_context_t * _ctx, int is_enc,
   ctx->super.do_transform = do_transform;
 
   vlib_main_t *vm = vlib_get_main ();
-  vnet_crypto_alg_t algo;
+  vnet_crypto_alg_t algo = VNET_CRYPTO_ALG_NONE;
   if (!strcmp (ctx->super.algo->name, "AES128-CTR"))
     {
       algo = VNET_CRYPTO_ALG_AES_128_CTR;
