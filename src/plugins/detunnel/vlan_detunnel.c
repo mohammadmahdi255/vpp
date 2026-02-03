@@ -46,6 +46,7 @@ typedef struct
 typedef struct
 {
 	u32 counter_if_index;
+	vlib_counter_t cache_counters[MAX_IF_SIZE][VLAN_COUNTER_N];
 	vlib_combined_counter_main_t counters[VLAN_COUNTER_N];
 } vlan_detunnel_main_t;
 
@@ -120,22 +121,23 @@ process_buffer_4x(vlib_main_t *vm, vlib_node_runtime_t *node,
 	next[3] = vlan3->type;
 
 	vlan_detunnel_main_t *vdm = &vlan_detunnel_main;
-	vlib_increment_combined_counter(&vdm->counters[VLAN_TOTAL],
-		vm->thread_index, sw_idx0, 1, len0);
-	vlib_increment_combined_counter(&vdm->counters[VLAN_PROCESSED],
-		vm->thread_index, sw_idx0, 1, sizeof(vlan_header_t));
-	vlib_increment_combined_counter(&vdm->counters[VLAN_TOTAL],
-		vm->thread_index, sw_idx1, 1, len1);
-	vlib_increment_combined_counter(&vdm->counters[VLAN_PROCESSED],
-		vm->thread_index, sw_idx1, 1, sizeof(vlan_header_t));
-	vlib_increment_combined_counter(&vdm->counters[VLAN_TOTAL],
-		vm->thread_index, sw_idx2, 1, len2);
-	vlib_increment_combined_counter(&vdm->counters[VLAN_PROCESSED],
-		vm->thread_index, sw_idx2, 1, sizeof(vlan_header_t));
-	vlib_increment_combined_counter(&vdm->counters[VLAN_TOTAL],
-		vm->thread_index, sw_idx3, 1, len3);
-	vlib_increment_combined_counter(&vdm->counters[VLAN_PROCESSED],
-		vm->thread_index, sw_idx3, 1, sizeof(vlan_header_t));
+
+	vdm->cache_counters[sw_idx0][VLAN_TOTAL].packets++;
+	vdm->cache_counters[sw_idx0][VLAN_TOTAL].bytes += len0;
+	vdm->cache_counters[sw_idx0][VLAN_PROCESSED].packets++;
+	vdm->cache_counters[sw_idx0][VLAN_PROCESSED].bytes += sizeof(vlan_header_t);
+	vdm->cache_counters[sw_idx1][VLAN_TOTAL].packets++;
+	vdm->cache_counters[sw_idx1][VLAN_TOTAL].bytes += len1;
+	vdm->cache_counters[sw_idx1][VLAN_PROCESSED].packets++;
+	vdm->cache_counters[sw_idx1][VLAN_PROCESSED].bytes += sizeof(vlan_header_t);
+	vdm->cache_counters[sw_idx2][VLAN_TOTAL].packets++;
+	vdm->cache_counters[sw_idx2][VLAN_TOTAL].bytes += len2;
+	vdm->cache_counters[sw_idx2][VLAN_PROCESSED].packets++;
+	vdm->cache_counters[sw_idx2][VLAN_PROCESSED].bytes += sizeof(vlan_header_t);
+	vdm->cache_counters[sw_idx3][VLAN_TOTAL].packets++;
+	vdm->cache_counters[sw_idx3][VLAN_TOTAL].bytes += len3;
+	vdm->cache_counters[sw_idx3][VLAN_PROCESSED].packets++;
+	vdm->cache_counters[sw_idx3][VLAN_PROCESSED].bytes += sizeof(vlan_header_t);
 
 	if (PREDICT_FALSE(node->flags & VLIB_NODE_FLAG_TRACE))
 	{
@@ -154,21 +156,23 @@ process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, 
 	vlan_detunnel_main_t *vdm = &vlan_detunnel_main;
 	u32 sw_idx = vnet_buffer(b)->sw_if_index[VLIB_RX];
 
-	vlib_increment_combined_counter(&vdm->counters[VLAN_TOTAL], vm->thread_index,
-			sw_idx, 1, b->current_length);
+	vdm->cache_counters[sw_idx][VLAN_TOTAL].packets++;
+	vdm->cache_counters[sw_idx][VLAN_TOTAL].bytes += b->current_length;
+
 
 	if (PREDICT_FALSE(b->current_length < sizeof(vlan_header_t)))
 	{
-		vlib_increment_combined_counter(&vdm->counters[VLAN_FAILED], vm->thread_index,
-				sw_idx, 1, b->current_length);
+		vdm->cache_counters[sw_idx][VLAN_FAILED].packets++;
+		vdm->cache_counters[sw_idx][VLAN_FAILED].bytes += b->current_length;
 		next[0] = VLAN_NEXT_DROP;
 		return;
 	}
 
 	const vlan_header_t *vlan = vlib_buffer_get_current(b);
 	vlib_buffer_advance(b, sizeof(vlan_header_t));
-	vlib_increment_combined_counter(&vdm->counters[VLAN_PROCESSED], vm->thread_index,
-			sw_idx, 1, sizeof(vlan_header_t));
+
+	vdm->cache_counters[sw_idx][VLAN_PROCESSED].packets++;
+	vdm->cache_counters[sw_idx][VLAN_PROCESSED].bytes += sizeof(vlan_header_t);
 
 	next[0] = vlan->type;
 

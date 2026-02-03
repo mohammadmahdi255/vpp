@@ -55,6 +55,8 @@
 #define DETUNNEL_CONCAT2(a, b) a##_##b
 #define DETUNNEL_CONCAT(a, b) DETUNNEL_CONCAT2(a, b)
 
+#define MAX_IF_SIZE	10
+
 #define foreach_ethertype	\
 	_(vlan_ethertype)		\
 	_(ipv4_ethertype)		\

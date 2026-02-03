@@ -49,7 +49,7 @@ typedef struct
 typedef struct
 {
 	u32 counter_if_index;
-	vlib_counter_t cache_counters[VLIB_FRAME_SIZE][ETHERNET_COUNTER_N];
+	vlib_counter_t cache_counters[MAX_IF_SIZE][ETHERNET_COUNTER_N];
 	vlib_combined_counter_main_t counters[ETHERNET_COUNTER_N];
 } ethernet_detunnel_main_t;
 
