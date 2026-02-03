@@ -163,8 +163,8 @@ process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, 
 
 VLIB_NODE_FN (udp_detunnel) (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_frame_t *frame)
 {
-	vlib_buffer_t *bufs[VLIB_FRAME_SIZE] = {};
-	u16 nexts[VLIB_FRAME_SIZE] = {};
+	vlib_buffer_t *bufs[VLIB_FRAME_SIZE];
+	u16 nexts[VLIB_FRAME_SIZE];
 	vlib_buffer_t **b = bufs;
 	u16 *next = nexts;
 

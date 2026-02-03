@@ -10,6 +10,8 @@
 #include <vppinfra/error.h>
 
 #include "detunnel.h"
+#include "vlib/counter_types.h"
+#include "vppinfra/string.h"
 
 #define foreach_ethernet_detunnel_next				\
 	_(drop_next, DROP, "drop")						\
@@ -47,6 +49,7 @@ typedef struct
 typedef struct
 {
 	u32 counter_if_index;
+	vlib_counter_t cache_counters[VLIB_FRAME_SIZE][ETHERNET_COUNTER_N];
 	vlib_combined_counter_main_t counters[ETHERNET_COUNTER_N];
 } ethernet_detunnel_main_t;
 
@@ -85,8 +88,7 @@ add_trace(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b,
 }
 
 static_always_inline bool
-process_buffer_4x(vlib_main_t *vm, vlib_node_runtime_t *node,
-		vlib_buffer_t* b[4], u16 next[4])
+process_buffer_4x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t* b[4], u16 next[4])
 {
 	const u32 sw_idx0 = vnet_buffer(b[0])->sw_if_index[VLIB_RX];
 	const u32 sw_idx1 = vnet_buffer(b[1])->sw_if_index[VLIB_RX];
@@ -122,22 +124,39 @@ process_buffer_4x(vlib_main_t *vm, vlib_node_runtime_t *node,
 	next[3] = eth3->type;
 
 	ethernet_detunnel_main_t *edm = &ethernet_detunnel_main;
-	vlib_increment_combined_counter(&edm->counters[ETHERNET_TOTAL],
-		vm->thread_index, sw_idx0, 1, len0);
-	vlib_increment_combined_counter(&edm->counters[ETHERNET_PROCESSED],
-		vm->thread_index, sw_idx0, 1, sizeof(ethernet_header_t));
-	vlib_increment_combined_counter(&edm->counters[ETHERNET_TOTAL],
-		vm->thread_index, sw_idx1, 1, len1);
-	vlib_increment_combined_counter(&edm->counters[ETHERNET_PROCESSED],
-		vm->thread_index, sw_idx1, 1, sizeof(ethernet_header_t));
-	vlib_increment_combined_counter(&edm->counters[ETHERNET_TOTAL],
-		vm->thread_index, sw_idx2, 1, len2);
-	vlib_increment_combined_counter(&edm->counters[ETHERNET_PROCESSED],
-		vm->thread_index, sw_idx2, 1, sizeof(ethernet_header_t));
-	vlib_increment_combined_counter(&edm->counters[ETHERNET_TOTAL],
-		vm->thread_index, sw_idx3, 1, len3);
-	vlib_increment_combined_counter(&edm->counters[ETHERNET_PROCESSED],
-		vm->thread_index, sw_idx3, 1, sizeof(ethernet_header_t));
+	edm->cache_counters[sw_idx0][ETHERNET_TOTAL].packets++;
+	edm->cache_counters[sw_idx0][ETHERNET_TOTAL].bytes += len0;
+	edm->cache_counters[sw_idx0][ETHERNET_PROCESSED].packets++;
+	edm->cache_counters[sw_idx0][ETHERNET_PROCESSED].bytes += sizeof(ethernet_header_t);
+	edm->cache_counters[sw_idx1][ETHERNET_TOTAL].packets++;
+	edm->cache_counters[sw_idx1][ETHERNET_TOTAL].bytes += len1;
+	edm->cache_counters[sw_idx1][ETHERNET_PROCESSED].packets++;
+	edm->cache_counters[sw_idx1][ETHERNET_PROCESSED].bytes += sizeof(ethernet_header_t);
+	edm->cache_counters[sw_idx2][ETHERNET_TOTAL].packets++;
+	edm->cache_counters[sw_idx2][ETHERNET_TOTAL].bytes += len2;
+	edm->cache_counters[sw_idx2][ETHERNET_PROCESSED].packets++;
+	edm->cache_counters[sw_idx2][ETHERNET_PROCESSED].bytes += sizeof(ethernet_header_t);
+	edm->cache_counters[sw_idx3][ETHERNET_TOTAL].packets++;
+	edm->cache_counters[sw_idx3][ETHERNET_TOTAL].bytes += len3;
+	edm->cache_counters[sw_idx3][ETHERNET_PROCESSED].packets++;
+	edm->cache_counters[sw_idx3][ETHERNET_PROCESSED].bytes += sizeof(ethernet_header_t);
+
+	// vlib_increment_combined_counter(&edm->counters[ETHERNET_TOTAL],
+	// 	vm->thread_index, sw_idx0, 1, len0);
+	// vlib_increment_combined_counter(&edm->counters[ETHERNET_PROCESSED],
+	// 	vm->thread_index, sw_idx0, 1, sizeof(ethernet_header_t));
+	// vlib_increment_combined_counter(&edm->counters[ETHERNET_TOTAL],
+	// 	vm->thread_index, sw_idx1, 1, len1);
+	// vlib_increment_combined_counter(&edm->counters[ETHERNET_PROCESSED],
+	// 	vm->thread_index, sw_idx1, 1, sizeof(ethernet_header_t));
+	// vlib_increment_combined_counter(&edm->counters[ETHERNET_TOTAL],
+	// 	vm->thread_index, sw_idx2, 1, len2);
+	// vlib_increment_combined_counter(&edm->counters[ETHERNET_PROCESSED],
+	// 	vm->thread_index, sw_idx2, 1, sizeof(ethernet_header_t));
+	// vlib_increment_combined_counter(&edm->counters[ETHERNET_TOTAL],
+	// 	vm->thread_index, sw_idx3, 1, len3);
+	// vlib_increment_combined_counter(&edm->counters[ETHERNET_PROCESSED],
+	// 	vm->thread_index, sw_idx3, 1, sizeof(ethernet_header_t));
 
 	if (PREDICT_FALSE(node->flags & VLIB_NODE_FLAG_TRACE))
 	{
@@ -156,21 +175,29 @@ process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, 
 	ethernet_detunnel_main_t *edm = &ethernet_detunnel_main;
 	u32 sw_idx = vnet_buffer(b)->sw_if_index[VLIB_RX];
 
-	vlib_increment_combined_counter(&edm->counters[ETHERNET_TOTAL], vm->thread_index,
-			sw_idx, 1, b->current_length);
+	edm->cache_counters[sw_idx][ETHERNET_TOTAL].packets++;
+	edm->cache_counters[sw_idx][ETHERNET_TOTAL].bytes += b->current_length;
+
+	// vlib_increment_combined_counter(&edm->counters[ETHERNET_TOTAL], vm->thread_index,
+	// 		sw_idx, 1, b->current_length);
 
 	if (PREDICT_FALSE(b->current_length < sizeof(ethernet_header_t)))
 	{
-		vlib_increment_combined_counter(&edm->counters[ETHERNET_FAILED], vm->thread_index,
-				sw_idx, 1, b->current_length);
+		// vlib_increment_combined_counter(&edm->counters[ETHERNET_FAILED], vm->thread_index,
+		// 		sw_idx, 1, b->current_length);
+		edm->cache_counters[sw_idx][ETHERNET_FAILED].packets++;
+		edm->cache_counters[sw_idx][ETHERNET_FAILED].bytes += b->current_length;
 		next[0] = ETHERNET_NEXT_DROP;
 		return;
 	}
 
 	const ethernet_header_t *eth = vlib_buffer_get_current(b);
 	vlib_buffer_advance(b, sizeof(ethernet_header_t));
-	vlib_increment_combined_counter(&edm->counters[ETHERNET_PROCESSED], vm->thread_index,
-			sw_idx, 1, sizeof(ethernet_header_t));
+
+	edm->cache_counters[sw_idx][ETHERNET_PROCESSED].packets++;
+	edm->cache_counters[sw_idx][ETHERNET_PROCESSED].bytes += sizeof(ethernet_header_t);
+	// vlib_increment_combined_counter(&edm->counters[ETHERNET_PROCESSED], vm->thread_index,
+	// 		sw_idx, 1, sizeof(ethernet_header_t));
 
 	next[0] = eth->type;
 
@@ -250,6 +277,24 @@ VLIB_NODE_FN (ethernet_detunnel) (vlib_main_t *vm, vlib_node_runtime_t *node, vl
 		n_left_from--;
 	}
 
+	for (u32 sw_idx = 0; sw_idx <= max_sw_if_index; sw_idx++)
+	{
+		vlib_counter_t *counter = edm->cache_counters[sw_idx];
+		vlib_increment_combined_counter(&edm->counters[ETHERNET_TOTAL], vm->thread_index,
+				sw_idx, counter[ETHERNET_TOTAL].packets, counter[ETHERNET_TOTAL].bytes);
+		vlib_increment_combined_counter(&edm->counters[ETHERNET_PROCESSED], vm->thread_index,
+				sw_idx, counter[ETHERNET_PROCESSED].packets, counter[ETHERNET_PROCESSED].bytes);
+		vlib_increment_combined_counter(&edm->counters[ETHERNET_FAILED], vm->thread_index,
+				sw_idx, counter[ETHERNET_FAILED].packets, counter[ETHERNET_FAILED].bytes);
+
+		counter[ETHERNET_TOTAL].packets = 0;
+		counter[ETHERNET_TOTAL].bytes = 0;
+		counter[ETHERNET_PROCESSED].packets = 0;
+		counter[ETHERNET_PROCESSED].bytes = 0;
+		counter[ETHERNET_FAILED].packets = 0;
+		counter[ETHERNET_FAILED].bytes = 0;
+	}
+
 	ethernet_to_next(nexts, frame->n_vectors);
 
 	vlib_buffer_enqueue_to_next(vm, node, from, nexts, frame->n_vectors);
@@ -312,6 +357,8 @@ static clib_error_t *ethernet_detunnel_init(vlib_main_t *vm)
 
 	foreach_detunnel_counter
 #undef _
+
+	clib_memset(edm->cache_counters, 0, sizeof(edm->cache_counters));
 
 	return CLIB_MARCH_FN_SELECT(ethernet_detunnel_init) (vm);
 }
