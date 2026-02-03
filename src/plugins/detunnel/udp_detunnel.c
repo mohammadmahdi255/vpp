@@ -12,36 +12,18 @@
 #include "detunnel.h"
 #include "gtpu/gtpu.h"
 
-#define foreach_next_protocol	\
-	_(l2tp_protocol)			\
-	_(gprs_protocol)
+#define foreach_udp_detunnel_next					\
+	_(drop_next, DROP, "drop")						\
+	_(l2tp_next, L2TP_DETUNNEL, "ip4-drop")			\
+	_(gtpu_next, GTPU_DETUNNEL, "ip6-drop")
 
-#define foreach_next_node 	\
-	_(drop_next)			\
-	_(l2tp_next)			\
-	_(gprs_next)
-
-/*
-#ifndef CLIB_MARCH_VARIANT
-#define _(name)				\
-	u16x32 name##_u16x32;	\
-	u16x16 name##_u16x16;	\
-	u16x8 name##_u16x8;
-
-foreach_next_protocol
-foreach_next_node
+enum
+{
+#define _(var, id, name) UDP_NEXT_##id,
+	foreach_udp_detunnel_next
 #undef _
-#else
-#define _(name)						\
-	extern u16x32 name##_u16x32;	\
-	extern u16x16 name##_u16x16;	\
-	extern u16x8 name##_u16x8;
-
-foreach_next_protocol
-foreach_next_node
-#undef _
-#endif
-*/
+	UDP_NEXT_N,
+};
 
 enum
 {
@@ -78,11 +60,11 @@ add_trace(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b,
 	}
 }
 
-static_always_inline u32 get_next_node_1x(u16 src_port, u16 dst_port)
+static_always_inline u32 get_next_1x(u16 src_port, u16 dst_port)
 {
-	return src_port == 0x6808 || dst_port == 0x6808 ? TRANSPORT_NEXT_GPRS_DETUNNEL :
-			src_port == 0xA506 || dst_port == 0xA506 ? TRANSPORT_NEXT_L2TP_DETUNNEL :
-			NEXT_NODE_ERROR_DROP;
+	return src_port == 0x6808 || dst_port == 0x6808 ? UDP_NEXT_GTPU_DETUNNEL :
+			src_port == 0xA506 || dst_port == 0xA506 ? UDP_NEXT_L2TP_DETUNNEL :
+			UDP_NEXT_DROP;
 }
 
 static_always_inline bool
@@ -118,10 +100,10 @@ process_buffer_4x(vlib_main_t *vm, vlib_node_runtime_t *node,
 	vlib_buffer_advance(b[2], sizeof(udp_header_t));
 	vlib_buffer_advance(b[3], sizeof(udp_header_t));
 
-	next[0] = get_next_node_1x(udp0->src_port, udp0->dst_port);
-	next[1] = get_next_node_1x(udp1->src_port, udp1->dst_port);
-	next[2] = get_next_node_1x(udp2->src_port, udp2->dst_port);
-	next[3] = get_next_node_1x(udp3->src_port, udp3->dst_port);
+	next[0] = get_next_1x(udp0->src_port, udp0->dst_port);
+	next[1] = get_next_1x(udp1->src_port, udp1->dst_port);
+	next[2] = get_next_1x(udp2->src_port, udp2->dst_port);
+	next[3] = get_next_1x(udp3->src_port, udp3->dst_port);
 
 	udp_detunnel_main_t *udm = &udp_detunnel_main;
 	vlib_increment_combined_counter(&udm->counters[UDP_TOTAL],
@@ -165,7 +147,7 @@ process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, 
 	{
 		vlib_increment_combined_counter(&udm->counters[UDP_FAILED], vm->thread_index,
 				sw_idx, 1, b->current_length);
-		next[0] = NEXT_NODE_ERROR_DROP;
+		next[0] = UDP_NEXT_DROP;
 		return;
 	}
 
@@ -174,7 +156,7 @@ process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, 
 	vlib_increment_combined_counter(&udm->counters[UDP_PROCESSED], vm->thread_index,
 			sw_idx, 1, sizeof(udp_header_t));
 
-	next[0] = get_next_node_1x(udp->src_port, udp->dst_port);
+	next[0] = get_next_1x(udp->src_port, udp->dst_port);
 
 	if (PREDICT_FALSE(node->flags & VLIB_NODE_FLAG_TRACE))
 		add_trace(vm, node, b, udp);
@@ -245,7 +227,7 @@ VLIB_NODE_FN (udp_detunnel) (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_fr
 
 	while (n_left_from > 0)
 	{
-		process_buffer_1x(vm, node, b[0], &next[0]);
+		process_buffer_1x(vm, node, b[0], next);
 
 		b++;
 		next++;
@@ -285,20 +267,6 @@ VLIB_REGISTER_NODE (udp_detunnel) = {
 };
 #endif
 
-// CLIB_MARCH_FN (udp_detunnel_init, clib_error_t *, vlib_main_t *CLIB_UNUSED(vm))
-// {
-// 	clib_warning("size: %lu %s", SIMD_SIZE, STR(SIMD_TYPE));
-
-// 	SIMD_VEC(l2tp_protocol) = SIMD_SPLAT(IP_PROTOCOL_TCP);
-// 	SIMD_VEC(gprs_protocol) = SIMD_SPLAT(IP_PROTOCOL_UDP);
-
-// 	SIMD_VEC(drop_next) = SIMD_SPLAT(NEXT_NODE_DROP);
-// 	SIMD_VEC(l2tp_next) = SIMD_SPLAT(NEXT_NODE_L2TP_DETUNNEL);
-// 	SIMD_VEC(gprs_next) = SIMD_SPLAT(NEXT_NODE_GPRS_DETUNNEL);
-
-// 	return 0;
-// }
-
 static clib_error_t *udp_detunnel_init(vlib_main_t *CLIB_UNUSED(vm))
 {
 	udp_detunnel_main_t *udm = &udp_detunnel_main;
@@ -315,8 +283,6 @@ static clib_error_t *udp_detunnel_init(vlib_main_t *CLIB_UNUSED(vm))
 
 	foreach_detunnel_counter
 #undef _
-
-	// CLIB_MARCH_FN_SELECT (udp_detunnel_init) (vm);
 
 	return 0;
 }

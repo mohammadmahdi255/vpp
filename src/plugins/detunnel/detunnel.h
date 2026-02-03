@@ -10,12 +10,19 @@
 	_(PROCESSED, processed)			\
 	_(FAILED, failed)
 
-#define foreach_detunnel_next_node		\
-	_(ERROR_DROP, "drop")			\
+#define foreach_ethertype_detunnel_next	\
+	_(DROP, "drop")						\
 	_(VLAN_DETUNNEL, "vlan-detunnel")	\
-	_(IP4_DETUNNEL, "ipv4-detunnel")	\
-	_(IP6_DETUNNEL, "ip6-drop")			\
-	_(UDP_DETUNNEL, "udp-detunnel")		\
+	_(IPV4_DETUNNEL, "ipv4-detunnel")	\
+	_(IPV6_DETUNNEL, "ip6-drop")			\
+	_(UDP_DETUNNEL, "udp-detunnel")
+
+#define foreach_ip_protocol_detunnel_next	\
+	_(DROP, "drop")							\
+	_(IPV4_DETUNNEL, "ipv4-detunnel")		\
+	_(IPV6_DETUNNEL, "ip6-drop")				\
+	_(UDP_DETUNNEL, "udp-detunnel")
+
 
 #define foreach_transport_detunnel_next	\
 	_(DROP, "drop")						\
@@ -45,14 +52,34 @@
 #define SIMD_STORE			u16x8_store_unaligned
 #endif
 
-#define STR(x) #x
+#define DETUNNEL_CONCAT2(a, b) a##_##b
+#define DETUNNEL_CONCAT(a, b) DETUNNEL_CONCAT2(a, b)
+
+#define foreach_ethertype	\
+	_(vlan_ethertype)		\
+	_(ipv4_ethertype)		\
+	_(ipv6_ethertype)
+
+#define foreach_ip_protocol	\
+	_(ipv4_protocol)		\
+	_(ipv6_protocol)		\
+	_(tcp_protocol)			\
+	_(udp_protocol)
 
 enum
 {
-#define _(id, name) NEXT_NODE_##id,
-	foreach_detunnel_next_node
+#define _(id, name) ETHERTYPE_NEXT_##id,
+	foreach_ethertype_detunnel_next
 #undef _
-	NEXT_NODE_N,
+	ETHERTYPE_NEXT_N,
+};
+
+enum
+{
+#define _(id, name) IP_PROTOCOL_NEXT_##id,
+	foreach_ip_protocol_detunnel_next
+#undef _
+	IP_PROTOCOL_NEXT_N,
 };
 
 enum
@@ -62,6 +89,12 @@ enum
 #undef _
 	TRANSPORT_NEXT_N,
 };
+
+#define _(var)	extern SIMD_TYPE DETUNNEL_CONCAT(var, SIMD_TYPE);
+
+foreach_ethertype
+foreach_ip_protocol
+#undef _
 
 typedef struct {
     u8 proto;

@@ -11,6 +11,25 @@
 
 #include "detunnel.h"
 
+#define foreach_ethernet_detunnel_next				\
+	_(drop_next, DROP, "drop")						\
+	_(vlan_next, VLAN_DETUNNEL, "vlan-detunnel")	\
+	_(ipv4_next, IPV4_DETUNNEL, "ipv4-detunnel")	\
+	_(ipv6_next, IPV6_DETUNNEL, "ip6-drop")
+
+enum
+{
+#define _(var, id, name) ETHERNET_NEXT_##id,
+	foreach_ethernet_detunnel_next
+#undef _
+	ETHERNET_NEXT_N,
+};
+
+#define _(var, id, name) static SIMD_TYPE DETUNNEL_CONCAT(var, SIMD_TYPE);
+
+foreach_ethernet_detunnel_next
+#undef _
+
 enum
 {
 #define _(id, name) ETHERNET_##id,
@@ -35,8 +54,29 @@ extern ethernet_detunnel_main_t ethernet_detunnel_main;
 extern vlib_node_registration_t ethernet_detunnel;
 
 static_always_inline void
+ethernet_to_next(u16 *next, u16 len)
+{
+	for (u16 i = 0; i < len; i += SIMD_SIZE)
+	{
+		SIMD_TYPE ethertype_vec = SIMD_LOAD(next + i);
+		SIMD_TYPE vlan_mask_vec = (ethertype_vec == SIMD_VEC(vlan_ethertype));
+		SIMD_TYPE ipv4_mask_vec = (ethertype_vec == SIMD_VEC(ipv4_ethertype));
+		SIMD_TYPE ipv6_mask_vec = (ethertype_vec == SIMD_VEC(ipv6_ethertype));
+		SIMD_TYPE drop_mask_vec = ~(vlan_mask_vec | ipv4_mask_vec | ipv6_mask_vec);
+
+		SIMD_TYPE result =
+				(vlan_mask_vec & SIMD_VEC(vlan_next)) |
+				(ipv4_mask_vec & SIMD_VEC(ipv4_next)) |
+				(ipv6_mask_vec & SIMD_VEC(ipv6_next)) |
+				(drop_mask_vec & SIMD_VEC(drop_next));
+
+		SIMD_STORE(result, next + i);
+	}
+}
+
+static_always_inline void
 add_trace(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b,
-        const ethernet_header_t *eth)
+		const ethernet_header_t *eth)
 {
 	if (PREDICT_FALSE((node->flags & VLIB_NODE_FLAG_TRACE) && (b->flags & VLIB_BUFFER_IS_TRACED)))
 	{
@@ -125,7 +165,7 @@ process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, 
 	{
 		vlib_increment_combined_counter(&edm->counters[ETHERNET_FAILED], vm->thread_index,
 				sw_idx, 1, b->current_length);
-		next[0] = NEXT_NODE_ERROR_DROP;
+		next[0] = ETHERNET_NEXT_DROP;
 		return;
 	}
 
@@ -205,14 +245,14 @@ VLIB_NODE_FN (ethernet_detunnel) (vlib_main_t *vm, vlib_node_runtime_t *node, vl
 
 	while (n_left_from > 0)
 	{
-		process_buffer_1x(vm, node, b[0], &next[0]);
+		process_buffer_1x(vm, node, b[0], next);
 
 		b++;
 		next++;
 		n_left_from--;
 	}
 
-	CLIB_MARCH_FN_SELECT(ethertype_to_next) (nexts, frame->n_vectors);
+	ethernet_to_next(nexts, frame->n_vectors);
 
 	vlib_buffer_enqueue_to_next(vm, node, from, nexts, frame->n_vectors);
 
@@ -237,16 +277,28 @@ VLIB_REGISTER_NODE (ethernet_detunnel) = {
 	.vector_size = sizeof(u32),
 	.format_trace = format_ethernet_detunnel_trace,
 	.type = VLIB_NODE_TYPE_INTERNAL,
-	.n_next_nodes = NEXT_NODE_N,
+	.n_next_nodes = ETHERNET_NEXT_N,
 	.next_nodes = {
-#define _(id, name) [NEXT_NODE_##id] = (name),
-	foreach_detunnel_next_node
+#define _(var, id, name) [ETHERNET_NEXT_##id] = (name),
+	foreach_ethernet_detunnel_next
 #undef _
 	},
 };
 #endif
 
-static clib_error_t *ethernet_detunnel_init(vlib_main_t *CLIB_UNUSED(vm))
+CLIB_MARCH_FN (ethernet_detunnel_init, clib_error_t *, vlib_main_t *CLIB_UNUSED(vm))
+{
+	clib_warning("size: %lu %s", SIMD_SIZE, CLIB_STRING_MACRO(SIMD_TYPE));
+
+	SIMD_VEC(drop_next) = SIMD_SPLAT(ETHERNET_NEXT_DROP);
+	SIMD_VEC(vlan_next) = SIMD_SPLAT(ETHERNET_NEXT_VLAN_DETUNNEL);
+	SIMD_VEC(ipv4_next) = SIMD_SPLAT(ETHERNET_NEXT_IPV4_DETUNNEL);
+	SIMD_VEC(ipv6_next) = SIMD_SPLAT(ETHERNET_NEXT_IPV6_DETUNNEL);
+
+	return 0;
+}
+
+static clib_error_t *ethernet_detunnel_init(vlib_main_t *vm)
 {
 	ethernet_detunnel_main_t *edm = &ethernet_detunnel_main;
 	vnet_main_t *vnm = vnet_get_main();
@@ -263,7 +315,7 @@ static clib_error_t *ethernet_detunnel_init(vlib_main_t *CLIB_UNUSED(vm))
 	foreach_detunnel_counter
 #undef _
 
-	return 0;
+	return CLIB_MARCH_FN_SELECT(ethernet_detunnel_init) (vm);
 }
 
 VLIB_INIT_FUNCTION (ethernet_detunnel_init);
