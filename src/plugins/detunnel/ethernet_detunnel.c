@@ -141,23 +141,6 @@ process_buffer_4x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t* b[4
 	edm->cache_counters[sw_idx3][ETHERNET_PROCESSED].packets++;
 	edm->cache_counters[sw_idx3][ETHERNET_PROCESSED].bytes += sizeof(ethernet_header_t);
 
-	// vlib_increment_combined_counter(&edm->counters[ETHERNET_TOTAL],
-	// 	vm->thread_index, sw_idx0, 1, len0);
-	// vlib_increment_combined_counter(&edm->counters[ETHERNET_PROCESSED],
-	// 	vm->thread_index, sw_idx0, 1, sizeof(ethernet_header_t));
-	// vlib_increment_combined_counter(&edm->counters[ETHERNET_TOTAL],
-	// 	vm->thread_index, sw_idx1, 1, len1);
-	// vlib_increment_combined_counter(&edm->counters[ETHERNET_PROCESSED],
-	// 	vm->thread_index, sw_idx1, 1, sizeof(ethernet_header_t));
-	// vlib_increment_combined_counter(&edm->counters[ETHERNET_TOTAL],
-	// 	vm->thread_index, sw_idx2, 1, len2);
-	// vlib_increment_combined_counter(&edm->counters[ETHERNET_PROCESSED],
-	// 	vm->thread_index, sw_idx2, 1, sizeof(ethernet_header_t));
-	// vlib_increment_combined_counter(&edm->counters[ETHERNET_TOTAL],
-	// 	vm->thread_index, sw_idx3, 1, len3);
-	// vlib_increment_combined_counter(&edm->counters[ETHERNET_PROCESSED],
-	// 	vm->thread_index, sw_idx3, 1, sizeof(ethernet_header_t));
-
 	if (PREDICT_FALSE(node->flags & VLIB_NODE_FLAG_TRACE))
 	{
 		add_trace(vm, node, b[0], eth0);
@@ -178,13 +161,8 @@ process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, 
 	edm->cache_counters[sw_idx][ETHERNET_TOTAL].packets++;
 	edm->cache_counters[sw_idx][ETHERNET_TOTAL].bytes += b->current_length;
 
-	// vlib_increment_combined_counter(&edm->counters[ETHERNET_TOTAL], vm->thread_index,
-	// 		sw_idx, 1, b->current_length);
-
 	if (PREDICT_FALSE(b->current_length < sizeof(ethernet_header_t)))
 	{
-		// vlib_increment_combined_counter(&edm->counters[ETHERNET_FAILED], vm->thread_index,
-		// 		sw_idx, 1, b->current_length);
 		edm->cache_counters[sw_idx][ETHERNET_FAILED].packets++;
 		edm->cache_counters[sw_idx][ETHERNET_FAILED].bytes += b->current_length;
 		next[0] = ETHERNET_NEXT_DROP;
@@ -196,8 +174,6 @@ process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, 
 
 	edm->cache_counters[sw_idx][ETHERNET_PROCESSED].packets++;
 	edm->cache_counters[sw_idx][ETHERNET_PROCESSED].bytes += sizeof(ethernet_header_t);
-	// vlib_increment_combined_counter(&edm->counters[ETHERNET_PROCESSED], vm->thread_index,
-	// 		sw_idx, 1, sizeof(ethernet_header_t));
 
 	next[0] = eth->type;
 
