@@ -10,12 +10,11 @@
 #include <vppinfra/error.h>
 
 #include "detunnel.h"
-#include "gtpu/gtpu.h"
 
 #define foreach_udp_detunnel_next					\
 	_(drop_next, DROP, "drop")						\
 	_(l2tp_next, L2TP_DETUNNEL, "ip4-drop")			\
-	_(gtpu_next, GTPU_DETUNNEL, "ip6-drop")
+	_(gtpu_next, GTPU_DETUNNEL, "gtpu-detunnel")
 
 enum
 {
@@ -60,10 +59,10 @@ add_trace(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b,
 	}
 }
 
-static_always_inline u32 get_next_1x(u16 src_port, u16 dst_port)
+static_always_inline u32 get_next_1x(const udp_header_t *udp)
 {
-	return src_port == 0x6808 || dst_port == 0x6808 ? UDP_NEXT_GTPU_DETUNNEL :
-			src_port == 0xA506 || dst_port == 0xA506 ? UDP_NEXT_L2TP_DETUNNEL :
+	return udp->src_port == 0x6808 || udp->dst_port == 0x6808 ? UDP_NEXT_GTPU_DETUNNEL :
+			udp->src_port == 0xA506 || udp->dst_port == 0xA506 ? UDP_NEXT_L2TP_DETUNNEL :
 			UDP_NEXT_DROP;
 }
 
@@ -100,10 +99,10 @@ process_buffer_4x(vlib_main_t *vm, vlib_node_runtime_t *node,
 	vlib_buffer_advance(b[2], sizeof(udp_header_t));
 	vlib_buffer_advance(b[3], sizeof(udp_header_t));
 
-	next[0] = get_next_1x(udp0->src_port, udp0->dst_port);
-	next[1] = get_next_1x(udp1->src_port, udp1->dst_port);
-	next[2] = get_next_1x(udp2->src_port, udp2->dst_port);
-	next[3] = get_next_1x(udp3->src_port, udp3->dst_port);
+	next[0] = get_next_1x(udp0);
+	next[1] = get_next_1x(udp1);
+	next[2] = get_next_1x(udp2);
+	next[3] = get_next_1x(udp3);
 
 	udp_detunnel_main_t *udm = &udp_detunnel_main;
 	vlib_increment_combined_counter(&udm->counters[UDP_TOTAL],
@@ -156,7 +155,7 @@ process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, 
 	vlib_increment_combined_counter(&udm->counters[UDP_PROCESSED], vm->thread_index,
 			sw_idx, 1, sizeof(udp_header_t));
 
-	next[0] = get_next_1x(udp->src_port, udp->dst_port);
+	next[0] = get_next_1x(udp);
 
 	if (PREDICT_FALSE(node->flags & VLIB_NODE_FLAG_TRACE))
 		add_trace(vm, node, b, udp);
@@ -164,8 +163,8 @@ process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, 
 
 VLIB_NODE_FN (udp_detunnel) (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_frame_t *frame)
 {
-	vlib_buffer_t *bufs[VLIB_FRAME_SIZE];
-	u16 nexts[VLIB_FRAME_SIZE];
+	vlib_buffer_t *bufs[VLIB_FRAME_SIZE] = {};
+	u16 nexts[VLIB_FRAME_SIZE] = {};
 	vlib_buffer_t **b = bufs;
 	u16 *next = nexts;
 
@@ -249,8 +248,8 @@ static u8 *format_udp_detunnel_trace(u8 *s, va_list *args)
 	vlib_main_t *CLIB_UNUSED(vm)   = va_arg(*args, vlib_main_t *);
 	vlib_node_t *CLIB_UNUSED(node) = va_arg(*args, vlib_node_t *);
 	udp_trace_t *t = va_arg(*args, udp_trace_t *);
-	return format(s, "udp detunnel: if index %u src %U dst %U ethertype 0x%04x",
-			t->sw_if_index);
+	return format(s, "udp detunnel: if index %u src %u dst %u",
+			t->sw_if_index, clib_net_to_host_u16(t->udp.src_port), clib_net_to_host_u16(t->udp.dst_port));
 }
 
 VLIB_REGISTER_NODE (udp_detunnel) = {
@@ -258,10 +257,10 @@ VLIB_REGISTER_NODE (udp_detunnel) = {
 	.vector_size = sizeof(u32),
 	.format_trace = format_udp_detunnel_trace,
 	.type = VLIB_NODE_TYPE_INTERNAL,
-	.n_next_nodes = TRANSPORT_NEXT_N,
+	.n_next_nodes = UDP_NEXT_N,
 	.next_nodes = {
-#define _(id, name) [TRANSPORT_NEXT_##id] = (name),
-	foreach_transport_detunnel_next
+#define _(var, id, name) [UDP_NEXT_##id] = (name),
+	foreach_udp_detunnel_next
 #undef _
 	},
 };

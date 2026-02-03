@@ -62,13 +62,11 @@ ethernet_to_next(u16 *next, u16 len)
 		SIMD_TYPE vlan_mask_vec = (ethertype_vec == SIMD_VEC(vlan_ethertype));
 		SIMD_TYPE ipv4_mask_vec = (ethertype_vec == SIMD_VEC(ipv4_ethertype));
 		SIMD_TYPE ipv6_mask_vec = (ethertype_vec == SIMD_VEC(ipv6_ethertype));
-		SIMD_TYPE drop_mask_vec = ~(vlan_mask_vec | ipv4_mask_vec | ipv6_mask_vec);
 
-		SIMD_TYPE result =
+		SIMD_TYPE result = SIMD_VEC(drop_next) |
 				(vlan_mask_vec & SIMD_VEC(vlan_next)) |
 				(ipv4_mask_vec & SIMD_VEC(ipv4_next)) |
-				(ipv6_mask_vec & SIMD_VEC(ipv6_next)) |
-				(drop_mask_vec & SIMD_VEC(drop_next));
+				(ipv6_mask_vec & SIMD_VEC(ipv6_next));
 
 		SIMD_STORE(result, next + i);
 	}

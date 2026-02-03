@@ -60,13 +60,11 @@ ipv4_to_next(u16 *next, u16 len)
 		SIMD_TYPE ipv4_mask_vec = (ip_protocol_vec == SIMD_VEC(ipv4_protocol));
 		SIMD_TYPE ipv6_mask_vec = (ip_protocol_vec == SIMD_VEC(ipv6_protocol));
 		SIMD_TYPE udp_mask_vec = (ip_protocol_vec == SIMD_VEC(udp_protocol));
-		SIMD_TYPE drop_mask_vec = ~(udp_mask_vec | ipv4_mask_vec | ipv6_mask_vec);
 
-		SIMD_TYPE result =
+		SIMD_TYPE result = SIMD_VEC(drop_next) |
 				(ipv4_mask_vec & SIMD_VEC(ipv4_next)) |
 				(ipv6_mask_vec & SIMD_VEC(ipv6_next)) |
-				(udp_mask_vec & SIMD_VEC(udp_next)) |
-				(drop_mask_vec & SIMD_VEC(drop_next));
+				(udp_mask_vec & SIMD_VEC(udp_next));
 
 		SIMD_STORE(result, next + i);
 	}

@@ -17,6 +17,7 @@ add_vpp_plugin(detunnel
 		plugin.c
 		vlan_detunnel.c
 		udp_detunnel.c
+		gtpu_detunnel.c
 
 	MULTIARCH_SOURCES
 		detunnel.c
@@ -24,6 +25,7 @@ add_vpp_plugin(detunnel
 		ipv4_detunnel.c
 		vlan_detunnel.c
 		udp_detunnel.c
+		gtpu_detunnel.c
 
 	LINK_FLAGS
 		${DPDK_LDFLAGS}

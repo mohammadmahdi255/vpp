@@ -1,10 +1,8 @@
 
 #include "detunnel.h"
-#include "gtpu/gtpu.h"
 #include "vnet/ip/ip_packet.h"
 #include "vppinfra/clib.h"
 #include "vppinfra/error.h"
-#include "vppinfra/string.h"
 
 #include <vnet/ethernet/ethernet.h>
 
