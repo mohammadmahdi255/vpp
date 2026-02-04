@@ -92,6 +92,8 @@ process_buffer_4x(vlib_main_t *vm, vlib_node_runtime_t *node,
 	const u32 sw_idx2 = vnet_buffer(b[2])->sw_if_index[VLIB_RX];
 	const u32 sw_idx3 = vnet_buffer(b[3])->sw_if_index[VLIB_RX];
 
+	const bool sw_idx_eq = sw_idx0 == sw_idx1 && sw_idx2 == sw_idx3 && sw_idx0 == sw_idx2;
+
 	const u32 len0 = b[0]->current_length;
 	const u32 len1 = b[1]->current_length;
 	const u32 len2 = b[2]->current_length;
@@ -122,22 +124,32 @@ process_buffer_4x(vlib_main_t *vm, vlib_node_runtime_t *node,
 
 	vlan_detunnel_main_t *vdm = &vlan_detunnel_main;
 
-	vdm->cache_counters[sw_idx0][VLAN_TOTAL].packets++;
-	vdm->cache_counters[sw_idx0][VLAN_TOTAL].bytes += len0;
-	vdm->cache_counters[sw_idx0][VLAN_PROCESSED].packets++;
-	vdm->cache_counters[sw_idx0][VLAN_PROCESSED].bytes += sizeof(vlan_header_t);
-	vdm->cache_counters[sw_idx1][VLAN_TOTAL].packets++;
-	vdm->cache_counters[sw_idx1][VLAN_TOTAL].bytes += len1;
-	vdm->cache_counters[sw_idx1][VLAN_PROCESSED].packets++;
-	vdm->cache_counters[sw_idx1][VLAN_PROCESSED].bytes += sizeof(vlan_header_t);
-	vdm->cache_counters[sw_idx2][VLAN_TOTAL].packets++;
-	vdm->cache_counters[sw_idx2][VLAN_TOTAL].bytes += len2;
-	vdm->cache_counters[sw_idx2][VLAN_PROCESSED].packets++;
-	vdm->cache_counters[sw_idx2][VLAN_PROCESSED].bytes += sizeof(vlan_header_t);
-	vdm->cache_counters[sw_idx3][VLAN_TOTAL].packets++;
-	vdm->cache_counters[sw_idx3][VLAN_TOTAL].bytes += len3;
-	vdm->cache_counters[sw_idx3][VLAN_PROCESSED].packets++;
-	vdm->cache_counters[sw_idx3][VLAN_PROCESSED].bytes += sizeof(vlan_header_t);
+	if (PREDICT_TRUE(sw_idx_eq))
+	{
+		vdm->cache_counters[sw_idx0][VLAN_TOTAL].packets += 4;
+		vdm->cache_counters[sw_idx0][VLAN_TOTAL].bytes += len0 + len1 + len2 + len3;
+		vdm->cache_counters[sw_idx0][VLAN_PROCESSED].packets += 4;
+		vdm->cache_counters[sw_idx0][VLAN_PROCESSED].bytes += 4 * sizeof(vlan_header_t);
+	}
+	else
+	{
+		vdm->cache_counters[sw_idx0][VLAN_TOTAL].packets++;
+		vdm->cache_counters[sw_idx0][VLAN_TOTAL].bytes += len0;
+		vdm->cache_counters[sw_idx0][VLAN_PROCESSED].packets++;
+		vdm->cache_counters[sw_idx0][VLAN_PROCESSED].bytes += sizeof(vlan_header_t);
+		vdm->cache_counters[sw_idx1][VLAN_TOTAL].packets++;
+		vdm->cache_counters[sw_idx1][VLAN_TOTAL].bytes += len1;
+		vdm->cache_counters[sw_idx1][VLAN_PROCESSED].packets++;
+		vdm->cache_counters[sw_idx1][VLAN_PROCESSED].bytes += sizeof(vlan_header_t);
+		vdm->cache_counters[sw_idx2][VLAN_TOTAL].packets++;
+		vdm->cache_counters[sw_idx2][VLAN_TOTAL].bytes += len2;
+		vdm->cache_counters[sw_idx2][VLAN_PROCESSED].packets++;
+		vdm->cache_counters[sw_idx2][VLAN_PROCESSED].bytes += sizeof(vlan_header_t);
+		vdm->cache_counters[sw_idx3][VLAN_TOTAL].packets++;
+		vdm->cache_counters[sw_idx3][VLAN_TOTAL].bytes += len3;
+		vdm->cache_counters[sw_idx3][VLAN_PROCESSED].packets++;
+		vdm->cache_counters[sw_idx3][VLAN_PROCESSED].bytes += sizeof(vlan_header_t);
+	}
 
 	if (PREDICT_FALSE(node->flags & VLIB_NODE_FLAG_TRACE))
 	{

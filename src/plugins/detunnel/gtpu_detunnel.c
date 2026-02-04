@@ -104,6 +104,8 @@ process_buffer_4x(vlib_main_t *vm, vlib_node_runtime_t *node,
 	const u32 sw_idx2 = vnet_buffer(b[2])->sw_if_index[VLIB_RX];
 	const u32 sw_idx3 = vnet_buffer(b[3])->sw_if_index[VLIB_RX];
 
+	const bool sw_idx_eq = sw_idx0 == sw_idx1 && sw_idx2 == sw_idx3 && sw_idx0 == sw_idx2;
+
 	const gtpu_header_t *gtpu0 = vlib_buffer_get_current(b[0]);
 	const gtpu_header_t *gtpu1 = vlib_buffer_get_current(b[1]);
 	const gtpu_header_t *gtpu2 = vlib_buffer_get_current(b[2]);
@@ -136,22 +138,34 @@ process_buffer_4x(vlib_main_t *vm, vlib_node_runtime_t *node,
 
 	gtpu_detunnel_main_t *gdm = &gtpu_detunnel_main;
 
-	gdm->cache_counters[sw_idx0][GTPU_TOTAL].packets++;
-	gdm->cache_counters[sw_idx0][GTPU_TOTAL].bytes += b[0]->current_length;
-	gdm->cache_counters[sw_idx0][GTPU_PROCESSED].packets++;
-	gdm->cache_counters[sw_idx0][GTPU_PROCESSED].bytes += gtpu_hdr_len0;
-	gdm->cache_counters[sw_idx1][GTPU_TOTAL].packets++;
-	gdm->cache_counters[sw_idx1][GTPU_TOTAL].bytes += b[1]->current_length;
-	gdm->cache_counters[sw_idx1][GTPU_PROCESSED].packets++;
-	gdm->cache_counters[sw_idx1][GTPU_PROCESSED].bytes += gtpu_hdr_len1;
-	gdm->cache_counters[sw_idx2][GTPU_TOTAL].packets++;
-	gdm->cache_counters[sw_idx2][GTPU_TOTAL].bytes += b[2]->current_length;
-	gdm->cache_counters[sw_idx2][GTPU_PROCESSED].packets++;
-	gdm->cache_counters[sw_idx2][GTPU_PROCESSED].bytes += gtpu_hdr_len2;
-	gdm->cache_counters[sw_idx3][GTPU_TOTAL].packets++;
-	gdm->cache_counters[sw_idx3][GTPU_TOTAL].bytes += b[3]->current_length;
-	gdm->cache_counters[sw_idx3][GTPU_PROCESSED].packets++;
-	gdm->cache_counters[sw_idx3][GTPU_PROCESSED].bytes += gtpu_hdr_len3;
+	if (PREDICT_TRUE(sw_idx_eq))
+	{
+		gdm->cache_counters[sw_idx0][GTPU_TOTAL].packets += 4;
+		gdm->cache_counters[sw_idx0][GTPU_TOTAL].bytes +=
+				b[0]->current_length + b[1]->current_length + b[2]->current_length + b[3]->current_length;
+		gdm->cache_counters[sw_idx0][GTPU_PROCESSED].packets += 4;
+		gdm->cache_counters[sw_idx0][GTPU_PROCESSED].bytes +=
+				gtpu_hdr_len0 + gtpu_hdr_len1 + gtpu_hdr_len2 + gtpu_hdr_len3;
+	}
+	else
+	{
+		gdm->cache_counters[sw_idx0][GTPU_TOTAL].packets++;
+		gdm->cache_counters[sw_idx0][GTPU_TOTAL].bytes += b[0]->current_length;
+		gdm->cache_counters[sw_idx0][GTPU_PROCESSED].packets++;
+		gdm->cache_counters[sw_idx0][GTPU_PROCESSED].bytes += gtpu_hdr_len0;
+		gdm->cache_counters[sw_idx1][GTPU_TOTAL].packets++;
+		gdm->cache_counters[sw_idx1][GTPU_TOTAL].bytes += b[1]->current_length;
+		gdm->cache_counters[sw_idx1][GTPU_PROCESSED].packets++;
+		gdm->cache_counters[sw_idx1][GTPU_PROCESSED].bytes += gtpu_hdr_len1;
+		gdm->cache_counters[sw_idx2][GTPU_TOTAL].packets++;
+		gdm->cache_counters[sw_idx2][GTPU_TOTAL].bytes += b[2]->current_length;
+		gdm->cache_counters[sw_idx2][GTPU_PROCESSED].packets++;
+		gdm->cache_counters[sw_idx2][GTPU_PROCESSED].bytes += gtpu_hdr_len2;
+		gdm->cache_counters[sw_idx3][GTPU_TOTAL].packets++;
+		gdm->cache_counters[sw_idx3][GTPU_TOTAL].bytes += b[3]->current_length;
+		gdm->cache_counters[sw_idx3][GTPU_PROCESSED].packets++;
+		gdm->cache_counters[sw_idx3][GTPU_PROCESSED].bytes += gtpu_hdr_len3;
+	}
 
 	if (PREDICT_FALSE(node->flags & VLIB_NODE_FLAG_TRACE))
 	{
