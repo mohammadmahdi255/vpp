@@ -8,7 +8,6 @@
 
 #include "detunnel.h"
 #include "vnet/ip/ip4_packet.h"
-#include "vnet/ip/ip_packet.h"
 
 #define foreach_ipv4_detunnel_next					\
 	_(drop_next, DROP, "drop")						\
