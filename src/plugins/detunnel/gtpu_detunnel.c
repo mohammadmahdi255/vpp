@@ -73,14 +73,14 @@ gtpu_to_next(u16 *next, u16 len)
 	for (u16 i = 0; i < len; i += SIMD_SIZE)
 	{
 		SIMD_TYPE next_vec = SIMD_LOAD(next + i);
-		SIMD_TYPE drop_mask_vec = (next_vec == SIMD_VEC(drop_next));
 		SIMD_TYPE ipv4_mask_vec = (next_vec == SIMD_VEC(ipv4_version));
 		SIMD_TYPE ipv6_mask_vec = (next_vec == SIMD_VEC(ipv6_version));
+		SIMD_TYPE gtpu_ext_mask_vec = (next_vec == SIMD_VEC(gtpu_ext_next));
 
-		SIMD_TYPE result =
-				(drop_mask_vec & SIMD_VEC(drop_next)) |
+		SIMD_TYPE result = SIMD_VEC(drop_next) |
 				(ipv4_mask_vec & SIMD_VEC(ipv4_next)) |
-				(ipv6_mask_vec & SIMD_VEC(ipv6_next));
+				(ipv6_mask_vec & SIMD_VEC(ipv6_next)) |
+				(gtpu_ext_mask_vec & SIMD_VEC(gtpu_ext_next));
 
 		SIMD_STORE(result, next + i);
 	}
@@ -109,34 +109,19 @@ process_buffer_4x(vlib_main_t *vm, vlib_node_runtime_t *node,
 
 	const bool sw_idx_eq = sw_idx0 == sw_idx1 && sw_idx2 == sw_idx3 && sw_idx0 == sw_idx2;
 
-	gtpu_ext_header_t dummy_ext = { .type = 0, .len = 0, .pad = 0 };
-
 	const gtpu_header_t *gtpu0 = vlib_buffer_get_current(b[0]);
 	const gtpu_header_t *gtpu1 = vlib_buffer_get_current(b[1]);
 	const gtpu_header_t *gtpu2 = vlib_buffer_get_current(b[2]);
 	const gtpu_header_t *gtpu3 = vlib_buffer_get_current(b[3]);
 
-	const gtpu_ext_header_t *ext0 = (gtpu0->ver_flags & GTPU_E_BIT) ?
-			(gtpu_ext_header_t *) &gtpu0->next_ext_type : &dummy_ext;
-	const gtpu_ext_header_t *ext1 = (gtpu1->ver_flags & GTPU_E_BIT) ?
-			(gtpu_ext_header_t *) &gtpu1->next_ext_type : &dummy_ext;
-	const gtpu_ext_header_t *ext2 = (gtpu0->ver_flags & GTPU_E_BIT) ?
-			(gtpu_ext_header_t *) &gtpu0->next_ext_type : &dummy_ext;
-	const gtpu_ext_header_t *ext3 = (gtpu0->ver_flags & GTPU_E_BIT) ?
-			(gtpu_ext_header_t *) &gtpu0->next_ext_type : &dummy_ext;
-
 	const u16 gtpu_hdr_len0 =
-			sizeof(gtpu_header_t) - (((gtpu0->ver_flags & GTPU_E_S_PN_BIT) == 0) * sizeof(gtpu_ext_header_t)) +
-			ext0->len * sizeof(gtpu_ext_header_t);
+			sizeof(gtpu_header_t) - (((gtpu0->ver_flags & GTPU_E_S_PN_BIT) == 0) * sizeof(gtpu_ext_header_t));
 	const u16 gtpu_hdr_len1 =
-			sizeof(gtpu_header_t) - (((gtpu1->ver_flags & GTPU_E_S_PN_BIT) == 0) * sizeof(gtpu_ext_header_t)) +
-			ext1->len * sizeof(gtpu_ext_header_t);
+			sizeof(gtpu_header_t) - (((gtpu1->ver_flags & GTPU_E_S_PN_BIT) == 0) * sizeof(gtpu_ext_header_t));
 	const u16 gtpu_hdr_len2 =
-			sizeof(gtpu_header_t) - (((gtpu2->ver_flags & GTPU_E_S_PN_BIT) == 0) * sizeof(gtpu_ext_header_t)) +
-			ext2->len * sizeof(gtpu_ext_header_t);
+			sizeof(gtpu_header_t) - (((gtpu2->ver_flags & GTPU_E_S_PN_BIT) == 0) * sizeof(gtpu_ext_header_t));
 	const u16 gtpu_hdr_len3 =
-			sizeof(gtpu_header_t) - (((gtpu3->ver_flags & GTPU_E_S_PN_BIT) == 0) * sizeof(gtpu_ext_header_t)) +
-			ext3->len * sizeof(gtpu_ext_header_t);
+			sizeof(gtpu_header_t) - (((gtpu3->ver_flags & GTPU_E_S_PN_BIT) == 0) * sizeof(gtpu_ext_header_t));
 
 	u8 error = 0;
 
@@ -148,20 +133,19 @@ process_buffer_4x(vlib_main_t *vm, vlib_node_runtime_t *node,
 	if (PREDICT_FALSE(error))
 		return false;
 
-	ext0 += ext0->len;
-	ext1 += ext1->len;
-	ext2 += ext2->len;
-	ext3 += ext3->len;
-
 	vlib_buffer_advance(b[0], gtpu_hdr_len0);
 	vlib_buffer_advance(b[1], gtpu_hdr_len1);
 	vlib_buffer_advance(b[2], gtpu_hdr_len2);
 	vlib_buffer_advance(b[3], gtpu_hdr_len3);
 
-	next[0] = ext0->type ? 0xFF : *(u8 *) vlib_buffer_get_current(b[0]) & 0xF0;
-	next[1] = ext1->type ? 0xFF : *(u8 *) vlib_buffer_get_current(b[1]) & 0xF0;
-	next[2] = ext2->type ? 0xFF : *(u8 *) vlib_buffer_get_current(b[2]) & 0xF0;
-	next[3] = ext3->type ? 0xFF : *(u8 *) vlib_buffer_get_current(b[3]) & 0xF0;
+	next[0] = (gtpu0->ver_flags & GTPU_E_BIT) ?
+			GTPU_NEXT_GTPU_EXT_DETUNNEL : *(u8 *) vlib_buffer_get_current(b[0]) & 0xF0;
+	next[1] = (gtpu1->ver_flags & GTPU_E_BIT) ?
+			GTPU_NEXT_GTPU_EXT_DETUNNEL : *(u8 *) vlib_buffer_get_current(b[1]) & 0xF0;
+	next[2] = (gtpu2->ver_flags & GTPU_E_BIT) ?
+			GTPU_NEXT_GTPU_EXT_DETUNNEL : *(u8 *) vlib_buffer_get_current(b[2]) & 0xF0;
+	next[3] = (gtpu3->ver_flags & GTPU_E_BIT) ?
+			GTPU_NEXT_GTPU_EXT_DETUNNEL : *(u8 *) vlib_buffer_get_current(b[3]) & 0xF0;
 
 	gtpu_detunnel_main_t *gdm = &gtpu_detunnel_main;
 
@@ -214,16 +198,10 @@ process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, 
 	gdm->cache_counters[sw_idx][GTPU_TOTAL].packets++;
 	gdm->cache_counters[sw_idx][GTPU_TOTAL].bytes += b->current_length;
 
-	gtpu_ext_header_t dummy_ext = { .type = 0, .len = 0, .pad = 0 };
-
 	const gtpu_header_t *gtpu = vlib_buffer_get_current(b);
 
-	const gtpu_ext_header_t *ext = (gtpu->ver_flags & GTPU_E_BIT) ?
-			(gtpu_ext_header_t *) &gtpu->next_ext_type : &dummy_ext;
-
 	const u16 gtpu_hdr_len =
-			sizeof(gtpu_header_t) - (((gtpu->ver_flags & GTPU_E_S_PN_BIT) == 0) * sizeof(gtpu_ext_header_t)) +
-			ext->len * sizeof(gtpu_ext_header_t);
+			sizeof(gtpu_header_t) - (((gtpu->ver_flags & GTPU_E_S_PN_BIT) == 0) * sizeof(gtpu_ext_header_t));
 
 	if (PREDICT_FALSE(b->current_length < gtpu_hdr_len))
 	{
@@ -233,13 +211,12 @@ process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, 
 		return;
 	}
 
-	ext += ext->len;
-
 	vlib_buffer_advance(b, gtpu_hdr_len);
 	gdm->cache_counters[sw_idx][GTPU_PROCESSED].packets++;
 	gdm->cache_counters[sw_idx][GTPU_PROCESSED].bytes += gtpu_hdr_len;
 
-	next[0] = ext->type ? 0xFF : *(u8 *) vlib_buffer_get_current(b) & 0xF0;
+	next[0] = (gtpu->ver_flags & GTPU_E_BIT) ?
+			GTPU_NEXT_GTPU_EXT_DETUNNEL : *(u8 *) vlib_buffer_get_current(b) & 0xF0;
 
 	if (PREDICT_FALSE(b->flags & VLIB_BUFFER_IS_TRACED))
 		add_trace(vm, node, b, gtpu);
@@ -380,6 +357,7 @@ CLIB_MARCH_FN (gtpu_detunnel_init, clib_error_t *, vlib_main_t *CLIB_UNUSED(vm))
 	SIMD_VEC(drop_next) = SIMD_SPLAT(GTPU_NEXT_DROP);
 	SIMD_VEC(ipv4_next) = SIMD_SPLAT(GTPU_NEXT_IPV4_DETUNNEL);
 	SIMD_VEC(ipv6_next) = SIMD_SPLAT(GTPU_NEXT_IPV6_DETUNNEL);
+	SIMD_VEC(gtpu_ext_next) = SIMD_SPLAT(GTPU_NEXT_GTPU_EXT_DETUNNEL);
 
 	return 0;
 }
