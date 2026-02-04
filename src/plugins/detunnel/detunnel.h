@@ -118,8 +118,12 @@ typedef struct {
 	u16 next_protocol;
 } __clib_packed detunnel_trace_t;
 
-extern void CLIB_MARCH_FN_SELECT(ethertype_to_next) (u16 *next, u16 len);
-extern void CLIB_MARCH_FN_SELECT (ip_protocol_to_next) (u16 *nexts, u16 len);
+typedef struct
+{
+  u32 packets;			/**< packet counter */
+  u32 bytes;			/**< byte counter  */
+} vlib_cache_counter_t;
+
 extern u8 *format_detunnel_trace(u8 *s, va_list *args);
 
 /*

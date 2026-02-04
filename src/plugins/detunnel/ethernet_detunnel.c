@@ -49,7 +49,7 @@ typedef struct
 typedef struct
 {
 	u32 counter_if_index;
-	vlib_counter_t cache_counters[MAX_IF_SIZE][ETHERNET_COUNTER_N];
+	vlib_cache_counter_t cache_counters[MAX_IF_SIZE][ETHERNET_COUNTER_N];
 	vlib_combined_counter_main_t counters[ETHERNET_COUNTER_N];
 } ethernet_detunnel_main_t;
 
@@ -255,7 +255,7 @@ VLIB_NODE_FN (ethernet_detunnel) (vlib_main_t *vm, vlib_node_runtime_t *node, vl
 
 	for (u32 sw_idx = 0; sw_idx <= max_sw_if_index; sw_idx++)
 	{
-		vlib_counter_t *counter = edm->cache_counters[sw_idx];
+		vlib_cache_counter_t *counter = edm->cache_counters[sw_idx];
 		vlib_increment_combined_counter(&edm->counters[ETHERNET_TOTAL], vm->thread_index,
 				sw_idx, counter[ETHERNET_TOTAL].packets, counter[ETHERNET_TOTAL].bytes);
 		vlib_increment_combined_counter(&edm->counters[ETHERNET_PROCESSED], vm->thread_index,

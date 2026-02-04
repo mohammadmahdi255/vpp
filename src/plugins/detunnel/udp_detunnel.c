@@ -41,6 +41,7 @@ typedef struct
 typedef struct
 {
 	u32 counter_if_index;
+	vlib_cache_counter_t cache_counters[MAX_IF_SIZE][UDP_COUNTER_N];
 	vlib_combined_counter_main_t counters[UDP_COUNTER_N];
 } udp_detunnel_main_t;
 
@@ -105,22 +106,23 @@ process_buffer_4x(vlib_main_t *vm, vlib_node_runtime_t *node,
 	next[3] = get_next_1x(udp3);
 
 	udp_detunnel_main_t *udm = &udp_detunnel_main;
-	vlib_increment_combined_counter(&udm->counters[UDP_TOTAL],
-		vm->thread_index, sw_idx0, 1, len0);
-	vlib_increment_combined_counter(&udm->counters[UDP_PROCESSED],
-		vm->thread_index, sw_idx0, 1, sizeof(udp_header_t));
-	vlib_increment_combined_counter(&udm->counters[UDP_TOTAL],
-		vm->thread_index, sw_idx1, 1, len1);
-	vlib_increment_combined_counter(&udm->counters[UDP_PROCESSED],
-		vm->thread_index, sw_idx1, 1, sizeof(udp_header_t));
-	vlib_increment_combined_counter(&udm->counters[UDP_TOTAL],
-		vm->thread_index, sw_idx2, 1, len2);
-	vlib_increment_combined_counter(&udm->counters[UDP_PROCESSED],
-		vm->thread_index, sw_idx2, 1, sizeof(udp_header_t));
-	vlib_increment_combined_counter(&udm->counters[UDP_TOTAL],
-		vm->thread_index, sw_idx3, 1, len3);
-	vlib_increment_combined_counter(&udm->counters[UDP_PROCESSED],
-		vm->thread_index, sw_idx3, 1, sizeof(udp_header_t));
+
+	udm->cache_counters[sw_idx0][UDP_TOTAL].packets++;
+	udm->cache_counters[sw_idx0][UDP_TOTAL].bytes += len0;
+	udm->cache_counters[sw_idx0][UDP_PROCESSED].packets++;
+	udm->cache_counters[sw_idx0][UDP_PROCESSED].bytes += sizeof(udp_header_t);
+	udm->cache_counters[sw_idx1][UDP_TOTAL].packets++;
+	udm->cache_counters[sw_idx1][UDP_TOTAL].bytes += len1;
+	udm->cache_counters[sw_idx1][UDP_PROCESSED].packets++;
+	udm->cache_counters[sw_idx1][UDP_PROCESSED].bytes += sizeof(udp_header_t);
+	udm->cache_counters[sw_idx2][UDP_TOTAL].packets++;
+	udm->cache_counters[sw_idx2][UDP_TOTAL].bytes += len2;
+	udm->cache_counters[sw_idx2][UDP_PROCESSED].packets++;
+	udm->cache_counters[sw_idx2][UDP_PROCESSED].bytes += sizeof(udp_header_t);
+	udm->cache_counters[sw_idx3][UDP_TOTAL].packets++;
+	udm->cache_counters[sw_idx3][UDP_TOTAL].bytes += len3;
+	udm->cache_counters[sw_idx3][UDP_PROCESSED].packets++;
+	udm->cache_counters[sw_idx3][UDP_PROCESSED].bytes += sizeof(udp_header_t);
 
 	if (PREDICT_FALSE(node->flags & VLIB_NODE_FLAG_TRACE))
 	{
@@ -139,21 +141,22 @@ process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, 
 	udp_detunnel_main_t *udm = &udp_detunnel_main;
 	u32 sw_idx = vnet_buffer(b)->sw_if_index[VLIB_RX];
 
-	vlib_increment_combined_counter(&udm->counters[UDP_TOTAL], vm->thread_index,
-			sw_idx, 1, b->current_length);
+	udm->cache_counters[sw_idx][UDP_TOTAL].packets++;
+	udm->cache_counters[sw_idx][UDP_TOTAL].bytes += b->current_length;
 
 	if (PREDICT_FALSE(b->current_length < sizeof(udp_header_t)))
 	{
-		vlib_increment_combined_counter(&udm->counters[UDP_FAILED], vm->thread_index,
-				sw_idx, 1, b->current_length);
+		udm->cache_counters[sw_idx][UDP_FAILED].packets++;
+		udm->cache_counters[sw_idx][UDP_FAILED].bytes += b->current_length;
 		next[0] = UDP_NEXT_DROP;
 		return;
 	}
 
 	const udp_header_t *udp = vlib_buffer_get_current(b);
 	vlib_buffer_advance(b, sizeof(udp_header_t));
-	vlib_increment_combined_counter(&udm->counters[UDP_PROCESSED], vm->thread_index,
-			sw_idx, 1, sizeof(udp_header_t));
+
+	udm->cache_counters[sw_idx][UDP_PROCESSED].packets++;
+	udm->cache_counters[sw_idx][UDP_PROCESSED].bytes += sizeof(udp_header_t);
 
 	next[0] = get_next_1x(udp);
 
@@ -233,7 +236,23 @@ VLIB_NODE_FN (udp_detunnel) (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_fr
 		n_left_from--;
 	}
 
-	CLIB_MARCH_FN_SELECT(ethertype_to_next) (nexts, frame->n_vectors);
+	for (u32 sw_idx = 0; sw_idx <= max_sw_if_index; sw_idx++)
+	{
+		vlib_cache_counter_t *counter = udm->cache_counters[sw_idx];
+		vlib_increment_combined_counter(&udm->counters[UDP_TOTAL], vm->thread_index,
+				sw_idx, counter[UDP_TOTAL].packets, counter[UDP_TOTAL].bytes);
+		vlib_increment_combined_counter(&udm->counters[UDP_PROCESSED], vm->thread_index,
+				sw_idx, counter[UDP_PROCESSED].packets, counter[UDP_PROCESSED].bytes);
+		vlib_increment_combined_counter(&udm->counters[UDP_FAILED], vm->thread_index,
+				sw_idx, counter[UDP_FAILED].packets, counter[UDP_FAILED].bytes);
+
+		counter[UDP_TOTAL].packets = 0;
+		counter[UDP_TOTAL].bytes = 0;
+		counter[UDP_PROCESSED].packets = 0;
+		counter[UDP_PROCESSED].bytes = 0;
+		counter[UDP_FAILED].packets = 0;
+		counter[UDP_FAILED].bytes = 0;
+	}
 
 	vlib_buffer_enqueue_to_next(vm, node, from, nexts, frame->n_vectors);
 
@@ -282,6 +301,8 @@ static clib_error_t *udp_detunnel_init(vlib_main_t *CLIB_UNUSED(vm))
 
 	foreach_detunnel_counter
 #undef _
+
+	clib_memset(udm->cache_counters, 0, sizeof(udm->cache_counters));
 
 	return 0;
 }
