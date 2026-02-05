@@ -120,8 +120,8 @@ typedef struct {
 
 typedef struct
 {
-  u32 packets;			/**< packet counter */
-  u32 bytes;			/**< byte counter  */
+  u32 packets;
+  u32 bytes;
 } vlib_cache_counter_t;
 
 extern u8 *format_detunnel_trace(u8 *s, va_list *args);

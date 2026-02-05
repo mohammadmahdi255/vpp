@@ -10,8 +10,6 @@
 #include <vppinfra/error.h>
 
 #include "detunnel.h"
-#include "vlib/counter_types.h"
-#include "vppinfra/string.h"
 
 #define foreach_ethernet_detunnel_next				\
 	_(drop_next, DROP, "drop")						\
@@ -49,7 +47,7 @@ typedef struct
 typedef struct
 {
 	u32 counter_if_index;
-	vlib_cache_counter_t cache_counters[MAX_IF_SIZE][ETHERNET_COUNTER_N];
+	vlib_counter_t cache_counters[MAX_IF_SIZE];
 	vlib_combined_counter_main_t counters[ETHERNET_COUNTER_N];
 } ethernet_detunnel_main_t;
 
@@ -87,7 +85,7 @@ add_trace(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b,
 	}
 }
 
-static_always_inline bool
+static_always_inline void
 process_buffer_4x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t* b[4], u16 next[4])
 {
 	const u32 sw_idx0 = vnet_buffer(b[0])->sw_if_index[VLIB_RX];
@@ -97,61 +95,57 @@ process_buffer_4x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t* b[4
 
 	const bool sw_idx_eq = sw_idx0 == sw_idx1 && sw_idx2 == sw_idx3 && sw_idx0 == sw_idx2;
 
-	const u32 len0 = b[0]->current_length;
-	const u32 len1 = b[1]->current_length;
-	const u32 len2 = b[2]->current_length;
-	const u32 len3 = b[3]->current_length;
+	const u16 has_space0 = vlib_buffer_has_space(b[0], sizeof(ethernet_header_t));
+	const u16 has_space1 = vlib_buffer_has_space(b[1], sizeof(ethernet_header_t));
+	const u16 has_space2 = vlib_buffer_has_space(b[2], sizeof(ethernet_header_t));
+	const u16 has_space3 = vlib_buffer_has_space(b[3], sizeof(ethernet_header_t));
 
-	u32 min_len = len0;
-	min_len = clib_min(min_len, len1);
-	min_len = clib_min(min_len, len2);
-	min_len = clib_min(min_len, len3);
+	const u16 mask0 = ~has_space0 + 1;
+	const u16 mask1 = ~has_space1 + 1;
+	const u16 mask2 = ~has_space2 + 1;
+	const u16 mask3 = ~has_space3 + 1;
 
-	if (PREDICT_FALSE(min_len < sizeof(ethernet_header_t)))
-		return false;
+	const u16 bytes0 = mask0 & sizeof(ethernet_header_t);
+	const u16 bytes1 = mask1 & sizeof(ethernet_header_t);
+	const u16 bytes2 = mask2 & sizeof(ethernet_header_t);
+	const u16 bytes3 = mask3 & sizeof(ethernet_header_t);
 
 	const ethernet_header_t *eth0 = vlib_buffer_get_current(b[0]);
 	const ethernet_header_t *eth1 = vlib_buffer_get_current(b[1]);
 	const ethernet_header_t *eth2 = vlib_buffer_get_current(b[2]);
 	const ethernet_header_t *eth3 = vlib_buffer_get_current(b[3]);
 
-	vlib_buffer_advance(b[0], sizeof(ethernet_header_t));
-	vlib_buffer_advance(b[1], sizeof(ethernet_header_t));
-	vlib_buffer_advance(b[2], sizeof(ethernet_header_t));
-	vlib_buffer_advance(b[3], sizeof(ethernet_header_t));
+	vlib_buffer_advance(b[0], bytes0);
+	vlib_buffer_advance(b[1], bytes1);
+	vlib_buffer_advance(b[2], bytes2);
+	vlib_buffer_advance(b[3], bytes3);
 
-	next[0] = eth0->type;
-	next[1] = eth1->type;
-	next[2] = eth2->type;
-	next[3] = eth3->type;
+	next[0] = mask0 & eth0->type;
+	next[1] = mask1 & eth1->type;
+	next[2] = mask2 & eth2->type;
+	next[3] = mask3 & eth3->type;
 
 	ethernet_detunnel_main_t *edm = &ethernet_detunnel_main;
 
 	if (PREDICT_TRUE(sw_idx_eq))
 	{
-		edm->cache_counters[sw_idx0][ETHERNET_TOTAL].packets += 4;
-		edm->cache_counters[sw_idx0][ETHERNET_TOTAL].bytes += len0 + len1 + len2 + len3;
-		edm->cache_counters[sw_idx0][ETHERNET_PROCESSED].packets += 4;
-		edm->cache_counters[sw_idx0][ETHERNET_PROCESSED].bytes += 4 * sizeof(ethernet_header_t);
+		const u32 n_packets = has_space0 + has_space1 + has_space2 + has_space3;
+		edm->cache_counters[sw_idx0].packets += n_packets;
+		edm->cache_counters[sw_idx0].bytes += n_packets * sizeof(ethernet_header_t);
 	}
 	else
 	{
-		edm->cache_counters[sw_idx0][ETHERNET_TOTAL].packets++;
-		edm->cache_counters[sw_idx0][ETHERNET_TOTAL].bytes += len0;
-		edm->cache_counters[sw_idx0][ETHERNET_PROCESSED].packets++;
-		edm->cache_counters[sw_idx0][ETHERNET_PROCESSED].bytes += sizeof(ethernet_header_t);
-		edm->cache_counters[sw_idx1][ETHERNET_TOTAL].packets++;
-		edm->cache_counters[sw_idx1][ETHERNET_TOTAL].bytes += len1;
-		edm->cache_counters[sw_idx1][ETHERNET_PROCESSED].packets++;
-		edm->cache_counters[sw_idx1][ETHERNET_PROCESSED].bytes += sizeof(ethernet_header_t);
-		edm->cache_counters[sw_idx2][ETHERNET_TOTAL].packets++;
-		edm->cache_counters[sw_idx2][ETHERNET_TOTAL].bytes += len2;
-		edm->cache_counters[sw_idx2][ETHERNET_PROCESSED].packets++;
-		edm->cache_counters[sw_idx2][ETHERNET_PROCESSED].bytes += sizeof(ethernet_header_t);
-		edm->cache_counters[sw_idx3][ETHERNET_TOTAL].packets++;
-		edm->cache_counters[sw_idx3][ETHERNET_TOTAL].bytes += len3;
-		edm->cache_counters[sw_idx3][ETHERNET_PROCESSED].packets++;
-		edm->cache_counters[sw_idx3][ETHERNET_PROCESSED].bytes += sizeof(ethernet_header_t);
+		edm->cache_counters[sw_idx0].packets += has_space0;
+		edm->cache_counters[sw_idx0].bytes += bytes0;
+
+		edm->cache_counters[sw_idx1].packets += has_space1;
+		edm->cache_counters[sw_idx1].bytes += bytes1;
+
+		edm->cache_counters[sw_idx2].packets += has_space2;
+		edm->cache_counters[sw_idx2].bytes += bytes2;
+
+		edm->cache_counters[sw_idx3].packets += has_space3;
+		edm->cache_counters[sw_idx3].bytes += bytes3;
 	}
 
 	if (PREDICT_FALSE(node->flags & VLIB_NODE_FLAG_TRACE))
@@ -161,8 +155,6 @@ process_buffer_4x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t* b[4
 		add_trace(vm, node, b[2], eth2);
 		add_trace(vm, node, b[3], eth3);
 	}
-
-	return true;
 }
 
 static_always_inline void
@@ -171,24 +163,15 @@ process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, 
 	ethernet_detunnel_main_t *edm = &ethernet_detunnel_main;
 	u32 sw_idx = vnet_buffer(b)->sw_if_index[VLIB_RX];
 
-	edm->cache_counters[sw_idx][ETHERNET_TOTAL].packets++;
-	edm->cache_counters[sw_idx][ETHERNET_TOTAL].bytes += b->current_length;
-
-	if (PREDICT_FALSE(b->current_length < sizeof(ethernet_header_t)))
-	{
-		edm->cache_counters[sw_idx][ETHERNET_FAILED].packets++;
-		edm->cache_counters[sw_idx][ETHERNET_FAILED].bytes += b->current_length;
-		next[0] = ETHERNET_NEXT_DROP;
-		return;
-	}
+	const u8 has_space = vlib_buffer_has_space(b, sizeof(ethernet_header_t));
 
 	const ethernet_header_t *eth = vlib_buffer_get_current(b);
-	vlib_buffer_advance(b, sizeof(ethernet_header_t));
 
-	edm->cache_counters[sw_idx][ETHERNET_PROCESSED].packets++;
-	edm->cache_counters[sw_idx][ETHERNET_PROCESSED].bytes += sizeof(ethernet_header_t);
+	vlib_buffer_advance(b, (i64) (has_space * sizeof(ethernet_header_t)));
 
-	next[0] = eth->type;
+	edm->cache_counters[sw_idx].packets += has_space;
+	edm->cache_counters[sw_idx].bytes += has_space * sizeof(ethernet_header_t);
+	next[0] = has_space * eth->type;
 
 	if (PREDICT_FALSE(node->flags & VLIB_NODE_FLAG_TRACE))
 		add_trace(vm, node, b, eth);
@@ -244,13 +227,7 @@ VLIB_NODE_FN (ethernet_detunnel) (vlib_main_t *vm, vlib_node_runtime_t *node, vl
 			vlib_prefetch_buffer_data(b[7], LOAD);
 		}
 
-		if (PREDICT_FALSE(!process_buffer_4x(vm, node, b, next)))
-		{
-			process_buffer_1x(vm, node, b[0], &next[0]);
-			process_buffer_1x(vm, node, b[1], &next[1]);
-			process_buffer_1x(vm, node, b[2], &next[2]);
-			process_buffer_1x(vm, node, b[3], &next[3]);
-		}
+		process_buffer_4x(vm, node, b, next);
 
 		b += 4;
 		next += 4;
@@ -268,20 +245,12 @@ VLIB_NODE_FN (ethernet_detunnel) (vlib_main_t *vm, vlib_node_runtime_t *node, vl
 
 	for (u32 sw_idx = 0; sw_idx <= max_sw_if_index; sw_idx++)
 	{
-		vlib_cache_counter_t *counter = edm->cache_counters[sw_idx];
-		vlib_increment_combined_counter(&edm->counters[ETHERNET_TOTAL], vm->thread_index,
-				sw_idx, counter[ETHERNET_TOTAL].packets, counter[ETHERNET_TOTAL].bytes);
+		vlib_counter_t *counter = &edm->cache_counters[sw_idx];
 		vlib_increment_combined_counter(&edm->counters[ETHERNET_PROCESSED], vm->thread_index,
-				sw_idx, counter[ETHERNET_PROCESSED].packets, counter[ETHERNET_PROCESSED].bytes);
-		vlib_increment_combined_counter(&edm->counters[ETHERNET_FAILED], vm->thread_index,
-				sw_idx, counter[ETHERNET_FAILED].packets, counter[ETHERNET_FAILED].bytes);
+				sw_idx, counter->packets, counter->bytes);
 
-		counter[ETHERNET_TOTAL].packets = 0;
-		counter[ETHERNET_TOTAL].bytes = 0;
 		counter[ETHERNET_PROCESSED].packets = 0;
 		counter[ETHERNET_PROCESSED].bytes = 0;
-		counter[ETHERNET_FAILED].packets = 0;
-		counter[ETHERNET_FAILED].bytes = 0;
 	}
 
 	ethernet_to_next(nexts, frame->n_vectors);
