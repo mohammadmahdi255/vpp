@@ -46,7 +46,7 @@ typedef struct
 typedef struct
 {
 	u32 counter_if_index;
-	vlib_cache_counter_t cache_counters[MAX_IF_SIZE][VLAN_COUNTER_N];
+	vlib_counter_t cache_counters[MAX_IF_SIZE];
 	vlib_combined_counter_main_t counters[VLAN_COUNTER_N];
 } vlan_detunnel_main_t;
 
@@ -73,12 +73,12 @@ vlan_to_next(u16 *next, u16 len)
 
 static_always_inline void
 add_trace(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b,
-		const vlan_header_t *vlan)
+		const vlan_header_t *vlan, const u8 is_valid)
 {
 	if (PREDICT_FALSE((node->flags & VLIB_NODE_FLAG_TRACE) && (b->flags & VLIB_BUFFER_IS_TRACED)))
 	{
 		vlan_trace_t *t = vlib_add_trace(vm, node, b, sizeof(*t));
-		t->vlan = *vlan;
+		t->vlan = is_valid ? *vlan : (vlan_header_t){0};
 		t->sw_if_index = vnet_buffer(b)->sw_if_index[VLIB_RX];
 	}
 }
@@ -94,69 +94,62 @@ process_buffer_4x(vlib_main_t *vm, vlib_node_runtime_t *node,
 
 	const bool sw_idx_eq = sw_idx0 == sw_idx1 && sw_idx2 == sw_idx3 && sw_idx0 == sw_idx2;
 
-	const u32 len0 = b[0]->current_length;
-	const u32 len1 = b[1]->current_length;
-	const u32 len2 = b[2]->current_length;
-	const u32 len3 = b[3]->current_length;
+	const u16 is_valid0 = vlib_buffer_has_space(b[0], sizeof(vlan_header_t));
+	const u16 is_valid1 = vlib_buffer_has_space(b[1], sizeof(vlan_header_t));
+	const u16 is_valid2 = vlib_buffer_has_space(b[2], sizeof(vlan_header_t));
+	const u16 is_valid3 = vlib_buffer_has_space(b[3], sizeof(vlan_header_t));
 
-	u32 min_len = len0;
-	min_len = clib_min(min_len, len1);
-	min_len = clib_min(min_len, len2);
-	min_len = clib_min(min_len, len3);
+	const u16 mask0 = ~is_valid0 + 1;
+	const u16 mask1 = ~is_valid1 + 1;
+	const u16 mask2 = ~is_valid2 + 1;
+	const u16 mask3 = ~is_valid3 + 1;
 
-	if (PREDICT_FALSE(min_len < sizeof(vlan_header_t)))
-		return false;
+	const u16 bytes0 = mask0 & sizeof(vlan_header_t);
+	const u16 bytes1 = mask1 & sizeof(vlan_header_t);
+	const u16 bytes2 = mask2 & sizeof(vlan_header_t);
+	const u16 bytes3 = mask3 & sizeof(vlan_header_t);
 
-	vlan_header_t *vlan0 = vlib_buffer_get_current(b[0]);
-	vlan_header_t *vlan1 = vlib_buffer_get_current(b[1]);
-	vlan_header_t *vlan2 = vlib_buffer_get_current(b[2]);
-	vlan_header_t *vlan3 = vlib_buffer_get_current(b[3]);
+	const vlan_header_t *vlan0 = vlib_buffer_get_current(b[0]);
+	const vlan_header_t *vlan1 = vlib_buffer_get_current(b[1]);
+	const vlan_header_t *vlan2 = vlib_buffer_get_current(b[2]);
+	const vlan_header_t *vlan3 = vlib_buffer_get_current(b[3]);
 
-	vlib_buffer_advance(b[0], sizeof(vlan_header_t));
-	vlib_buffer_advance(b[1], sizeof(vlan_header_t));
-	vlib_buffer_advance(b[2], sizeof(vlan_header_t));
-	vlib_buffer_advance(b[3], sizeof(vlan_header_t));
+	vlib_buffer_advance(b[0], bytes0);
+	vlib_buffer_advance(b[1], bytes1);
+	vlib_buffer_advance(b[2], bytes2);
+	vlib_buffer_advance(b[3], bytes3);
 
-	next[0] = vlan0->type;
-	next[1] = vlan1->type;
-	next[2] = vlan2->type;
-	next[3] = vlan3->type;
+	next[0] = mask0 & vlan0->type;
+	next[1] = mask1 & vlan1->type;
+	next[2] = mask2 & vlan2->type;
+	next[3] = mask3 & vlan3->type;
 
 	vlan_detunnel_main_t *vdm = &vlan_detunnel_main;
 
 	if (PREDICT_TRUE(sw_idx_eq))
 	{
-		vdm->cache_counters[sw_idx0][VLAN_TOTAL].packets += 4;
-		vdm->cache_counters[sw_idx0][VLAN_TOTAL].bytes += len0 + len1 + len2 + len3;
-		vdm->cache_counters[sw_idx0][VLAN_PROCESSED].packets += 4;
-		vdm->cache_counters[sw_idx0][VLAN_PROCESSED].bytes += 4 * sizeof(vlan_header_t);
+		const u32 n_packets = is_valid0 + is_valid1 + is_valid2 + is_valid3;
+		vdm->cache_counters[sw_idx0].packets += n_packets;
+		vdm->cache_counters[sw_idx0].bytes += n_packets * sizeof(vlan_header_t);
 	}
 	else
 	{
-		vdm->cache_counters[sw_idx0][VLAN_TOTAL].packets++;
-		vdm->cache_counters[sw_idx0][VLAN_TOTAL].bytes += len0;
-		vdm->cache_counters[sw_idx0][VLAN_PROCESSED].packets++;
-		vdm->cache_counters[sw_idx0][VLAN_PROCESSED].bytes += sizeof(vlan_header_t);
-		vdm->cache_counters[sw_idx1][VLAN_TOTAL].packets++;
-		vdm->cache_counters[sw_idx1][VLAN_TOTAL].bytes += len1;
-		vdm->cache_counters[sw_idx1][VLAN_PROCESSED].packets++;
-		vdm->cache_counters[sw_idx1][VLAN_PROCESSED].bytes += sizeof(vlan_header_t);
-		vdm->cache_counters[sw_idx2][VLAN_TOTAL].packets++;
-		vdm->cache_counters[sw_idx2][VLAN_TOTAL].bytes += len2;
-		vdm->cache_counters[sw_idx2][VLAN_PROCESSED].packets++;
-		vdm->cache_counters[sw_idx2][VLAN_PROCESSED].bytes += sizeof(vlan_header_t);
-		vdm->cache_counters[sw_idx3][VLAN_TOTAL].packets++;
-		vdm->cache_counters[sw_idx3][VLAN_TOTAL].bytes += len3;
-		vdm->cache_counters[sw_idx3][VLAN_PROCESSED].packets++;
-		vdm->cache_counters[sw_idx3][VLAN_PROCESSED].bytes += sizeof(vlan_header_t);
+		vdm->cache_counters[sw_idx0].packets += is_valid0;
+		vdm->cache_counters[sw_idx1].packets += is_valid1;
+		vdm->cache_counters[sw_idx2].packets += is_valid2;
+		vdm->cache_counters[sw_idx3].packets += is_valid3;
+		vdm->cache_counters[sw_idx0].bytes += bytes0;
+		vdm->cache_counters[sw_idx1].bytes += bytes1;
+		vdm->cache_counters[sw_idx2].bytes += bytes2;
+		vdm->cache_counters[sw_idx3].bytes += bytes3;
 	}
 
 	if (PREDICT_FALSE(node->flags & VLIB_NODE_FLAG_TRACE))
 	{
-		add_trace(vm, node, b[0], vlan0);
-		add_trace(vm, node, b[1], vlan1);
-		add_trace(vm, node, b[2], vlan2);
-		add_trace(vm, node, b[3], vlan3);
+		add_trace(vm, node, b[0], vlan0, is_valid0);
+		add_trace(vm, node, b[1], vlan1, is_valid1);
+		add_trace(vm, node, b[2], vlan2, is_valid2);
+		add_trace(vm, node, b[3], vlan3, is_valid3);
 	}
 
 	return true;
@@ -166,29 +159,21 @@ static_always_inline void
 process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, u16 *next)
 {
 	vlan_detunnel_main_t *vdm = &vlan_detunnel_main;
-	u32 sw_idx = vnet_buffer(b)->sw_if_index[VLIB_RX];
+	const u32 sw_idx = vnet_buffer(b)->sw_if_index[VLIB_RX];
 
-	vdm->cache_counters[sw_idx][VLAN_TOTAL].packets++;
-	vdm->cache_counters[sw_idx][VLAN_TOTAL].bytes += b->current_length;
-
-	if (PREDICT_FALSE(b->current_length < sizeof(vlan_header_t)))
-	{
-		vdm->cache_counters[sw_idx][VLAN_FAILED].packets++;
-		vdm->cache_counters[sw_idx][VLAN_FAILED].bytes += b->current_length;
-		next[0] = VLAN_NEXT_DROP;
-		return;
-	}
+	const u8 is_valid = vlib_buffer_has_space(b, sizeof(vlan_header_t));
+	const u16 mask = ~is_valid + 1;
+	const u16 bytes = mask & sizeof(vlan_header_t);
 
 	const vlan_header_t *vlan = vlib_buffer_get_current(b);
-	vlib_buffer_advance(b, sizeof(vlan_header_t));
+	vlib_buffer_advance(b, bytes);
 
-	vdm->cache_counters[sw_idx][VLAN_PROCESSED].packets++;
-	vdm->cache_counters[sw_idx][VLAN_PROCESSED].bytes += sizeof(vlan_header_t);
-
-	next[0] = vlan->type;
+	vdm->cache_counters[sw_idx].packets += is_valid;
+	vdm->cache_counters[sw_idx].bytes += bytes;
+	next[0] = mask & vlan->type;
 
 	if (PREDICT_FALSE(node->flags & VLIB_NODE_FLAG_TRACE))
-		add_trace(vm, node, b, vlan);
+		add_trace(vm, node, b, vlan, is_valid);
 }
 
 VLIB_NODE_FN (vlan_detunnel) (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_frame_t *frame)
@@ -265,20 +250,12 @@ VLIB_NODE_FN (vlan_detunnel) (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_f
 
 	for (u32 sw_idx = 0; sw_idx <= max_sw_if_index; sw_idx++)
 	{
-		vlib_cache_counter_t *counter = vdm->cache_counters[sw_idx];
-		vlib_increment_combined_counter(&vdm->counters[VLAN_TOTAL], vm->thread_index,
-				sw_idx, counter[VLAN_TOTAL].packets, counter[VLAN_TOTAL].bytes);
+		vlib_counter_t *counter = &vdm->cache_counters[sw_idx];
 		vlib_increment_combined_counter(&vdm->counters[VLAN_PROCESSED], vm->thread_index,
-				sw_idx, counter[VLAN_PROCESSED].packets, counter[VLAN_PROCESSED].bytes);
-		vlib_increment_combined_counter(&vdm->counters[VLAN_FAILED], vm->thread_index,
-				sw_idx, counter[VLAN_FAILED].packets, counter[VLAN_FAILED].bytes);
+				sw_idx, counter->packets, counter->bytes);
 
-		counter[VLAN_TOTAL].packets = 0;
-		counter[VLAN_TOTAL].bytes = 0;
-		counter[VLAN_PROCESSED].packets = 0;
-		counter[VLAN_PROCESSED].bytes = 0;
-		counter[VLAN_FAILED].packets = 0;
-		counter[VLAN_FAILED].bytes = 0;
+		counter->packets = 0;
+		counter->bytes = 0;
 	}
 
 	vlan_to_next(nexts, frame->n_vectors);
@@ -296,8 +273,13 @@ static u8 *format_vlan_trace(u8 *s, va_list *args)
 	vlib_main_t *CLIB_UNUSED(vm)   = va_arg(*args, vlib_main_t *);
 	vlib_node_t *CLIB_UNUSED(node) = va_arg(*args, vlib_node_t *);
 	vlan_trace_t *t = va_arg(*args, vlan_trace_t *);
-	return format(s, "vlan detunnel: if index %u priority_cfi_and_id %u ethertype 0x%04x",
-			t->sw_if_index, t->vlan.priority_cfi_and_id, t->vlan.type);
+	return format(s, "ethernet detunnel:\n"
+		"  interface             %U\n"
+		"  priority_cfi_and_id   0x%04x\n"
+		"  ethertype             0x%04x",
+		format_vnet_sw_if_index_name, vnet_get_main(), t->sw_if_index,
+		t->vlan.priority_cfi_and_id,
+		clib_net_to_host_u16(t->vlan.type));
 }
 
 /* Register node */

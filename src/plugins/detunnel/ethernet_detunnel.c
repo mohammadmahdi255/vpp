@@ -136,15 +136,12 @@ process_buffer_4x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t* b[4
 	else
 	{
 		edm->cache_counters[sw_idx0].packets += is_valid0;
-		edm->cache_counters[sw_idx0].bytes += bytes0;
-
 		edm->cache_counters[sw_idx1].packets += is_valid1;
-		edm->cache_counters[sw_idx1].bytes += bytes1;
-
 		edm->cache_counters[sw_idx2].packets += is_valid2;
-		edm->cache_counters[sw_idx2].bytes += bytes2;
-
 		edm->cache_counters[sw_idx3].packets += is_valid3;
+		edm->cache_counters[sw_idx0].bytes += bytes0;
+		edm->cache_counters[sw_idx1].bytes += bytes1;
+		edm->cache_counters[sw_idx2].bytes += bytes2;
 		edm->cache_counters[sw_idx3].bytes += bytes3;
 	}
 
@@ -250,8 +247,8 @@ VLIB_NODE_FN (ethernet_detunnel) (vlib_main_t *vm, vlib_node_runtime_t *node, vl
 		vlib_increment_combined_counter(&edm->counters[ETHERNET_PROCESSED], vm->thread_index,
 				sw_idx, counter->packets, counter->bytes);
 
-		counter[ETHERNET_PROCESSED].packets = 0;
-		counter[ETHERNET_PROCESSED].bytes = 0;
+		counter->packets = 0;
+		counter->bytes = 0;
 	}
 
 	ethernet_to_next(nexts, frame->n_vectors);
