@@ -233,7 +233,6 @@ VLIB_NODE_FN (vlan_detunnel) (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_f
 			process_buffer_1x(vm, node, b[3], &next[3]);
 		}
 
-
 		b += 4;
 		next += 4;
 		n_left_from -= 4;
