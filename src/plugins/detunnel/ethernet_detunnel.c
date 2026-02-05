@@ -100,15 +100,10 @@ process_buffer_4x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t* b[4
 	const u16 is_valid2 = vlib_buffer_has_space(b[2], sizeof(ethernet_header_t));
 	const u16 is_valid3 = vlib_buffer_has_space(b[3], sizeof(ethernet_header_t));
 
-	const u16 mask0 = ~is_valid0 + 1;
-	const u16 mask1 = ~is_valid1 + 1;
-	const u16 mask2 = ~is_valid2 + 1;
-	const u16 mask3 = ~is_valid3 + 1;
-
-	const u16 bytes0 = mask0 & sizeof(ethernet_header_t);
-	const u16 bytes1 = mask1 & sizeof(ethernet_header_t);
-	const u16 bytes2 = mask2 & sizeof(ethernet_header_t);
-	const u16 bytes3 = mask3 & sizeof(ethernet_header_t);
+	const u16 bytes0 = PREDICT_TRUE(is_valid0) ? sizeof(ethernet_header_t) : 0;
+	const u16 bytes1 = PREDICT_TRUE(is_valid1) ? sizeof(ethernet_header_t) : 0;
+	const u16 bytes2 = PREDICT_TRUE(is_valid2) ? sizeof(ethernet_header_t) : 0;
+	const u16 bytes3 = PREDICT_TRUE(is_valid3) ? sizeof(ethernet_header_t) : 0;
 
 	const ethernet_header_t *eth0 = vlib_buffer_get_current(b[0]);
 	const ethernet_header_t *eth1 = vlib_buffer_get_current(b[1]);
@@ -120,10 +115,10 @@ process_buffer_4x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t* b[4
 	vlib_buffer_advance(b[2], bytes2);
 	vlib_buffer_advance(b[3], bytes3);
 
-	next[0] = mask0 & eth0->type;
-	next[1] = mask1 & eth1->type;
-	next[2] = mask2 & eth2->type;
-	next[3] = mask3 & eth3->type;
+	next[0] = PREDICT_TRUE(is_valid0) ? eth0->type : ETHERNET_NEXT_DROP;
+	next[1] = PREDICT_TRUE(is_valid1) ? eth1->type : ETHERNET_NEXT_DROP;
+	next[2] = PREDICT_TRUE(is_valid2) ? eth2->type : ETHERNET_NEXT_DROP;
+	next[3] = PREDICT_TRUE(is_valid3) ? eth3->type : ETHERNET_NEXT_DROP;
 
 	ethernet_detunnel_main_t *edm = &ethernet_detunnel_main;
 
@@ -161,15 +156,14 @@ process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, 
 	const u32 sw_idx = vnet_buffer(b)->sw_if_index[VLIB_RX];
 
 	const u8 is_valid = vlib_buffer_has_space(b, sizeof(ethernet_header_t));
-	const u16 mask = ~is_valid + 1;
-	const u16 bytes = mask & sizeof(ethernet_header_t);
+	const u16 bytes = is_valid ? sizeof(ethernet_header_t) : 0;
 
 	const ethernet_header_t *eth = vlib_buffer_get_current(b);
 	vlib_buffer_advance(b, bytes);
 
 	edm->cache_counters[sw_idx].packets += is_valid;
 	edm->cache_counters[sw_idx].bytes += bytes;
-	next[0] = mask & eth->type;
+	next[0] = is_valid ? eth->type : ETHERTYPE_NEXT_DROP;
 
 	if (PREDICT_FALSE(node->flags & VLIB_NODE_FLAG_TRACE))
 		add_trace(vm, node, b, eth, is_valid);
