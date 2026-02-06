@@ -158,7 +158,7 @@ process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, 
 	const ethernet_header_t *eth = vlib_buffer_get_current(b);
 	vlib_buffer_advance(b, bytes);
 
-	next[0] = is_valid ? eth->type : ETHERTYPE_NEXT_DROP;
+	next[0] = is_valid ? eth->type : ETHERNET_NEXT_DROP;
 	edm->cache_counters[sw_idx].packets += is_valid;
 	edm->cache_counters[sw_idx].bytes += bytes;
 

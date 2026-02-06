@@ -6,27 +6,7 @@
 #include <vppinfra/types.h>
 
 #define foreach_detunnel_counter	\
-	_(TOTAL, total)					\
-	_(PROCESSED, processed)			\
-	_(FAILED, failed)
-
-#define foreach_ethertype_detunnel_next	\
-	_(DROP, "drop")						\
-	_(VLAN_DETUNNEL, "vlan-detunnel")	\
-	_(IPV4_DETUNNEL, "ipv4-detunnel")	\
-	_(IPV6_DETUNNEL, "ip6-drop")			\
-	_(UDP_DETUNNEL, "udp-detunnel")
-
-#define foreach_ip_protocol_detunnel_next	\
-	_(DROP, "drop")							\
-	_(IPV4_DETUNNEL, "ipv4-detunnel")		\
-	_(IPV6_DETUNNEL, "ip6-drop")				\
-	_(UDP_DETUNNEL, "udp-detunnel")
-
-#define foreach_transport_detunnel_next	\
-	_(DROP, "drop")						\
-	_(L2TP_DETUNNEL, "ip4-drop")		\
-	_(GPRS_DETUNNEL, "ip6-drop")
+	_(PROCESSED, processed)
 
 #if defined(CLIB_HAVE_VEC512)
 #define SIMD_VEC(name)		name##_u16x32
@@ -67,30 +47,6 @@
 	_(tcp_protocol)			\
 	_(udp_protocol)
 
-enum
-{
-#define _(id, name) ETHERTYPE_NEXT_##id,
-	foreach_ethertype_detunnel_next
-#undef _
-	ETHERTYPE_NEXT_N,
-};
-
-enum
-{
-#define _(id, name) IP_PROTOCOL_NEXT_##id,
-	foreach_ip_protocol_detunnel_next
-#undef _
-	IP_PROTOCOL_NEXT_N,
-};
-
-enum
-{
-#define _(id, name) TRANSPORT_NEXT_##id,
-	foreach_transport_detunnel_next
-#undef _
-	TRANSPORT_NEXT_N,
-};
-
 #define _(var)	extern SIMD_TYPE DETUNNEL_CONCAT(var, SIMD_TYPE);
 
 foreach_ethertype
@@ -118,28 +74,5 @@ typedef struct {
 } __clib_packed detunnel_trace_t;
 
 extern u8 *format_detunnel_trace(u8 *s, va_list *args);
-
-/*
-#define foreach_detunnel_protocol			\
-		_ (ETHERNET, ethernet)				\
-		_ (VLAN, vlan)
-*/
-
-// typedef enum {
-// #define _(E, ...) DETUNNEL_##E,
-// 	foreach_detunnel_protocol
-// #undef _
-// 	DETUNNEL_STATISTICS_N
-// } detunnel_statistics_t;
-
-// typedef struct
-// {
-// 	clib_thread_index_t index;
-// } detunnel_worker_t;
-
-// typedef struct
-// {
-// 	// vlib_combined_counter_main_t stat[DETUNNEL_STATISTICS_N];
-// } detunnel_main_t;
 
 #endif
