@@ -117,12 +117,6 @@ typedef struct {
 	u16 next_protocol;
 } __clib_packed detunnel_trace_t;
 
-typedef struct
-{
-  u32 packets;
-  u32 bytes;
-} vlib_cache_counter_t;
-
 extern u8 *format_detunnel_trace(u8 *s, va_list *args);
 
 /*

@@ -41,7 +41,6 @@ enum
 typedef struct
 {
 	ip4_header_t ip4;
-	u32 sw_if_index;
 } ip4_trace_t;
 
 typedef struct {
@@ -80,7 +79,6 @@ add_trace(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b,
 	{
 		ip4_trace_t *t = vlib_add_trace(vm, node, b, sizeof(*t));
 		t->ip4 = is_valid ? *ip4 : (ip4_header_t){0};
-		t->sw_if_index = vnet_buffer(b)->sw_if_index[VLIB_RX];
 	}
 }
 
@@ -288,11 +286,7 @@ static u8 *format_ipv4_trace(u8 *s, va_list *args)
 	vlib_main_t *CLIB_UNUSED(vm)   = va_arg(*args, vlib_main_t *);
 	vlib_node_t *CLIB_UNUSED(node) = va_arg(*args, vlib_node_t *);
 	ip4_trace_t *t = va_arg(*args, ip4_trace_t *);
-	return format(s, "ipv4 detunnel:\n"
-		"  interface  %U\n"
-		"  %U",
-		format_vnet_sw_if_index_name, vnet_get_main(), t->sw_if_index,
-		format_ip4_header, &t->ip4, ip4_header_bytes(&t->ip4));
+	return format(s, "%U", format_ip4_header, &t->ip4, ip4_header_bytes(&t->ip4));
 }
 
 VLIB_REGISTER_NODE (ipv4_detunnel) = {

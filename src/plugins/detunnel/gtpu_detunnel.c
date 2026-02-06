@@ -59,7 +59,6 @@ enum
 typedef struct
 {
 	gtpu_header_t gtpu;
-	u32 sw_if_index;
 } gtpu_trace_t;
 
 typedef struct {
@@ -98,7 +97,6 @@ add_trace(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b,
 	{
 		gtpu_trace_t *t = vlib_add_trace(vm, node, b, sizeof(*t));
 		t->gtpu = *gtpu;
-		t->sw_if_index = vnet_buffer(b)->sw_if_index[VLIB_RX];
 	}
 }
 
@@ -297,8 +295,10 @@ static u8 *format_gtpu_trace(u8 *s, va_list *args)
 	vlib_main_t *CLIB_UNUSED(vm)   = va_arg(*args, vlib_main_t *);
 	vlib_node_t *CLIB_UNUSED(node) = va_arg(*args, vlib_node_t *);
 	gtpu_trace_t *t = va_arg(*args, gtpu_trace_t *);
-	return format(s, "gtpu detunnel: if index %u ver_flags %u",
-			t->sw_if_index, t->gtpu.ver_flags);
+	return format(s,"teid %u\n"
+			"  ver_flags %u",
+			t->gtpu.teid,
+			t->gtpu.ver_flags);
 }
 
 VLIB_REGISTER_NODE (gtpu_detunnel) = {

@@ -41,7 +41,6 @@ enum
 typedef struct
 {
 	ethernet_header_t eth;
-	u32 sw_if_index;
 } ethernet_trace_t;
 
 typedef struct
@@ -81,7 +80,6 @@ add_trace(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b,
 	{
 		ethernet_trace_t *t = vlib_add_trace(vm, node, b, sizeof(ethernet_trace_t));
 		t->eth = is_valid ? *eth : (ethernet_header_t){0};
-		t->sw_if_index = vnet_buffer(b)->sw_if_index[VLIB_RX];
 	}
 }
 
@@ -259,12 +257,9 @@ static u8 *format_ethernet_detunnel_trace(u8 *s, va_list *args)
 	vlib_main_t *CLIB_UNUSED(vm)   = va_arg(*args, vlib_main_t *);
 	vlib_node_t *CLIB_UNUSED(node) = va_arg(*args, vlib_node_t *);
 	ethernet_trace_t *t = va_arg(*args, ethernet_trace_t *);
-	return format(s, "ethernet detunnel:\n"
-			"  interface  %U\n"
-			"  dst mac    %U\n"
+	return format(s, "dst mac    %U\n"
 			"  src mac    %U\n"
 			"  ethertype  0x%04x",
-			format_vnet_sw_if_index_name, vnet_get_main(), t->sw_if_index,
 			format_ethernet_address, t->eth.dst_address,
 			format_ethernet_address, t->eth.src_address,
 			clib_net_to_host_u16(t->eth.type));

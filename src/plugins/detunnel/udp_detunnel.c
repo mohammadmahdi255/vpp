@@ -36,7 +36,6 @@ enum
 typedef struct
 {
 	udp_header_t udp;
-	u32 sw_if_index;
 } udp_trace_t;
 
 typedef struct
@@ -57,7 +56,6 @@ add_trace(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b,
 	{
 		udp_trace_t *t = vlib_add_trace(vm, node, b, sizeof(udp_trace_t));
 		t->udp = is_valid ? *udp : (udp_header_t){0};
-		t->sw_if_index = vnet_buffer(b)->sw_if_index[VLIB_RX];
 	}
 }
 
@@ -241,11 +239,7 @@ static u8 *format_udp_detunnel_trace(u8 *s, va_list *args)
 	vlib_main_t *CLIB_UNUSED(vm)   = va_arg(*args, vlib_main_t *);
 	vlib_node_t *CLIB_UNUSED(node) = va_arg(*args, vlib_node_t *);
 	udp_trace_t *t = va_arg(*args, udp_trace_t *);
-	return format(s, "udp detunnel:\n"
-		"  interface  %U\n"
-		"  %U",
-		format_vnet_sw_if_index_name, vnet_get_main(), t->sw_if_index,
-		format_udp_header, &t->udp, sizeof(udp_header_t));
+	return format(s, "%U", format_udp_header, &t->udp, sizeof(udp_header_t));
 }
 
 VLIB_REGISTER_NODE (udp_detunnel) = {
