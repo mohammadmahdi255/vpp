@@ -35,11 +35,12 @@
 #define DETUNNEL_CONCAT(a, b) DETUNNEL_CONCAT2(a, b)
 
 #define MAX_IF_SIZE	10
+#define IP_PROTOCOL_INVALID	0xFFFF
 
 #define foreach_ethertype	\
 	_(vlan_ethertype)		\
 	_(ipv4_ethertype)		\
-	_(ipv6_ethertype)
+	_(ipv6_ethertype)		\
 
 #define foreach_ip_protocol		\
 	_(ipv4_protocol)			\
@@ -50,7 +51,8 @@
 	_(ipv6_hop_protocol)		\
 	_(ipsec_ah_protocol)		\
 	_(tcp_protocol)				\
-	_(udp_protocol)
+	_(udp_protocol)				\
+	_(invalid_protocol)
 
 #define _(var)	extern SIMD_TYPE DETUNNEL_CONCAT(var, SIMD_TYPE);
 

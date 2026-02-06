@@ -12,12 +12,12 @@
 #include "vnet/ip/ip6_packet.h"
 
 #define foreach_ipv6_detunnel_next							\
-	_(drop_next, DROP, "drop")								\
+	_(ipv6_etc_next, IPV6_ETC_DETUNNEL, "ip6-drop")			\
 	_(ipv4_next, IPV4_DETUNNEL, "ipv4-detunnel")			\
 	_(ipv6_next, IPV6_DETUNNEL, "ipv6-detunnel")			\
-	_(ipv6_ext_next, IPV6_EXT_DETUNNEL, "ip6-drop")			\
 	_(ipv6_frag_next, IPV6_FRAG_DETUNNEL, "ip4-drop")		\
-	_(udp_next, UDP_DETUNNEL, "udp-detunnel")
+	_(udp_next, UDP_DETUNNEL, "udp-detunnel")				\
+	_(drop_next, DROP, "drop")
 
 enum
 {
@@ -60,22 +60,18 @@ ipv6_to_next(u16 *next, u16 len)
 	for (u16 i = 0; i < len; i += SIMD_SIZE)
 	{
 		SIMD_TYPE next_vec = SIMD_LOAD(next + i);
+		SIMD_TYPE drop_mask_vec = (next_vec == SIMD_VEC(invalid_protocol));
 		SIMD_TYPE ipv4_mask_vec = (next_vec == SIMD_VEC(ipv4_protocol));
 		SIMD_TYPE ipv6_mask_vec = (next_vec == SIMD_VEC(ipv6_protocol));
 		SIMD_TYPE ipv6_frag_mask_vec = (next_vec == SIMD_VEC(ipv6_frag_protocol));
-		SIMD_TYPE ipv6_ext_mask_vec =
-				(next_vec == SIMD_VEC(ipv6_hop_protocol)) |
-				(next_vec == SIMD_VEC(ipv6_route_protocol)) |
-				(next_vec == SIMD_VEC(ipv6_dest_protocol)) |
-				(next_vec == SIMD_VEC(ipsec_ah_protocol));
 		SIMD_TYPE udp_mask_vec = (next_vec == SIMD_VEC(udp_protocol));
 
-		SIMD_TYPE result = SIMD_VEC(drop_next) |
+		SIMD_TYPE result = SIMD_VEC(ipv6_etc_next) |
 				(ipv4_mask_vec & SIMD_VEC(ipv4_next)) |
 				(ipv6_mask_vec & SIMD_VEC(ipv6_next)) |
 				(ipv6_frag_mask_vec & SIMD_VEC(ipv6_frag_next)) |
-				(ipv6_ext_mask_vec & SIMD_VEC(ipv6_ext_next)) |
-				(udp_mask_vec & SIMD_VEC(udp_next));
+				(udp_mask_vec & SIMD_VEC(udp_next)) |
+				(drop_mask_vec & SIMD_VEC(drop_next));
 
 		SIMD_STORE(result, next + i);
 	}
@@ -140,10 +136,10 @@ process_buffer_4x(vlib_main_t *vm, vlib_node_runtime_t *node,
 	vlib_buffer_advance(b[2], bytes2);
 	vlib_buffer_advance(b[3], bytes3);
 
-	next[0] = is_valid0 ? ip0->protocol : ~0;
-	next[1] = is_valid1 ? ip1->protocol : ~0;
-	next[2] = is_valid2 ? ip2->protocol : ~0;
-	next[3] = is_valid3 ? ip3->protocol : ~0;
+	next[0] = is_valid0 ? ip0->protocol : IP_PROTOCOL_INVALID;
+	next[1] = is_valid1 ? ip1->protocol : IP_PROTOCOL_INVALID;
+	next[2] = is_valid2 ? ip2->protocol : IP_PROTOCOL_INVALID;
+	next[3] = is_valid3 ? ip3->protocol : IP_PROTOCOL_INVALID;
 
 	if (PREDICT_TRUE(sw_idx_eq))
 	{
@@ -187,7 +183,7 @@ process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, 
 	const u16 bytes = is_valid ? sizeof(ip6_header_t) : 0;
 	vlib_buffer_advance(b, bytes);
 
-	next[0] = is_valid ? ip6->protocol : ~0;
+	next[0] = is_valid ? ip6->protocol : IP_PROTOCOL_INVALID;
 	idm->cache_counters[sw_idx].packets += is_valid;
 	idm->cache_counters[sw_idx].bytes += bytes;
 
@@ -308,12 +304,12 @@ CLIB_MARCH_FN (ipv6_detunnel_init, clib_error_t *, vlib_main_t *CLIB_UNUSED(vm))
 {
 	clib_warning("size: %lu %s", SIMD_SIZE, CLIB_STRING_MACRO(SIMD_TYPE));
 
-	SIMD_VEC(drop_next) = SIMD_SPLAT(IPV6_NEXT_DROP);
+	SIMD_VEC(ipv6_etc_next) = SIMD_SPLAT(IPV6_NEXT_IPV6_ETC_DETUNNEL);
 	SIMD_VEC(ipv4_next) = SIMD_SPLAT(IPV6_NEXT_IPV4_DETUNNEL);
 	SIMD_VEC(ipv6_next) = SIMD_SPLAT(IPV6_NEXT_IPV6_DETUNNEL);
-	SIMD_VEC(ipv6_ext_next) = SIMD_SPLAT(IPV6_NEXT_IPV6_EXT_DETUNNEL);
 	SIMD_VEC(ipv6_frag_next) = SIMD_SPLAT(IPV6_NEXT_IPV6_FRAG_DETUNNEL);
 	SIMD_VEC(udp_next) = SIMD_SPLAT(IPV6_NEXT_UDP_DETUNNEL);
+	SIMD_VEC(drop_next) = SIMD_SPLAT(IPV6_NEXT_DROP);
 
 	return 0;
 }

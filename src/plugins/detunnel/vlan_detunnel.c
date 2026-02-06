@@ -11,7 +11,7 @@
 	_(drop_next, DROP, "drop")						\
 	_(vlan_next, VLAN_DETUNNEL, "vlan-detunnel")	\
 	_(ipv4_next, IPV4_DETUNNEL, "ipv4-detunnel")	\
-	_(ipv6_next, IPV6_DETUNNEL, "ip6-drop")
+	_(ipv6_next, IPV6_DETUNNEL, "ipv6-detunnel")
 
 enum
 {

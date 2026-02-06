@@ -14,7 +14,7 @@
 #define foreach_ipv4_detunnel_next					\
 	_(drop_next, DROP, "drop")						\
 	_(ipv4_next, IPV4_DETUNNEL, "ipv4-detunnel")	\
-	_(ipv6_next, IPV6_DETUNNEL, "ip6-drop")			\
+	_(ipv6_next, IPV6_DETUNNEL, "ipv6-detunnel")	\
 	_(udp_next, UDP_DETUNNEL, "udp-detunnel")
 
 enum

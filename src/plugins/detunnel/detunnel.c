@@ -33,6 +33,7 @@ CLIB_MARCH_FN (detunnel_init, clib_error_t *, vlib_main_t *CLIB_UNUSED(vm))
 	SIMD_VEC(ipsec_ah_protocol) = SIMD_SPLAT(IP_PROTOCOL_IPSEC_AH);
 	SIMD_VEC(tcp_protocol) = SIMD_SPLAT(IP_PROTOCOL_TCP);
 	SIMD_VEC(udp_protocol) = SIMD_SPLAT(IP_PROTOCOL_UDP);
+	SIMD_VEC(invalid_protocol) = SIMD_SPLAT(IP_PROTOCOL_INVALID);
 
 	return 0;
 }
