@@ -94,13 +94,6 @@ add_trace(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b,
 	}
 }
 
-// static_always_inline u32 get_next_1x(const udp_header_t *udp)
-// {
-// 	return udp->src_port == 0x6808 || udp->dst_port == 0x6808 ? UDP_NEXT_GTPU_DETUNNEL :
-// 			udp->src_port == 0xA506 || udp->dst_port == 0xA506 ? UDP_NEXT_L2TP_DETUNNEL :
-// 			UDP_NEXT_DROP;
-// }
-
 static_always_inline void
 process_buffer_4x(vlib_main_t *vm, vlib_node_runtime_t *node,
 		vlib_buffer_t* b[4], u16 src_port[4], u16 dst_port[4])
