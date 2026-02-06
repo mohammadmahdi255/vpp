@@ -35,12 +35,14 @@
 #define DETUNNEL_CONCAT(a, b) DETUNNEL_CONCAT2(a, b)
 
 #define MAX_IF_SIZE	10
+#define ETHERNET_TYPE_INVALID	0x0000
 #define IP_PROTOCOL_INVALID	0xFFFF
 
 #define foreach_ethertype	\
 	_(vlan_ethertype)		\
 	_(ipv4_ethertype)		\
 	_(ipv6_ethertype)		\
+	_(invalid_ethertype)
 
 #define foreach_ip_protocol		\
 	_(ipv4_protocol)			\
