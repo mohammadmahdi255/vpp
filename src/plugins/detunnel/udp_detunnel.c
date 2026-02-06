@@ -2,6 +2,7 @@
 
 #include <vlib/vlib.h>
 
+#include <vnet/ip/format.h>
 #include <vnet/udp/udp_packet.h>
 #include <vnet/vnet.h>
 
@@ -240,8 +241,11 @@ static u8 *format_udp_detunnel_trace(u8 *s, va_list *args)
 	vlib_main_t *CLIB_UNUSED(vm)   = va_arg(*args, vlib_main_t *);
 	vlib_node_t *CLIB_UNUSED(node) = va_arg(*args, vlib_node_t *);
 	udp_trace_t *t = va_arg(*args, udp_trace_t *);
-	return format(s, "udp detunnel: if index %u src %u dst %u",
-			t->sw_if_index, clib_net_to_host_u16(t->udp.src_port), clib_net_to_host_u16(t->udp.dst_port));
+	return format(s, "udp detunnel:\n"
+		"  interface  %U\n"
+		"  %U",
+		format_vnet_sw_if_index_name, vnet_get_main(), t->sw_if_index,
+		format_udp_header, &t->udp, sizeof(udp_header_t));
 }
 
 VLIB_REGISTER_NODE (udp_detunnel) = {
