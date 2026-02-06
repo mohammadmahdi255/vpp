@@ -16,7 +16,7 @@
 	_(vlan_next, VLAN_DETUNNEL, "vlan-detunnel")		\
 	_(ipv4_next, IPV4_DETUNNEL, "ipv4-detunnel")		\
 	_(ipv6_next, IPV6_DETUNNEL, "ipv6-detunnel")		\
-	_(failed_next, FAILED_DETUNNEL, "failed_detunnel")
+	_(failed_next, FAILED_DETUNNEL, "failed-detunnel")
 
 enum
 {
