@@ -6,18 +6,6 @@
 
 #include <vnet/ethernet/ethernet.h>
 
-#undef always_inline
-
-#include <rte_acl.h>
-#include <rte_eal.h>
-#include <rte_lcore.h>
-
-#if CLIB_DEBUG > 0
-#define always_inline static inline
-#else
-#define always_inline static inline __attribute__ ((__always_inline__))
-#endif
-
 #ifndef CLIB_MARCH_VARIANT
 #define _(var)						\
 		u16x32 var##_u16x32;		\
@@ -36,6 +24,13 @@ CLIB_MARCH_FN (detunnel_init, clib_error_t *, vlib_main_t *CLIB_UNUSED(vm))
 	SIMD_VEC(ipv4_ethertype) = SIMD_SPLAT(clib_host_to_net_u16(ETHERNET_TYPE_IP4));
 	SIMD_VEC(ipv6_ethertype) = SIMD_SPLAT(clib_host_to_net_u16(ETHERNET_TYPE_IP6));
 
+	SIMD_VEC(ipv4_protocol) = SIMD_SPLAT(IP_PROTOCOL_IP_IN_IP);
+	SIMD_VEC(ipv6_protocol) = SIMD_SPLAT(IP_PROTOCOL_IPV6);
+	SIMD_VEC(ipv6_frag_protocol) = SIMD_SPLAT(IP_PROTOCOL_IPV6_FRAGMENTATION);
+	SIMD_VEC(ipv6_route_protocol) = SIMD_SPLAT(IP_PROTOCOL_IPV6_ROUTE);
+	SIMD_VEC(ipv6_dest_protocol) = SIMD_SPLAT(IP_PROTOCOL_IP6_DESTINATION_OPTIONS);
+	SIMD_VEC(ipv6_hop_protocol) = SIMD_SPLAT(IP_PROTOCOL_IP6_HOP_BY_HOP_OPTIONS);
+	SIMD_VEC(ipsec_ah_protocol) = SIMD_SPLAT(IP_PROTOCOL_IPSEC_AH);
 	SIMD_VEC(tcp_protocol) = SIMD_SPLAT(IP_PROTOCOL_TCP);
 	SIMD_VEC(udp_protocol) = SIMD_SPLAT(IP_PROTOCOL_UDP);
 
@@ -86,9 +81,6 @@ u8 *format_detunnel_trace(u8 *s, va_list *args)
 	detunnel_trace_t *t = va_arg(*args, detunnel_trace_t *);
 	return format(s, "%s: if index %u next protocol 0x%04x", t->name, t->sw_if_index, t->next_protocol);
 }
-
-#define GTPU_PORT	2152
-#define L2TP_PORT	1701
 
 clib_error_t *
 detunnel_worker_init(vlib_main_t *CLIB_UNUSED(vm))

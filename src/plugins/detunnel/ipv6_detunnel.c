@@ -9,62 +9,72 @@
 #include "detunnel.h"
 #include "vlib/buffer_funcs.h"
 #include "vnet/ip/format.h"
-#include "vnet/ip/ip4_packet.h"
+#include "vnet/ip/ip6_packet.h"
 
-#define foreach_ipv4_detunnel_next					\
-	_(drop_next, DROP, "drop")						\
-	_(ipv4_next, IPV4_DETUNNEL, "ipv4-detunnel")	\
-	_(ipv6_next, IPV6_DETUNNEL, "ip6-drop")			\
+#define foreach_ipv6_detunnel_next							\
+	_(drop_next, DROP, "drop")								\
+	_(ipv4_next, IPV4_DETUNNEL, "ipv4-detunnel")			\
+	_(ipv6_next, IPV6_DETUNNEL, "ipv6-detunnel")			\
+	_(ipv6_ext_next, IPV6_EXT_DETUNNEL, "ip6-drop")			\
+	_(ipv6_frag_next, IPV6_FRAG_DETUNNEL, "ip4-drop")		\
 	_(udp_next, UDP_DETUNNEL, "udp-detunnel")
 
 enum
 {
-#define _(var, id, name) IPV4_NEXT_##id,
-	foreach_ipv4_detunnel_next
+#define _(var, id, name) IPV6_NEXT_##id,
+	foreach_ipv6_detunnel_next
 #undef _
-	IPV4_NEXT_N,
+	IPV6_NEXT_N,
 };
 
 #define _(var, id, name) static SIMD_TYPE DETUNNEL_CONCAT(var, SIMD_TYPE);
 
-foreach_ipv4_detunnel_next
+foreach_ipv6_detunnel_next
 #undef _
 
 enum
 {
-#define _(id, name) IPV4_##id,
+#define _(id, name) IPV6_##id,
 	foreach_detunnel_counter
 #undef _
-	IPV4_COUNTER_N,
+	IPV6_COUNTER_N,
 };
 
 typedef struct
 {
-	ip4_header_t ip4;
-} ip4_trace_t;
+	ip6_header_t ip6;
+} ip6_trace_t;
 
 typedef struct {
 	u32 counter_if_index;
 	vlib_counter_t cache_counters[MAX_IF_SIZE];
-	vlib_combined_counter_main_t counters[IPV4_COUNTER_N];
-} ipv4_detunnel_main_t;
+	vlib_combined_counter_main_t counters[IPV6_COUNTER_N];
+} ipv6_detunnel_main_t;
 
-extern ipv4_detunnel_main_t ipv4_detunnel_main;
-extern vlib_node_registration_t ipv4_detunnel;
+extern ipv6_detunnel_main_t ipv6_detunnel_main;
+extern vlib_node_registration_t ipv6_detunnel;
 
 static_always_inline void
-ipv4_to_next(u16 *next, u16 len)
+ipv6_to_next(u16 *next, u16 len)
 {
 	for (u16 i = 0; i < len; i += SIMD_SIZE)
 	{
-		SIMD_TYPE ip_protocol_vec = SIMD_LOAD(next + i);
-		SIMD_TYPE ipv4_mask_vec = (ip_protocol_vec == SIMD_VEC(ipv4_protocol));
-		SIMD_TYPE ipv6_mask_vec = (ip_protocol_vec == SIMD_VEC(ipv6_protocol));
-		SIMD_TYPE udp_mask_vec = (ip_protocol_vec == SIMD_VEC(udp_protocol));
+		SIMD_TYPE next_vec = SIMD_LOAD(next + i);
+		SIMD_TYPE ipv4_mask_vec = (next_vec == SIMD_VEC(ipv4_protocol));
+		SIMD_TYPE ipv6_mask_vec = (next_vec == SIMD_VEC(ipv6_protocol));
+		SIMD_TYPE ipv6_frag_mask_vec = (next_vec == SIMD_VEC(ipv6_frag_protocol));
+		SIMD_TYPE ipv6_ext_mask_vec =
+				(next_vec == SIMD_VEC(ipv6_hop_protocol)) |
+				(next_vec == SIMD_VEC(ipv6_route_protocol)) |
+				(next_vec == SIMD_VEC(ipv6_dest_protocol)) |
+				(next_vec == SIMD_VEC(ipsec_ah_protocol));
+		SIMD_TYPE udp_mask_vec = (next_vec == SIMD_VEC(udp_protocol));
 
 		SIMD_TYPE result = SIMD_VEC(drop_next) |
 				(ipv4_mask_vec & SIMD_VEC(ipv4_next)) |
 				(ipv6_mask_vec & SIMD_VEC(ipv6_next)) |
+				(ipv6_frag_mask_vec & SIMD_VEC(ipv6_frag_next)) |
+				(ipv6_ext_mask_vec & SIMD_VEC(ipv6_ext_next)) |
 				(udp_mask_vec & SIMD_VEC(udp_next));
 
 		SIMD_STORE(result, next + i);
@@ -73,12 +83,12 @@ ipv4_to_next(u16 *next, u16 len)
 
 static_always_inline void
 add_trace(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b,
-		const ip4_header_t *ip4, const u8 is_valid)
+		const ip6_header_t *ip6, const u8 is_valid)
 {
 	if (PREDICT_FALSE((node->flags & VLIB_NODE_FLAG_TRACE) && (b->flags & VLIB_BUFFER_IS_TRACED)))
 	{
-		ip4_trace_t *t = vlib_add_trace(vm, node, b, sizeof(*t));
-		t->ip4 = is_valid ? *ip4 : (ip4_header_t){0};
+		ip6_trace_t *t = vlib_add_trace(vm, node, b, sizeof(*t));
+		t->ip6 = is_valid ? *ip6 : (ip6_header_t){0};
 	}
 }
 
@@ -86,7 +96,7 @@ static_always_inline void
 process_buffer_4x(vlib_main_t *vm, vlib_node_runtime_t *node,
 		vlib_buffer_t* b[4], u16 next[4])
 {
-	ipv4_detunnel_main_t *idm = &ipv4_detunnel_main;
+	ipv6_detunnel_main_t *idm = &ipv6_detunnel_main;
 
 	const u32 sw_idx0 = vnet_buffer(b[0])->sw_if_index[VLIB_RX];
 	const u32 sw_idx1 = vnet_buffer(b[1])->sw_if_index[VLIB_RX];
@@ -95,54 +105,45 @@ process_buffer_4x(vlib_main_t *vm, vlib_node_runtime_t *node,
 
 	const u8 sw_idx_eq = sw_idx0 == sw_idx1 && sw_idx2 == sw_idx3 && sw_idx0 == sw_idx2;
 
-	const ip4_header_t *ip0 = vlib_buffer_get_current(b[0]);
-	const ip4_header_t *ip1 = vlib_buffer_get_current(b[1]);
-	const ip4_header_t *ip2 = vlib_buffer_get_current(b[2]);
-	const ip4_header_t *ip3 = vlib_buffer_get_current(b[3]);
-
-	const u16 ip4_hdr_len0 = ip4_header_bytes(ip0);
-	const u16 ip4_hdr_len1 = ip4_header_bytes(ip1);
-	const u16 ip4_hdr_len2 = ip4_header_bytes(ip2);
-	const u16 ip4_hdr_len3 = ip4_header_bytes(ip3);
+	const ip6_header_t *ip0 = vlib_buffer_get_current(b[0]);
+	const ip6_header_t *ip1 = vlib_buffer_get_current(b[1]);
+	const ip6_header_t *ip2 = vlib_buffer_get_current(b[2]);
+	const ip6_header_t *ip3 = vlib_buffer_get_current(b[3]);
 
 	const u16 len0 = vlib_buffer_length_in_chain(vm, b[0]);
 	const u16 len1 = vlib_buffer_length_in_chain(vm, b[1]);
 	const u16 len2 = vlib_buffer_length_in_chain(vm, b[2]);
 	const u16 len3 = vlib_buffer_length_in_chain(vm, b[3]);
 
-	const u16 ip4_len0 = clib_net_to_host_u16(ip0->length);
-	const u16 ip4_len1 = clib_net_to_host_u16(ip1->length);
-	const u16 ip4_len2 = clib_net_to_host_u16(ip2->length);
-	const u16 ip4_len3 = clib_net_to_host_u16(ip3->length);
+	const u16 ip6_payload_len0 = clib_net_to_host_u16(ip0->payload_length);
+	const u16 ip6_payload_len1 = clib_net_to_host_u16(ip1->payload_length);
+	const u16 ip6_payload_len2 = clib_net_to_host_u16(ip2->payload_length);
+	const u16 ip6_payload_len3 = clib_net_to_host_u16(ip3->payload_length);
 
-	const i32 ip4_pad_len0 = len0 - ip4_len0;
-	const i32 ip4_pad_len1 = len1 - ip4_len1;
-	const i32 ip4_pad_len2 = len2 - ip4_len2;
-	const i32 ip4_pad_len3 = len3 - ip4_len3;
+	const i32 ip6_pad_len0 = len0 - ip6_payload_len0 - (i32) sizeof(ip6_header_t);
+	const i32 ip6_pad_len1 = len1 - ip6_payload_len1 - (i32) sizeof(ip6_header_t);
+	const i32 ip6_pad_len2 = len2 - ip6_payload_len2 - (i32) sizeof(ip6_header_t);
+	const i32 ip6_pad_len3 = len3 - ip6_payload_len3 - (i32) sizeof(ip6_header_t);
 
-	const u8 is_valid0 =
-			ip4_pad_len0 >= 0 && ip4_hdr_len0 >= sizeof(ip4_header_t) && vlib_buffer_has_space(b[0], ip4_hdr_len0);
-	const u8 is_valid1 =
-			ip4_pad_len1 >= 0 && ip4_hdr_len1 >= sizeof(ip4_header_t) && vlib_buffer_has_space(b[1], ip4_hdr_len1);
-	const u8 is_valid2 =
-			ip4_pad_len2 >= 0 && ip4_hdr_len2 >= sizeof(ip4_header_t) && vlib_buffer_has_space(b[2], ip4_hdr_len2);
-	const u8 is_valid3 =
-			ip4_pad_len3 >= 0 && ip4_hdr_len3 >= sizeof(ip4_header_t) && vlib_buffer_has_space(b[3], ip4_hdr_len3);
+	const u8 is_valid0 = ip6_pad_len0 >= 0 && vlib_buffer_has_space(b[0], sizeof(ip6_header_t));
+	const u8 is_valid1 = ip6_pad_len1 >= 0 && vlib_buffer_has_space(b[1], sizeof(ip6_header_t));
+	const u8 is_valid2 = ip6_pad_len2 >= 0 && vlib_buffer_has_space(b[2], sizeof(ip6_header_t));
+	const u8 is_valid3 = ip6_pad_len3 >= 0 && vlib_buffer_has_space(b[3], sizeof(ip6_header_t));
 
-	const u16 bytes0 = is_valid0 ? ip4_hdr_len0 : 0;
-	const u16 bytes1 = is_valid1 ? ip4_hdr_len1 : 0;
-	const u16 bytes2 = is_valid2 ? ip4_hdr_len2 : 0;
-	const u16 bytes3 = is_valid3 ? ip4_hdr_len3 : 0;
+	const u16 bytes0 = is_valid0 ? sizeof(ip6_header_t) : 0;
+	const u16 bytes1 = is_valid1 ? sizeof(ip6_header_t) : 0;
+	const u16 bytes2 = is_valid2 ? sizeof(ip6_header_t) : 0;
+	const u16 bytes3 = is_valid3 ? sizeof(ip6_header_t) : 0;
 
 	vlib_buffer_advance(b[0], bytes0);
 	vlib_buffer_advance(b[1], bytes1);
 	vlib_buffer_advance(b[2], bytes2);
 	vlib_buffer_advance(b[3], bytes3);
 
-	next[0] = is_valid0 ? ip0->protocol : IPV4_NEXT_DROP;
-	next[1] = is_valid1 ? ip1->protocol : IPV4_NEXT_DROP;
-	next[2] = is_valid2 ? ip2->protocol : IPV4_NEXT_DROP;
-	next[3] = is_valid3 ? ip3->protocol : IPV4_NEXT_DROP;
+	next[0] = is_valid0 ? ip0->protocol : ~0;
+	next[1] = is_valid1 ? ip1->protocol : ~0;
+	next[2] = is_valid2 ? ip2->protocol : ~0;
+	next[3] = is_valid3 ? ip3->protocol : ~0;
 
 	if (PREDICT_TRUE(sw_idx_eq))
 	{
@@ -173,30 +174,28 @@ process_buffer_4x(vlib_main_t *vm, vlib_node_runtime_t *node,
 static_always_inline void
 process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, u16 *next)
 {
-	ipv4_detunnel_main_t *idm = &ipv4_detunnel_main;
+	ipv6_detunnel_main_t *idm = &ipv6_detunnel_main;
 	u32 sw_idx = vnet_buffer(b)->sw_if_index[VLIB_RX];
 
-	const ip4_header_t *ip4 = vlib_buffer_get_current(b);
-	const u16 ip4_hdr_len = ip4_header_bytes(ip4);
+	const ip6_header_t *ip6 = vlib_buffer_get_current(b);
+	const u16 ip6_payload_len = clib_net_to_host_u16(ip6->payload_length);
 	const u16 len = vlib_buffer_length_in_chain(vm, b);
-	const u16 ip4_len = clib_net_to_host_u16(ip4->length);
-	const i32 ip4_pad_len = len - ip4_len;
+	const i32 ip6_pad_len = len - ip6_payload_len - (i32) sizeof(ip6_header_t);
 
-	const u8 is_valid =
-			ip4_pad_len >= 0 && ip4_hdr_len >= sizeof(ip4_header_t) && vlib_buffer_has_space(b, ip4_hdr_len);
+	const u8 is_valid = ip6_pad_len >= 0 && vlib_buffer_has_space(b, sizeof(ip6_header_t));
 
-	const u16 bytes = is_valid ? ip4_hdr_len : 0;
+	const u16 bytes = is_valid ? sizeof(ip6_header_t) : 0;
 	vlib_buffer_advance(b, bytes);
 
-	next[0] = is_valid ? ip4->protocol : IPV4_NEXT_DROP;
+	next[0] = is_valid ? ip6->protocol : ~0;
 	idm->cache_counters[sw_idx].packets += is_valid;
 	idm->cache_counters[sw_idx].bytes += bytes;
 
 	if (PREDICT_FALSE(b->flags & VLIB_BUFFER_IS_TRACED))
-		add_trace(vm, node, b, ip4, is_valid);
+		add_trace(vm, node, b, ip6, is_valid);
 }
 
-VLIB_NODE_FN (ipv4_detunnel) (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_frame_t *frame)
+VLIB_NODE_FN (ipv6_detunnel) (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_frame_t *frame)
 {
 	vlib_buffer_t *bufs[VLIB_FRAME_SIZE];
 	u16 nexts[VLIB_FRAME_SIZE];
@@ -213,17 +212,17 @@ VLIB_NODE_FN (ipv4_detunnel) (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_f
 	vnet_interface_main_t *im = &vnm->interface_main;
 	u32 max_sw_if_index = pool_elts(im->sw_interfaces);
 
-	ipv4_detunnel_main_t *idm = &ipv4_detunnel_main;
+	ipv6_detunnel_main_t *idm = &ipv6_detunnel_main;
 
 	if (PREDICT_FALSE(idm->counter_if_index < max_sw_if_index))
 	{
-#define _(id, name) vlib_validate_combined_counter(&idm->counters[IPV4_##id], max_sw_if_index);
+#define _(id, name) vlib_validate_combined_counter(&idm->counters[IPV6_##id], max_sw_if_index);
 	foreach_detunnel_counter
 #undef _
 
 		for (u32 i = idm->counter_if_index + 1; i <= max_sw_if_index; i++)
 		{
-#define _(id, name) vlib_zero_combined_counter(&idm->counters[IPV4_##id], i);
+#define _(id, name) vlib_zero_combined_counter(&idm->counters[IPV6_##id], i);
 	foreach_detunnel_counter
 #undef _
 		}
@@ -266,68 +265,70 @@ VLIB_NODE_FN (ipv4_detunnel) (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_f
 	for (u32 sw_idx = 0; sw_idx <= max_sw_if_index; sw_idx++)
 	{
 		vlib_counter_t *counter = &idm->cache_counters[sw_idx];
-		vlib_increment_combined_counter(&idm->counters[IPV4_PROCESSED], vm->thread_index,
+		vlib_increment_combined_counter(&idm->counters[IPV6_PROCESSED], vm->thread_index,
 				sw_idx, counter->packets, counter->bytes);
 
 		counter->packets = 0;
 		counter->bytes = 0;
 	}
 
-	ipv4_to_next(nexts, frame->n_vectors);
+	ipv6_to_next(nexts, frame->n_vectors);
 	vlib_buffer_enqueue_to_next(vm, node, from, nexts, frame->n_vectors);
 
 	return frame->n_vectors;
 }
 
 #ifndef CLIB_MARCH_VARIANT
-ipv4_detunnel_main_t ipv4_detunnel_main;
+ipv6_detunnel_main_t ipv6_detunnel_main;
 
-static u8 *format_ipv4_trace(u8 *s, va_list *args)
+static u8 *format_ipv6_trace(u8 *s, va_list *args)
 {
 	vlib_main_t *CLIB_UNUSED(vm)   = va_arg(*args, vlib_main_t *);
 	vlib_node_t *CLIB_UNUSED(node) = va_arg(*args, vlib_node_t *);
-	ip4_trace_t *t = va_arg(*args, ip4_trace_t *);
-	return format(s, "%U", format_ip4_header, &t->ip4, ip4_header_bytes(&t->ip4));
+	ip6_trace_t *t = va_arg(*args, ip6_trace_t *);
+	return format(s, "%U", format_ip6_header, &t->ip6, sizeof(ip6_header_t));
 }
 
-VLIB_REGISTER_NODE (ipv4_detunnel) = {
-	.name = "ipv4-detunnel",
+VLIB_REGISTER_NODE (ipv6_detunnel) = {
+	.name = "ipv6-detunnel",
 	.vector_size = sizeof(u32),
-	.format_trace = format_ipv4_trace,
+	.format_trace = format_ipv6_trace,
 	.type = VLIB_NODE_TYPE_INTERNAL,
-	.n_next_nodes = IPV4_NEXT_N,
+	.n_next_nodes = IPV6_NEXT_N,
 	.next_nodes = {
-#define _(var, id, name) [IPV4_NEXT_##id] = (name),
-	foreach_ipv4_detunnel_next
+#define _(var, id, name) [IPV6_NEXT_##id] = (name),
+	foreach_ipv6_detunnel_next
 #undef _
 	},
 };
 
 #endif
 
-CLIB_MARCH_FN (ipv4_detunnel_init, clib_error_t *, vlib_main_t *CLIB_UNUSED(vm))
+CLIB_MARCH_FN (ipv6_detunnel_init, clib_error_t *, vlib_main_t *CLIB_UNUSED(vm))
 {
 	clib_warning("size: %lu %s", SIMD_SIZE, CLIB_STRING_MACRO(SIMD_TYPE));
 
-	SIMD_VEC(drop_next) = SIMD_SPLAT(IPV4_NEXT_DROP);
-	SIMD_VEC(ipv4_next) = SIMD_SPLAT(IPV4_NEXT_IPV4_DETUNNEL);
-	SIMD_VEC(ipv6_next) = SIMD_SPLAT(IPV4_NEXT_IPV6_DETUNNEL);
-	SIMD_VEC(udp_next) = SIMD_SPLAT(IPV4_NEXT_UDP_DETUNNEL);
+	SIMD_VEC(drop_next) = SIMD_SPLAT(IPV6_NEXT_DROP);
+	SIMD_VEC(ipv4_next) = SIMD_SPLAT(IPV6_NEXT_IPV4_DETUNNEL);
+	SIMD_VEC(ipv6_next) = SIMD_SPLAT(IPV6_NEXT_IPV6_DETUNNEL);
+	SIMD_VEC(ipv6_ext_next) = SIMD_SPLAT(IPV6_NEXT_IPV6_EXT_DETUNNEL);
+	SIMD_VEC(ipv6_frag_next) = SIMD_SPLAT(IPV6_NEXT_IPV6_FRAG_DETUNNEL);
+	SIMD_VEC(udp_next) = SIMD_SPLAT(IPV6_NEXT_UDP_DETUNNEL);
 
 	return 0;
 }
 
-static clib_error_t *ipv4_detunnel_init(vlib_main_t *vm)
+static clib_error_t *ipv6_detunnel_init(vlib_main_t *vm)
 {
-	ipv4_detunnel_main_t *idm = &ipv4_detunnel_main;
+	ipv6_detunnel_main_t *idm = &ipv6_detunnel_main;
 	vnet_main_t *vnm = vnet_get_main();
 	vnet_interface_main_t *im = &vnm->interface_main;
 	idm->counter_if_index = pool_elts(im->sw_interfaces);
 
 #define _(E, n)																\
-	vlib_combined_counter_main_t *cm_##n = &idm->counters[IPV4_##E];	\
-	cm_##n->name = "ipv4_" #n;											\
-	cm_##n->stat_segment_name = "/detunnel/ipv4/" #n;					\
+	vlib_combined_counter_main_t *cm_##n = &idm->counters[IPV6_##E];	\
+	cm_##n->name = "ipv6_" #n;											\
+	cm_##n->stat_segment_name = "/detunnel/ipv6/" #n;					\
 	vlib_validate_combined_counter(cm_##n, idm->counter_if_index);			\
 	vlib_zero_combined_counter(cm_##n, idm->counter_if_index);
 
@@ -336,7 +337,7 @@ static clib_error_t *ipv4_detunnel_init(vlib_main_t *vm)
 
 	clib_memset(idm->cache_counters, 0, sizeof(idm->cache_counters));
 
-	return CLIB_MARCH_FN_SELECT(ipv4_detunnel_init) (vm);
+	return CLIB_MARCH_FN_SELECT(ipv6_detunnel_init) (vm);
 }
 
-VLIB_INIT_FUNCTION (ipv4_detunnel_init);
+VLIB_INIT_FUNCTION (ipv6_detunnel_init);

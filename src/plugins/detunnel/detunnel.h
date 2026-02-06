@@ -41,10 +41,15 @@
 	_(ipv4_ethertype)		\
 	_(ipv6_ethertype)
 
-#define foreach_ip_protocol	\
-	_(ipv4_protocol)		\
-	_(ipv6_protocol)		\
-	_(tcp_protocol)			\
+#define foreach_ip_protocol		\
+	_(ipv4_protocol)			\
+	_(ipv6_protocol)			\
+	_(ipv6_frag_protocol)		\
+	_(ipv6_route_protocol)		\
+	_(ipv6_dest_protocol)		\
+	_(ipv6_hop_protocol)		\
+	_(ipsec_ah_protocol)		\
+	_(tcp_protocol)				\
 	_(udp_protocol)
 
 #define _(var)	extern SIMD_TYPE DETUNNEL_CONCAT(var, SIMD_TYPE);
