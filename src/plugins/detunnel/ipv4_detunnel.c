@@ -284,8 +284,8 @@ ipv4_detunnel_main_t ipv4_detunnel_main;
 
 static u8 *format_ipv4_trace(u8 *s, va_list *args)
 {
-	vlib_main_t *CLIB_UNUSED(vm)   = va_arg(*args, vlib_main_t *);
-	vlib_node_t *CLIB_UNUSED(node) = va_arg(*args, vlib_node_t *);
+	vlib_main_t __clib_unused *vm = va_arg(*args, vlib_main_t *);
+	vlib_node_t __clib_unused *node = va_arg(*args, vlib_node_t *);
 	ip4_trace_t *t = va_arg(*args, ip4_trace_t *);
 	return format(s, "%U", format_ip4_header, &t->ip4, ip4_header_bytes(&t->ip4));
 }
@@ -305,7 +305,7 @@ VLIB_REGISTER_NODE (ipv4_detunnel) = {
 
 #endif
 
-CLIB_MARCH_FN (ipv4_detunnel_init, clib_error_t *, vlib_main_t *CLIB_UNUSED(vm))
+CLIB_MARCH_FN (ipv4_detunnel_init, clib_error_t *, vlib_main_t __clib_unused *vm)
 {
 	clib_warning("size: %lu %s", SIMD_SIZE, CLIB_STRING_MACRO(SIMD_TYPE));
 

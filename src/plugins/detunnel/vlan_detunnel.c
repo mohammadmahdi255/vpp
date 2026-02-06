@@ -250,8 +250,8 @@ vlan_detunnel_main_t vlan_detunnel_main;
 
 static u8 *format_vlan_trace(u8 *s, va_list *args)
 {
-	vlib_main_t *CLIB_UNUSED(vm)   = va_arg(*args, vlib_main_t *);
-	vlib_node_t *CLIB_UNUSED(node) = va_arg(*args, vlib_node_t *);
+	vlib_main_t __clib_unused *vm = va_arg(*args, vlib_main_t *);
+	vlib_node_t __clib_unused *node = va_arg(*args, vlib_node_t *);
 	vlan_trace_t *t = va_arg(*args, vlan_trace_t *);
 	return format(s, "priority_cfi_and_id   0x%04x\n"
 			"  ethertype             0x%04x",
@@ -274,7 +274,7 @@ VLIB_REGISTER_NODE (vlan_detunnel) = {
 };
 #endif
 
-CLIB_MARCH_FN (vlan_detunnel_init, clib_error_t *, vlib_main_t *CLIB_UNUSED(vm))
+CLIB_MARCH_FN (vlan_detunnel_init, clib_error_t *, vlib_main_t __clib_unused *vm)
 {
 	clib_warning("size: %lu %s", SIMD_SIZE, CLIB_STRING_MACRO(SIMD_TYPE));
 

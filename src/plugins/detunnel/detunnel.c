@@ -17,7 +17,7 @@ foreach_ip_protocol
 #undef _
 #endif
 
-CLIB_MARCH_FN (detunnel_init, clib_error_t *, vlib_main_t *CLIB_UNUSED(vm))
+CLIB_MARCH_FN (detunnel_init, clib_error_t *, vlib_main_t __clib_unused *vm)
 {
 	clib_warning("size: %lu %s", SIMD_SIZE, CLIB_STRING_MACRO(SIMD_TYPE));
 	SIMD_VEC(vlan_ethertype) = SIMD_SPLAT(clib_host_to_net_u16(ETHERNET_TYPE_VLAN));
@@ -77,14 +77,14 @@ CLIB_MARCH_FN (ip_protocol_to_next, void, u16 *nexts, u16 len)
 #ifndef CLIB_MARCH_VARIANT
 u8 *format_detunnel_trace(u8 *s, va_list *args)
 {
-	vlib_main_t *CLIB_UNUSED(vm)   = va_arg(*args, vlib_main_t *);
-	vlib_node_t *CLIB_UNUSED(node) = va_arg(*args, vlib_node_t *);
+	vlib_main_t __clib_unused *vm = va_arg(*args, vlib_main_t *);
+	vlib_node_t __clib_unused *node = va_arg(*args, vlib_node_t *);
 	detunnel_trace_t *t = va_arg(*args, detunnel_trace_t *);
 	return format(s, "%s: if index %u next protocol 0x%04x", t->name, t->sw_if_index, t->next_protocol);
 }
 
 clib_error_t *
-detunnel_worker_init(vlib_main_t *CLIB_UNUSED(vm))
+detunnel_worker_init(vlib_main_t __clib_unused *vm)
 {
 	return 0;
 }

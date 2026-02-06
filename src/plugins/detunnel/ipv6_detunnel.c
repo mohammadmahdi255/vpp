@@ -279,8 +279,8 @@ ipv6_detunnel_main_t ipv6_detunnel_main;
 
 static u8 *format_ipv6_trace(u8 *s, va_list *args)
 {
-	vlib_main_t *CLIB_UNUSED(vm)   = va_arg(*args, vlib_main_t *);
-	vlib_node_t *CLIB_UNUSED(node) = va_arg(*args, vlib_node_t *);
+	vlib_main_t __clib_unused *vm = va_arg(*args, vlib_main_t *);
+	vlib_node_t __clib_unused *node = va_arg(*args, vlib_node_t *);
 	ip6_trace_t *t = va_arg(*args, ip6_trace_t *);
 	return format(s, "%U", format_ip6_header, &t->ip6, sizeof(ip6_header_t));
 }
@@ -300,7 +300,7 @@ VLIB_REGISTER_NODE (ipv6_detunnel) = {
 
 #endif
 
-CLIB_MARCH_FN (ipv6_detunnel_init, clib_error_t *, vlib_main_t *CLIB_UNUSED(vm))
+CLIB_MARCH_FN (ipv6_detunnel_init, clib_error_t *, vlib_main_t __clib_unused *vm)
 {
 	clib_warning("size: %lu %s", SIMD_SIZE, CLIB_STRING_MACRO(SIMD_TYPE));
 
