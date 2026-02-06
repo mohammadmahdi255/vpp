@@ -265,7 +265,7 @@ VLIB_NODE_FN (udp_detunnel) (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_fr
 		counter->bytes = 0;
 	}
 
-	udp_to_next(src_port, dst_port, nexts, frame->n_vectors);
+	udp_to_next(src_ports, dst_ports, nexts, frame->n_vectors);
 	vlib_buffer_enqueue_to_next(vm, node, from, nexts, frame->n_vectors);
 
 	return frame->n_vectors;
@@ -300,8 +300,8 @@ CLIB_MARCH_FN (udp_detunnel_init, clib_error_t *, vlib_main_t *CLIB_UNUSED(vm))
 {
 	clib_warning("size: %lu %s", SIMD_SIZE, CLIB_STRING_MACRO(SIMD_TYPE));
 
-	SIMD_VEC(l2tp_port) = SIMD_SPLAT(clib_host_to_net_u32(L2TP_PORT));
-	SIMD_VEC(gtpu_port) = SIMD_SPLAT(clib_host_to_net_u32(GTPU_PORT));
+	SIMD_VEC(l2tp_port) = SIMD_SPLAT(clib_host_to_net_u16(L2TP_PORT));
+	SIMD_VEC(gtpu_port) = SIMD_SPLAT(clib_host_to_net_u16(GTPU_PORT));
 
 	SIMD_VEC(drop_next) = SIMD_SPLAT(UDP_NEXT_DROP);
 	SIMD_VEC(l2tp_next) = SIMD_SPLAT(UDP_NEXT_L2TP_DETUNNEL);
