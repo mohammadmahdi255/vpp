@@ -23,7 +23,6 @@
 	_(IPV6_DETUNNEL, "ip6-drop")				\
 	_(UDP_DETUNNEL, "udp-detunnel")
 
-
 #define foreach_transport_detunnel_next	\
 	_(DROP, "drop")						\
 	_(L2TP_DETUNNEL, "ip4-drop")		\

@@ -1,6 +1,8 @@
 #include <vlib/vlib.h>
+
 #include <vnet/ethernet/ethernet.h>
 #include <vnet/vnet.h>
+
 #include <vppinfra/clib.h>
 
 #include "detunnel.h"
@@ -91,10 +93,10 @@ process_buffer_4x(vlib_main_t *vm, vlib_node_runtime_t *node,
 
 	const u8 sw_idx_eq = sw_idx0 == sw_idx1 && sw_idx2 == sw_idx3 && sw_idx0 == sw_idx2;
 
-	const u16 is_valid0 = vlib_buffer_has_space(b[0], sizeof(vlan_header_t));
-	const u16 is_valid1 = vlib_buffer_has_space(b[1], sizeof(vlan_header_t));
-	const u16 is_valid2 = vlib_buffer_has_space(b[2], sizeof(vlan_header_t));
-	const u16 is_valid3 = vlib_buffer_has_space(b[3], sizeof(vlan_header_t));
+	const u8 is_valid0 = vlib_buffer_has_space(b[0], sizeof(vlan_header_t));
+	const u8 is_valid1 = vlib_buffer_has_space(b[1], sizeof(vlan_header_t));
+	const u8 is_valid2 = vlib_buffer_has_space(b[2], sizeof(vlan_header_t));
+	const u8 is_valid3 = vlib_buffer_has_space(b[3], sizeof(vlan_header_t));
 
 	const u16 bytes0 = PREDICT_TRUE(is_valid0) ? sizeof(vlan_header_t) : 0;
 	const u16 bytes1 = PREDICT_TRUE(is_valid1) ? sizeof(vlan_header_t) : 0;
@@ -157,9 +159,9 @@ process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, 
 	const vlan_header_t *vlan = vlib_buffer_get_current(b);
 	vlib_buffer_advance(b, bytes);
 
+	next[0] = is_valid ? vlan->type : VLAN_NEXT_DROP;
 	vdm->cache_counters[sw_idx].packets += is_valid;
 	vdm->cache_counters[sw_idx].bytes += bytes;
-	next[0] = is_valid ? vlan->type : VLAN_NEXT_DROP;
 
 	if (PREDICT_FALSE(node->flags & VLIB_NODE_FLAG_TRACE))
 		add_trace(vm, node, b, vlan, is_valid);
@@ -255,7 +257,7 @@ static u8 *format_vlan_trace(u8 *s, va_list *args)
 	vlib_main_t *CLIB_UNUSED(vm)   = va_arg(*args, vlib_main_t *);
 	vlib_node_t *CLIB_UNUSED(node) = va_arg(*args, vlib_node_t *);
 	vlan_trace_t *t = va_arg(*args, vlan_trace_t *);
-	return format(s, "ethernet detunnel:\n"
+	return format(s, "vlan detunnel:\n"
 		"  interface             %U\n"
 		"  priority_cfi_and_id   0x%04x\n"
 		"  ethertype             0x%04x",
