@@ -17,6 +17,13 @@
 	_(l2tp_next, L2TP_DETUNNEL, "ip4-drop")			\
 	_(gtpu_next, GTPU_DETUNNEL, "gtpu-detunnel")
 
+#define foreach_udp_port	\
+	_(l2tp_port)			\
+	_(gtpu_port)
+
+#define L2TP_PORT	1701
+#define GTPU_PORT	2152
+
 enum
 {
 #define _(var, id, name) UDP_NEXT_##id,
@@ -24,6 +31,16 @@ enum
 #undef _
 	UDP_NEXT_N,
 };
+
+#define _(var, id, name) static SIMD_TYPE DETUNNEL_CONCAT(var, SIMD_TYPE);
+
+foreach_udp_detunnel_next
+#undef _
+
+#define _(var) static SIMD_TYPE DETUNNEL_CONCAT(var, SIMD_TYPE);
+
+foreach_udp_port
+#undef _
 
 enum
 {
@@ -49,6 +66,24 @@ extern udp_detunnel_main_t udp_detunnel_main;
 extern vlib_node_registration_t udp_detunnel;
 
 static_always_inline void
+udp_to_next(u16 *src_port, u16 *dst_port, u16 *next, u16 len)
+{
+	for (u16 i = 0; i < len; i += SIMD_SIZE)
+	{
+		SIMD_TYPE src_port_vec = SIMD_LOAD(src_port + i);
+		SIMD_TYPE dst_port_vec = SIMD_LOAD(dst_port + i);
+		SIMD_TYPE l2tp_mask_vec = (src_port_vec == SIMD_VEC(l2tp_port)) | (dst_port_vec == SIMD_VEC(l2tp_port));
+		SIMD_TYPE gtpu_mask_vec = (src_port_vec == SIMD_VEC(gtpu_port)) | (dst_port_vec == SIMD_VEC(gtpu_port));
+
+		SIMD_TYPE result = SIMD_VEC(drop_next) |
+				(l2tp_mask_vec & SIMD_VEC(l2tp_next)) |
+				(gtpu_mask_vec & SIMD_VEC(gtpu_next));
+
+		SIMD_STORE(result, next + i);
+	}
+}
+
+static_always_inline void
 add_trace(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b,
         const udp_header_t *udp, const u8 is_valid)
 {
@@ -59,16 +94,16 @@ add_trace(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b,
 	}
 }
 
-static_always_inline u32 get_next_1x(const udp_header_t *udp)
-{
-	return udp->src_port == 0x6808 || udp->dst_port == 0x6808 ? UDP_NEXT_GTPU_DETUNNEL :
-			udp->src_port == 0xA506 || udp->dst_port == 0xA506 ? UDP_NEXT_L2TP_DETUNNEL :
-			UDP_NEXT_DROP;
-}
+// static_always_inline u32 get_next_1x(const udp_header_t *udp)
+// {
+// 	return udp->src_port == 0x6808 || udp->dst_port == 0x6808 ? UDP_NEXT_GTPU_DETUNNEL :
+// 			udp->src_port == 0xA506 || udp->dst_port == 0xA506 ? UDP_NEXT_L2TP_DETUNNEL :
+// 			UDP_NEXT_DROP;
+// }
 
 static_always_inline void
 process_buffer_4x(vlib_main_t *vm, vlib_node_runtime_t *node,
-		vlib_buffer_t* b[4], u16 next[4])
+		vlib_buffer_t* b[4], u16 src_port[4], u16 dst_port[4])
 {
 	const u32 sw_idx0 = vnet_buffer(b[0])->sw_if_index[VLIB_RX];
 	const u32 sw_idx1 = vnet_buffer(b[1])->sw_if_index[VLIB_RX];
@@ -97,10 +132,15 @@ process_buffer_4x(vlib_main_t *vm, vlib_node_runtime_t *node,
 	vlib_buffer_advance(b[2], bytes2);
 	vlib_buffer_advance(b[3], bytes3);
 
-	next[0] = is_valid0 ? get_next_1x(udp0) : UDP_NEXT_DROP;
-	next[1] = is_valid1 ? get_next_1x(udp1) : UDP_NEXT_DROP;
-	next[2] = is_valid2 ? get_next_1x(udp2) : UDP_NEXT_DROP;
-	next[3] = is_valid3 ? get_next_1x(udp3) : UDP_NEXT_DROP;
+	src_port[0] = is_valid0 ? udp0->src_port : 0;
+	src_port[1] = is_valid1 ? udp1->src_port : 0;
+	src_port[2] = is_valid2 ? udp2->src_port : 0;
+	src_port[3] = is_valid3 ? udp3->src_port : 0;
+
+	dst_port[0] = is_valid0 ? udp0->dst_port : 0;
+	dst_port[1] = is_valid1 ? udp1->dst_port : 0;
+	dst_port[2] = is_valid2 ? udp2->dst_port : 0;
+	dst_port[3] = is_valid3 ? udp3->dst_port : 0;
 
 	udp_detunnel_main_t *udm = &udp_detunnel_main;
 
@@ -131,7 +171,7 @@ process_buffer_4x(vlib_main_t *vm, vlib_node_runtime_t *node,
 }
 
 static_always_inline void
-process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, u16 *next)
+process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, u16 *src_port, u16 *dst_port)
 {
 	udp_detunnel_main_t *udm = &udp_detunnel_main;
 	const u32 sw_idx = vnet_buffer(b)->sw_if_index[VLIB_RX];
@@ -142,7 +182,8 @@ process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, 
 	const udp_header_t *udp = vlib_buffer_get_current(b);
 	vlib_buffer_advance(b, bytes);
 
-	next[0] = is_valid ? get_next_1x(udp) : UDP_NEXT_DROP;
+	src_port[0] = is_valid ? udp->src_port : 0;
+	dst_port[0] = is_valid ? udp->dst_port : 0;
 	udm->cache_counters[sw_idx].packets += is_valid;
 	udm->cache_counters[sw_idx].bytes += bytes;
 
@@ -154,8 +195,11 @@ VLIB_NODE_FN (udp_detunnel) (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_fr
 {
 	vlib_buffer_t *bufs[VLIB_FRAME_SIZE];
 	u16 nexts[VLIB_FRAME_SIZE];
+	u16 src_ports[VLIB_FRAME_SIZE];
+	u16 dst_ports[VLIB_FRAME_SIZE];
 	vlib_buffer_t **b = bufs;
-	u16 *next = nexts;
+	u16 *src_port = src_ports;
+	u16 *dst_port = dst_ports;
 
 	u32 *from = vlib_frame_vector_args(frame);
 	u32 n_left_from = frame->n_vectors;
@@ -200,19 +244,21 @@ VLIB_NODE_FN (udp_detunnel) (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_fr
 			vlib_prefetch_buffer_data(b[7], LOAD);
 		}
 
-		process_buffer_4x(vm, node, b, next);
+		process_buffer_4x(vm, node, b, src_port, dst_port);
 
 		b += 4;
-		next += 4;
+		src_port += 4;
+		dst_port += 4;
 		n_left_from -= 4;
 	}
 
 	while (n_left_from > 0)
 	{
-		process_buffer_1x(vm, node, b[0], next);
+		process_buffer_1x(vm, node, b[0], src_port, dst_port);
 
 		b++;
-		next++;
+		src_port++;
+		dst_port++;
 		n_left_from--;
 	}
 
@@ -226,6 +272,7 @@ VLIB_NODE_FN (udp_detunnel) (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_fr
 		counter->bytes = 0;
 	}
 
+	udp_to_next(src_port, dst_port, nexts, frame->n_vectors);
 	vlib_buffer_enqueue_to_next(vm, node, from, nexts, frame->n_vectors);
 
 	return frame->n_vectors;
@@ -256,7 +303,21 @@ VLIB_REGISTER_NODE (udp_detunnel) = {
 };
 #endif
 
-static clib_error_t *udp_detunnel_init(vlib_main_t *CLIB_UNUSED(vm))
+CLIB_MARCH_FN (udp_detunnel_init, clib_error_t *, vlib_main_t *CLIB_UNUSED(vm))
+{
+	clib_warning("size: %lu %s", SIMD_SIZE, CLIB_STRING_MACRO(SIMD_TYPE));
+
+	SIMD_VEC(l2tp_port) = SIMD_SPLAT(clib_host_to_net_u32(L2TP_PORT));
+	SIMD_VEC(gtpu_port) = SIMD_SPLAT(clib_host_to_net_u32(GTPU_PORT));
+
+	SIMD_VEC(drop_next) = SIMD_SPLAT(UDP_NEXT_DROP);
+	SIMD_VEC(l2tp_next) = SIMD_SPLAT(UDP_NEXT_L2TP_DETUNNEL);
+	SIMD_VEC(gtpu_next) = SIMD_SPLAT(UDP_NEXT_GTPU_DETUNNEL);
+
+	return 0;
+}
+
+static clib_error_t *udp_detunnel_init(vlib_main_t *vm)
 {
 	udp_detunnel_main_t *udm = &udp_detunnel_main;
 	vnet_main_t *vnm = vnet_get_main();
@@ -275,7 +336,7 @@ static clib_error_t *udp_detunnel_init(vlib_main_t *CLIB_UNUSED(vm))
 
 	clib_memset(udm->cache_counters, 0, sizeof(udm->cache_counters));
 
-	return 0;
+	return CLIB_MARCH_FN_SELECT(udp_detunnel_init) (vm);
 }
 
 VLIB_INIT_FUNCTION (udp_detunnel_init);

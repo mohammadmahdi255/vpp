@@ -281,7 +281,6 @@ VLIB_NODE_FN (gtpu_detunnel) (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_f
 	}
 
 	gtpu_to_next(nexts, frame->n_vectors);
-
 	vlib_buffer_enqueue_to_next(vm, node, from, nexts, frame->n_vectors);
 
 	return frame->n_vectors;
@@ -333,7 +332,7 @@ CLIB_MARCH_FN (gtpu_detunnel_init, clib_error_t *, vlib_main_t *CLIB_UNUSED(vm))
 	return 0;
 }
 
-static clib_error_t *gtpu_detunnel_init(vlib_main_t *CLIB_UNUSED(vm))
+static clib_error_t *gtpu_detunnel_init(vlib_main_t *vm)
 {
 	gtpu_detunnel_main_t *gdm = &gtpu_detunnel_main;
 	vnet_main_t *vnm = vnet_get_main();

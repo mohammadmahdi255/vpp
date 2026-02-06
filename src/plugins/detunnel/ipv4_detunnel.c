@@ -316,7 +316,7 @@ CLIB_MARCH_FN (ipv4_detunnel_init, clib_error_t *, vlib_main_t *CLIB_UNUSED(vm))
 	return 0;
 }
 
-static clib_error_t *ipv4_detunnel_init(vlib_main_t *CLIB_UNUSED(vm))
+static clib_error_t *ipv4_detunnel_init(vlib_main_t *vm)
 {
 	ipv4_detunnel_main_t *idm = &ipv4_detunnel_main;
 	vnet_main_t *vnm = vnet_get_main();
