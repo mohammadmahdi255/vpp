@@ -98,10 +98,10 @@ process_buffer_4x(vlib_main_t *vm, vlib_node_runtime_t *node,
 	const u8 is_valid2 = vlib_buffer_has_space(b[2], sizeof(vlan_header_t));
 	const u8 is_valid3 = vlib_buffer_has_space(b[3], sizeof(vlan_header_t));
 
-	const u16 bytes0 = PREDICT_TRUE(is_valid0) ? sizeof(vlan_header_t) : 0;
-	const u16 bytes1 = PREDICT_TRUE(is_valid1) ? sizeof(vlan_header_t) : 0;
-	const u16 bytes2 = PREDICT_TRUE(is_valid2) ? sizeof(vlan_header_t) : 0;
-	const u16 bytes3 = PREDICT_TRUE(is_valid3) ? sizeof(vlan_header_t) : 0;
+	const u16 bytes0 = is_valid0 ? sizeof(vlan_header_t) : 0;
+	const u16 bytes1 = is_valid1 ? sizeof(vlan_header_t) : 0;
+	const u16 bytes2 = is_valid2 ? sizeof(vlan_header_t) : 0;
+	const u16 bytes3 = is_valid3 ? sizeof(vlan_header_t) : 0;
 
 	const vlan_header_t *vlan0 = vlib_buffer_get_current(b[0]);
 	const vlan_header_t *vlan1 = vlib_buffer_get_current(b[1]);
@@ -113,18 +113,17 @@ process_buffer_4x(vlib_main_t *vm, vlib_node_runtime_t *node,
 	vlib_buffer_advance(b[2], bytes2);
 	vlib_buffer_advance(b[3], bytes3);
 
-	next[0] = PREDICT_TRUE(is_valid0) ? vlan0->type : VLAN_NEXT_DROP;
-	next[1] = PREDICT_TRUE(is_valid1) ? vlan1->type : VLAN_NEXT_DROP;
-	next[2] = PREDICT_TRUE(is_valid2) ? vlan2->type : VLAN_NEXT_DROP;
-	next[3] = PREDICT_TRUE(is_valid3) ? vlan3->type : VLAN_NEXT_DROP;
+	next[0] = is_valid0 ? vlan0->type : VLAN_NEXT_DROP;
+	next[1] = is_valid1 ? vlan1->type : VLAN_NEXT_DROP;
+	next[2] = is_valid2 ? vlan2->type : VLAN_NEXT_DROP;
+	next[3] = is_valid3 ? vlan3->type : VLAN_NEXT_DROP;
 
 	vlan_detunnel_main_t *vdm = &vlan_detunnel_main;
 
 	if (PREDICT_TRUE(sw_idx_eq))
 	{
-		const u32 n_packets = is_valid0 + is_valid1 + is_valid2 + is_valid3;
-		vdm->cache_counters[sw_idx0].packets += n_packets;
-		vdm->cache_counters[sw_idx0].bytes += n_packets * sizeof(vlan_header_t);
+		vdm->cache_counters[sw_idx0].packets += is_valid0 + is_valid1 + is_valid2 + is_valid3;
+		vdm->cache_counters[sw_idx0].bytes += bytes0 + bytes1 + bytes2 + bytes3;
 	}
 	else
 	{

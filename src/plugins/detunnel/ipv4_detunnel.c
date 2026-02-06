@@ -131,20 +131,20 @@ process_buffer_4x(vlib_main_t *vm, vlib_node_runtime_t *node,
 	const u8 is_valid3 =
 			ip4_pad_len3 >= 0 && ip4_hdr_len3 >= sizeof(ip4_header_t) && vlib_buffer_has_space(b[3], ip4_hdr_len3);
 
-	const u16 bytes0 = PREDICT_TRUE(is_valid0) ? ip4_hdr_len0 : 0;
-	const u16 bytes1 = PREDICT_TRUE(is_valid1) ? ip4_hdr_len1 : 0;
-	const u16 bytes2 = PREDICT_TRUE(is_valid2) ? ip4_hdr_len2 : 0;
-	const u16 bytes3 = PREDICT_TRUE(is_valid3) ? ip4_hdr_len3 : 0;
+	const u16 bytes0 = is_valid0 ? ip4_hdr_len0 : 0;
+	const u16 bytes1 = is_valid1 ? ip4_hdr_len1 : 0;
+	const u16 bytes2 = is_valid2 ? ip4_hdr_len2 : 0;
+	const u16 bytes3 = is_valid3 ? ip4_hdr_len3 : 0;
 
 	vlib_buffer_advance(b[0], bytes0);
 	vlib_buffer_advance(b[1], bytes1);
 	vlib_buffer_advance(b[2], bytes2);
 	vlib_buffer_advance(b[3], bytes3);
 
-	next[0] = PREDICT_TRUE(is_valid0) ? ip0->protocol : IPV4_NEXT_DROP;
-	next[1] = PREDICT_TRUE(is_valid1) ? ip1->protocol : IPV4_NEXT_DROP;
-	next[2] = PREDICT_TRUE(is_valid2) ? ip2->protocol : IPV4_NEXT_DROP;
-	next[3] = PREDICT_TRUE(is_valid3) ? ip3->protocol : IPV4_NEXT_DROP;
+	next[0] = is_valid0 ? ip0->protocol : IPV4_NEXT_DROP;
+	next[1] = is_valid1 ? ip1->protocol : IPV4_NEXT_DROP;
+	next[2] = is_valid2 ? ip2->protocol : IPV4_NEXT_DROP;
+	next[3] = is_valid3 ? ip3->protocol : IPV4_NEXT_DROP;
 
 	if (PREDICT_TRUE(sw_idx_eq))
 	{
@@ -186,10 +186,10 @@ process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, 
 	const u8 is_valid =
 			ip4_pad_len >= 0 && ip4_hdr_len >= sizeof(ip4_header_t) && vlib_buffer_has_space(b, ip4_hdr_len);
 
-	const u16 bytes = PREDICT_TRUE(is_valid) ? ip4_hdr_len : 0;
+	const u16 bytes = is_valid ? ip4_hdr_len : 0;
 	vlib_buffer_advance(b, bytes);
 
-	next[0] = PREDICT_TRUE(is_valid) ? ip4->protocol : IPV4_NEXT_DROP;
+	next[0] = is_valid ? ip4->protocol : IPV4_NEXT_DROP;
 	idm->cache_counters[sw_idx].packets += is_valid;
 	idm->cache_counters[sw_idx].bytes += bytes;
 
