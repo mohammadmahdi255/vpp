@@ -103,10 +103,10 @@ process_buffer_4x(vlib_main_t *vm, vlib_node_runtime_t *node,
 	const ip4_header_t *ip2 = vlib_buffer_get_current(b[2]);
 	const ip4_header_t *ip3 = vlib_buffer_get_current(b[3]);
 
-	const u16 ip4_hdr_len0 = ip4_header_bytes(ip0);
-	const u16 ip4_hdr_len1 = ip4_header_bytes(ip1);
-	const u16 ip4_hdr_len2 = ip4_header_bytes(ip2);
-	const u16 ip4_hdr_len3 = ip4_header_bytes(ip3);
+	u16 ip4_hdr_len0 = ip4_header_bytes(ip0);
+	u16 ip4_hdr_len1 = ip4_header_bytes(ip1);
+	u16 ip4_hdr_len2 = ip4_header_bytes(ip2);
+	u16 ip4_hdr_len3 = ip4_header_bytes(ip3);
 
 	const u16 len0 = vlib_buffer_length_in_chain(vm, b[0]);
 	const u16 len1 = vlib_buffer_length_in_chain(vm, b[1]);
@@ -132,25 +132,54 @@ process_buffer_4x(vlib_main_t *vm, vlib_node_runtime_t *node,
 	const u8 is_valid3 =
 			ip4_pad_len3 >= 0 && ip4_hdr_len3 >= sizeof(ip4_header_t) && vlib_buffer_has_space(b[3], ip4_hdr_len3);
 
-	const u16 bytes0 = is_valid0 ? ip4_hdr_len0 : 0;
-	const u16 bytes1 = is_valid1 ? ip4_hdr_len1 : 0;
-	const u16 bytes2 = is_valid2 ? ip4_hdr_len2 : 0;
-	const u16 bytes3 = is_valid3 ? ip4_hdr_len3 : 0;
+	if (PREDICT_TRUE(is_valid0))
+	{
+		vlib_buffer_advance(b[0], ip4_hdr_len0);
+		next[0] = ip0->protocol;
+	}
+	else
+	{
+		ip4_hdr_len0 = 0;
+		next[0] = IP_PROTOCOL_INVALID;
+	}
 
-	vlib_buffer_advance(b[0], bytes0);
-	vlib_buffer_advance(b[1], bytes1);
-	vlib_buffer_advance(b[2], bytes2);
-	vlib_buffer_advance(b[3], bytes3);
+	if (PREDICT_TRUE(is_valid1))
+	{
+		vlib_buffer_advance(b[1], ip4_hdr_len1);
+		next[1] = ip1->protocol;
+	}
+	else
+	{
+		ip4_hdr_len1 = 0;
+		next[1] = IP_PROTOCOL_INVALID;
+	}
 
-	next[0] = is_valid0 ? ip0->protocol : IP_PROTOCOL_INVALID;
-	next[1] = is_valid1 ? ip1->protocol : IP_PROTOCOL_INVALID;
-	next[2] = is_valid2 ? ip2->protocol : IP_PROTOCOL_INVALID;
-	next[3] = is_valid3 ? ip3->protocol : IP_PROTOCOL_INVALID;
+	if (PREDICT_TRUE(is_valid2))
+	{
+		vlib_buffer_advance(b[2], ip4_hdr_len2);
+		next[2] = ip2->protocol;
+	}
+	else
+	{
+		ip4_hdr_len2 = 0;
+		next[2] = IP_PROTOCOL_INVALID;
+	}
+
+	if (PREDICT_TRUE(is_valid3))
+	{
+		vlib_buffer_advance(b[3], ip4_hdr_len3);
+		next[3] = ip3->protocol;
+	}
+	else
+	{
+		ip4_hdr_len3 = 0;
+		next[3] = IP_PROTOCOL_INVALID;
+	}
 
 	if (PREDICT_TRUE(sw_idx_eq))
 	{
 		idm->cache_counters[sw_idx0].packets += is_valid0 + is_valid1 + is_valid2 + is_valid3;
-		idm->cache_counters[sw_idx0].bytes += bytes0 + bytes1 + bytes2 + bytes3;
+		idm->cache_counters[sw_idx0].bytes += ip4_hdr_len0 + ip4_hdr_len1 + ip4_hdr_len2 + ip4_hdr_len3;
 	}
 	else
 	{
@@ -158,10 +187,10 @@ process_buffer_4x(vlib_main_t *vm, vlib_node_runtime_t *node,
 		idm->cache_counters[sw_idx1].packets += is_valid1;
 		idm->cache_counters[sw_idx2].packets += is_valid2;
 		idm->cache_counters[sw_idx3].packets += is_valid3;
-		idm->cache_counters[sw_idx0].bytes += bytes0;
-		idm->cache_counters[sw_idx1].bytes += bytes1;
-		idm->cache_counters[sw_idx2].bytes += bytes2;
-		idm->cache_counters[sw_idx3].bytes += bytes3;
+		idm->cache_counters[sw_idx0].bytes += ip4_hdr_len0;
+		idm->cache_counters[sw_idx1].bytes += ip4_hdr_len1;
+		idm->cache_counters[sw_idx2].bytes += ip4_hdr_len2;
+		idm->cache_counters[sw_idx3].bytes += ip4_hdr_len3;
 	}
 
 	if (PREDICT_FALSE(node->flags & VLIB_NODE_FLAG_TRACE))
@@ -188,12 +217,17 @@ process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, 
 	const u8 is_valid =
 			ip4_pad_len >= 0 && ip4_hdr_len >= sizeof(ip4_header_t) && vlib_buffer_has_space(b, ip4_hdr_len);
 
-	const u16 bytes = is_valid ? ip4_hdr_len : 0;
-	vlib_buffer_advance(b, bytes);
-
-	next[0] = is_valid ? ip4->protocol : IP_PROTOCOL_INVALID;
-	idm->cache_counters[sw_idx].packets += is_valid;
-	idm->cache_counters[sw_idx].bytes += bytes;
+	if (PREDICT_TRUE(is_valid))
+	{
+		vlib_buffer_advance(b, ip4_hdr_len);
+		next[0] = ip4->protocol;
+		idm->cache_counters[sw_idx].packets++;
+		idm->cache_counters[sw_idx].bytes += ip4_hdr_len;
+	}
+	else
+	{
+		next[0] = IP_PROTOCOL_INVALID;
+	}
 
 	if (PREDICT_FALSE(b->flags & VLIB_BUFFER_IS_TRACED))
 		add_trace(vm, node, b, ip4, is_valid);
