@@ -8,6 +8,8 @@
 #include <vppinfra/clib.h>
 
 #include "detunnel.h"
+#include "vlib/buffer.h"
+#include "vppinfra/byte_order.h"
 
 #define foreach_gre_detunnel_next						\
 	_(drop_next, DROP, "drop")							\
@@ -16,6 +18,8 @@
 	_(ipv6_next, IPV6_DETUNNEL, "ipv6-detunnel")		\
 	_(mpls_next, MPLS_DETUNNEL, "mpls-detunnel")		\
 	_(failed_next, FAILED_DETUNNEL, "failed-detunnel")
+
+#define GRE_FLAGS_ACK	(1 << 7)
 
 enum
 {
@@ -42,6 +46,13 @@ typedef struct
 {
 	gre_header_t gre;
 } gre_trace_t;
+
+typedef struct
+{
+    uint16_t address_family;
+    uint8_t sre_offset;
+    uint8_t sre_size;
+} __clib_packed gre_routing_header_t;
 
 typedef struct
 {
@@ -86,63 +97,61 @@ add_trace(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b,
 	}
 }
 
-u16 gre_header_size(const gre_header_t* gre_header, u16 remaining_size)
+u16 advance_gre_header(vlib_buffer_t *b)
 {
-	u16 size = sizeof(gre_header_t);
+	const gre_header_t* gre = vlib_buffer_get_current(b);
+	vlib_buffer_advance(b, sizeof(gre_header_t));
 
 	/*
 	 * If either the checksum present bit or the routing present bit are set
 	 * both the checksum and offset fields are present in GRE packet
 	 */
 
-	const u16 flags_and_versions = gre_header->flags_and_version;
+	const bool checksum_flag = gre->flags_and_version & GRE_FLAGS_CHECKSUM;
+	const bool routing_flag = gre->flags_and_version & GRE_FLAGS_ROUTING;
+	const bool key_flag = gre->flags_and_version & GRE_FLAGS_KEY;
+	const bool sequence_flag = gre->flags_and_version & GRE_FLAGS_SEQUENCE;
+	const bool ack_flag = gre->flags_and_version & GRE_FLAGS_ACK;
 
-	const bool checksum_flag = flags_and_versions & GRE_FLAGS_CHECKSUM;
-	const bool routing_flag = flags_and_versions & GRE_FLAGS_ROUTING;
-	const bool key_flag = flags_and_versions & GRE_FLAGS_KEY;
-	const bool sequence_flag = flags_and_versions & GRE_FLAGS_SEQUENCE;
+	u16 size = (checksum_flag | routing_flag + key_flag + sequence_flag) * sizeof(u32);
 
-	size += (checksum_flag | routing_flag + key_flag + sequence_flag) * sizeof(u32);
-
-	switch (gre_header->protocol)
+	switch (gre->protocol)
 	{
-		case ETHERNET_TYPE_PPP:
-		case ETHERNET_TYPE_3GPP2:
-		case ETHERNET_TYPE_CDMA_2000:
+		case __builtin_bswap16(ETHERNET_TYPE_PPP):
+		case __builtin_bswap16(ETHERNET_TYPE_3GPP2):
+		case __builtin_bswap16(ETHERNET_TYPE_CDMA_2000):
 			// Acknowledgement number
-				size += 4 * (bool) (flags_and_versions & GRE_FLAGS_ACK);
+				size += ack_flag * sizeof(u32);
 			break;
 
-		case ETHERNET_TYPE_WCCP:
+		case __builtin_bswap16(ETHERNET_TYPE_WCCP):
         {
-			const uint8_t* byte_ptr = (const uint8_t*)(gre_header) + sizeof(gre_header_t);
 			/*
 			 * WCCP2 puts an extra 4 octets into the header, but uses the same
 			 * encapsulation type; if it looks as if the first octet of the packet
 			 * isn't the beginning of an IPv4 header, assume it's WCCP2.
 			 */
-			size += 4 * ((*byte_ptr & 0xF0) != 0x40);
+			size += ((*(u8 *) vlib_buffer_get_current(b) & 0xF0) != 0x40) * sizeof(u32);
 			break;
         }
 	}
 
+
 	// Routing
 	while (PREDICT_FALSE(routing_flag))
 	{
-		if (PREDICT_FALSE(size > remaining_size))
-		{
-			clib_warning("Not enough bytes to read GRE routing header");
-			return remaining_size;
-		}
-
-		const GreRoutingHeader* routing_header = (const GreRoutingHeader*)((const uint8_t*)(gre_header) + size);
-		size += sizeof(GreRoutingHeader) + routing_header->sre_size;
+		const gre_routing_header_t* routing_header = vlib_buffer_get_current(b) + size;
+		size += sizeof(gre_routing_header_t) + routing_header->sre_size;
 
 		if (PREDICT_TRUE(routing_header->address_family == 0x0000 && routing_header->sre_size == 0))
-			return size;
+			break;
+
+		if (PREDICT_FALSE(vlib_buffer_has_space(b, size)))
+			return ETHERNET_TYPE_INVALID;
 	}
 
-	return size;
+	vlib_buffer_advance(b, size);
+	return gre->protocol;
 }
 
 static_always_inline void
