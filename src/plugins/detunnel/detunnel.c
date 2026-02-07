@@ -1,5 +1,6 @@
 
 #include "detunnel.h"
+#include "vnet/ethernet/packet.h"
 #include "vnet/ip/ip_packet.h"
 #include "vppinfra/clib.h"
 #include "vppinfra/error.h"
@@ -23,6 +24,7 @@ CLIB_MARCH_FN (detunnel_init, clib_error_t *, vlib_main_t __clib_unused *vm)
 	SIMD_VEC(vlan_ethertype) = SIMD_SPLAT(clib_host_to_net_u16(ETHERNET_TYPE_VLAN));
 	SIMD_VEC(ipv4_ethertype) = SIMD_SPLAT(clib_host_to_net_u16(ETHERNET_TYPE_IP4));
 	SIMD_VEC(ipv6_ethertype) = SIMD_SPLAT(clib_host_to_net_u16(ETHERNET_TYPE_IP6));
+	SIMD_VEC(mpls_ethertype) = SIMD_SPLAT(clib_host_to_net_u16(ETHERNET_TYPE_MPLS));
 	SIMD_VEC(invalid_ethertype) = SIMD_SPLAT(clib_host_to_net_u16(ETHERNET_TYPE_INVALID));
 
 	SIMD_VEC(ipv4_protocol) = SIMD_SPLAT(IP_PROTOCOL_IP_IN_IP);

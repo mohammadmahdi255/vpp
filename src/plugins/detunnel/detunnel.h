@@ -42,6 +42,7 @@
 	_(vlan_ethertype)		\
 	_(ipv4_ethertype)		\
 	_(ipv6_ethertype)		\
+	_(mpls_ethertype)		\
 	_(invalid_ethertype)
 
 #define foreach_ip_protocol		\
