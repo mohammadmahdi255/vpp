@@ -7,11 +7,12 @@
 
 #include "detunnel.h"
 
-#define foreach_vlan_detunnel_next					\
-	_(drop_next, DROP, "drop")						\
-	_(vlan_next, VLAN_DETUNNEL, "vlan-detunnel")	\
-	_(ipv4_next, IPV4_DETUNNEL, "ipv4-detunnel")	\
-	_(ipv6_next, IPV6_DETUNNEL, "ipv6-detunnel")
+#define foreach_vlan_detunnel_next						\
+	_(drop_next, DROP, "drop")							\
+	_(vlan_next, VLAN_DETUNNEL, "vlan-detunnel")		\
+	_(ipv4_next, IPV4_DETUNNEL, "ipv4-detunnel")		\
+	_(ipv6_next, IPV6_DETUNNEL, "ipv6-detunnel")		\
+	_(failed_next, FAILED_DETUNNEL, "failed-detunnel")
 
 enum
 {
@@ -55,15 +56,17 @@ vlan_to_next(u16 *next, u16 len)
 {
 	for (u16 i = 0; i < len; i += SIMD_SIZE)
 	{
-		SIMD_TYPE ethertype_vec = SIMD_LOAD(next + i);
-		SIMD_TYPE vlan_mask_vec = (ethertype_vec == SIMD_VEC(vlan_ethertype));
-		SIMD_TYPE ipv4_mask_vec = (ethertype_vec == SIMD_VEC(ipv4_ethertype));
-		SIMD_TYPE ipv6_mask_vec = (ethertype_vec == SIMD_VEC(ipv6_ethertype));
+		SIMD_TYPE next_vec = SIMD_LOAD(next + i);
+		SIMD_TYPE vlan_mask_vec = (next_vec == SIMD_VEC(vlan_ethertype));
+		SIMD_TYPE ipv4_mask_vec = (next_vec == SIMD_VEC(ipv4_ethertype));
+		SIMD_TYPE ipv6_mask_vec = (next_vec == SIMD_VEC(ipv6_ethertype));
+		SIMD_TYPE failed_mask_vec = (next_vec == SIMD_VEC(invalid_ethertype));
 
 		SIMD_TYPE result = SIMD_VEC(drop_next) |
 				(vlan_mask_vec & SIMD_VEC(vlan_next)) |
 				(ipv4_mask_vec & SIMD_VEC(ipv4_next)) |
-				(ipv6_mask_vec & SIMD_VEC(ipv6_next));
+				(ipv6_mask_vec & SIMD_VEC(ipv6_next)) |
+				(failed_mask_vec & SIMD_VEC(failed_next));
 
 		SIMD_STORE(result, next + i);
 	}
@@ -111,10 +114,10 @@ process_buffer_4x(vlib_main_t *vm, vlib_node_runtime_t *node,
 	vlib_buffer_advance(b[2], bytes2);
 	vlib_buffer_advance(b[3], bytes3);
 
-	next[0] = is_valid0 ? vlan0->type : VLAN_NEXT_DROP;
-	next[1] = is_valid1 ? vlan1->type : VLAN_NEXT_DROP;
-	next[2] = is_valid2 ? vlan2->type : VLAN_NEXT_DROP;
-	next[3] = is_valid3 ? vlan3->type : VLAN_NEXT_DROP;
+	next[0] = is_valid0 ? vlan0->type : ETHERNET_TYPE_INVALID;
+	next[1] = is_valid1 ? vlan1->type : ETHERNET_TYPE_INVALID;
+	next[2] = is_valid2 ? vlan2->type : ETHERNET_TYPE_INVALID;
+	next[3] = is_valid3 ? vlan3->type : ETHERNET_TYPE_INVALID;
 
 	vlan_detunnel_main_t *vdm = &vlan_detunnel_main;
 
@@ -156,7 +159,7 @@ process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, 
 	const vlan_header_t *vlan = vlib_buffer_get_current(b);
 	vlib_buffer_advance(b, bytes);
 
-	next[0] = is_valid ? vlan->type : VLAN_NEXT_DROP;
+	next[0] = is_valid ? vlan->type : ETHERNET_TYPE_INVALID;
 	vdm->cache_counters[sw_idx].packets += is_valid;
 	vdm->cache_counters[sw_idx].bytes += bytes;
 
@@ -282,6 +285,7 @@ CLIB_MARCH_FN (vlan_detunnel_init, clib_error_t *, vlib_main_t __clib_unused *vm
 	SIMD_VEC(vlan_next) = SIMD_SPLAT(VLAN_NEXT_VLAN_DETUNNEL);
 	SIMD_VEC(ipv4_next) = SIMD_SPLAT(VLAN_NEXT_IPV4_DETUNNEL);
 	SIMD_VEC(ipv6_next) = SIMD_SPLAT(VLAN_NEXT_IPV6_DETUNNEL);
+	SIMD_VEC(failed_next) = SIMD_SPLAT(VLAN_NEXT_FAILED_DETUNNEL);
 
 	return 0;
 }

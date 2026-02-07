@@ -12,17 +12,20 @@
 
 #include "detunnel.h"
 
-#define foreach_udp_detunnel_next					\
-	_(drop_next, DROP, "drop")						\
-	_(l2tp_next, L2TP_DETUNNEL, "ip4-drop")			\
-	_(gtpu_next, GTPU_DETUNNEL, "gtpu-detunnel")
+#define foreach_udp_detunnel_next						\
+	_(drop_next, DROP, "drop")							\
+	_(l2tp_next, L2TP_DETUNNEL, "ip4-drop")				\
+	_(gtpu_next, GTPU_DETUNNEL, "gtpu-detunnel")		\
+	_(failed_next, FAILED_DETUNNEL, "failed-detunnel")
 
 #define foreach_udp_port	\
 	_(l2tp_port)			\
-	_(gtpu_port)
+	_(gtpu_port)			\
+	_(invalid_port)
 
-#define L2TP_PORT	1701
-#define GTPU_PORT	2152
+#define L2TP_PORT		1701
+#define GTPU_PORT		2152
+#define INVALID_PORT	0
 
 enum
 {
@@ -74,10 +77,12 @@ udp_to_next(u16 *src_port, u16 *dst_port, u16 *next, u16 len)
 		SIMD_TYPE dst_port_vec = SIMD_LOAD(dst_port + i);
 		SIMD_TYPE l2tp_mask_vec = (src_port_vec == SIMD_VEC(l2tp_port)) | (dst_port_vec == SIMD_VEC(l2tp_port));
 		SIMD_TYPE gtpu_mask_vec = (src_port_vec == SIMD_VEC(gtpu_port)) | (dst_port_vec == SIMD_VEC(gtpu_port));
+		SIMD_TYPE failed_mask_vec = (src_port_vec == SIMD_VEC(invalid_port)) & (dst_port_vec == SIMD_VEC(invalid_port));
 
 		SIMD_TYPE result = SIMD_VEC(drop_next) |
 				(l2tp_mask_vec & SIMD_VEC(l2tp_next)) |
-				(gtpu_mask_vec & SIMD_VEC(gtpu_next));
+				(gtpu_mask_vec & SIMD_VEC(gtpu_next)) |
+				(failed_mask_vec & SIMD_VEC(failed_next));
 
 		SIMD_STORE(result, next + i);
 	}
@@ -125,15 +130,15 @@ process_buffer_4x(vlib_main_t *vm, vlib_node_runtime_t *node,
 	vlib_buffer_advance(b[2], bytes2);
 	vlib_buffer_advance(b[3], bytes3);
 
-	src_port[0] = is_valid0 ? udp0->src_port : 0;
-	src_port[1] = is_valid1 ? udp1->src_port : 0;
-	src_port[2] = is_valid2 ? udp2->src_port : 0;
-	src_port[3] = is_valid3 ? udp3->src_port : 0;
+	src_port[0] = is_valid0 ? udp0->src_port : INVALID_PORT;
+	src_port[1] = is_valid1 ? udp1->src_port : INVALID_PORT;
+	src_port[2] = is_valid2 ? udp2->src_port : INVALID_PORT;
+	src_port[3] = is_valid3 ? udp3->src_port : INVALID_PORT;
 
-	dst_port[0] = is_valid0 ? udp0->dst_port : 0;
-	dst_port[1] = is_valid1 ? udp1->dst_port : 0;
-	dst_port[2] = is_valid2 ? udp2->dst_port : 0;
-	dst_port[3] = is_valid3 ? udp3->dst_port : 0;
+	dst_port[0] = is_valid0 ? udp0->dst_port : INVALID_PORT;
+	dst_port[1] = is_valid1 ? udp1->dst_port : INVALID_PORT;
+	dst_port[2] = is_valid2 ? udp2->dst_port : INVALID_PORT;
+	dst_port[3] = is_valid3 ? udp3->dst_port : INVALID_PORT;
 
 	udp_detunnel_main_t *udm = &udp_detunnel_main;
 
@@ -175,8 +180,8 @@ process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, 
 	const udp_header_t *udp = vlib_buffer_get_current(b);
 	vlib_buffer_advance(b, bytes);
 
-	src_port[0] = is_valid ? udp->src_port : 0;
-	dst_port[0] = is_valid ? udp->dst_port : 0;
+	src_port[0] = is_valid ? udp->src_port : INVALID_PORT;
+	dst_port[0] = is_valid ? udp->dst_port : INVALID_PORT;
 	udm->cache_counters[sw_idx].packets += is_valid;
 	udm->cache_counters[sw_idx].bytes += bytes;
 
@@ -302,10 +307,13 @@ CLIB_MARCH_FN (udp_detunnel_init, clib_error_t *, vlib_main_t __clib_unused *vm)
 
 	SIMD_VEC(l2tp_port) = SIMD_SPLAT(clib_host_to_net_u16(L2TP_PORT));
 	SIMD_VEC(gtpu_port) = SIMD_SPLAT(clib_host_to_net_u16(GTPU_PORT));
+	SIMD_VEC(invalid_port) = SIMD_SPLAT(clib_host_to_net_u16(INVALID_PORT));
 
 	SIMD_VEC(drop_next) = SIMD_SPLAT(UDP_NEXT_DROP);
 	SIMD_VEC(l2tp_next) = SIMD_SPLAT(UDP_NEXT_L2TP_DETUNNEL);
 	SIMD_VEC(gtpu_next) = SIMD_SPLAT(UDP_NEXT_GTPU_DETUNNEL);
+	SIMD_VEC(gtpu_next) = SIMD_SPLAT(UDP_NEXT_GTPU_DETUNNEL);
+	SIMD_VEC(failed_next) = SIMD_SPLAT(UDP_NEXT_FAILED_DETUNNEL);
 
 	return 0;
 }

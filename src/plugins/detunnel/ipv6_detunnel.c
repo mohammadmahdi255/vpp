@@ -17,7 +17,7 @@
 	_(ipv6_next, IPV6_DETUNNEL, "ipv6-detunnel")			\
 	_(ipv6_frag_next, IPV6_FRAG_DETUNNEL, "ip4-drop")		\
 	_(udp_next, UDP_DETUNNEL, "udp-detunnel")				\
-	_(drop_next, DROP, "drop")
+	_(failed_next, FAILED_DETUNNEL, "failed-detunnel")
 
 enum
 {
@@ -60,18 +60,18 @@ ipv6_to_next(u16 *next, u16 len)
 	for (u16 i = 0; i < len; i += SIMD_SIZE)
 	{
 		SIMD_TYPE next_vec = SIMD_LOAD(next + i);
-		SIMD_TYPE drop_mask_vec = (next_vec == SIMD_VEC(invalid_protocol));
 		SIMD_TYPE ipv4_mask_vec = (next_vec == SIMD_VEC(ipv4_protocol));
 		SIMD_TYPE ipv6_mask_vec = (next_vec == SIMD_VEC(ipv6_protocol));
 		SIMD_TYPE ipv6_frag_mask_vec = (next_vec == SIMD_VEC(ipv6_frag_protocol));
 		SIMD_TYPE udp_mask_vec = (next_vec == SIMD_VEC(udp_protocol));
+		SIMD_TYPE failed_mask_vec = (next_vec == SIMD_VEC(invalid_protocol));
 
 		SIMD_TYPE result = SIMD_VEC(ipv6_etc_next) |
 				(ipv4_mask_vec & SIMD_VEC(ipv4_next)) |
 				(ipv6_mask_vec & SIMD_VEC(ipv6_next)) |
 				(ipv6_frag_mask_vec & SIMD_VEC(ipv6_frag_next)) |
 				(udp_mask_vec & SIMD_VEC(udp_next)) |
-				(drop_mask_vec & SIMD_VEC(drop_next));
+				(failed_mask_vec & SIMD_VEC(failed_next));
 
 		SIMD_STORE(result, next + i);
 	}
@@ -309,7 +309,7 @@ CLIB_MARCH_FN (ipv6_detunnel_init, clib_error_t *, vlib_main_t __clib_unused *vm
 	SIMD_VEC(ipv6_next) = SIMD_SPLAT(IPV6_NEXT_IPV6_DETUNNEL);
 	SIMD_VEC(ipv6_frag_next) = SIMD_SPLAT(IPV6_NEXT_IPV6_FRAG_DETUNNEL);
 	SIMD_VEC(udp_next) = SIMD_SPLAT(IPV6_NEXT_UDP_DETUNNEL);
-	SIMD_VEC(drop_next) = SIMD_SPLAT(IPV6_NEXT_DROP);
+	SIMD_VEC(failed_next) = SIMD_SPLAT(IPV6_NEXT_FAILED_DETUNNEL);
 
 	return 0;
 }
