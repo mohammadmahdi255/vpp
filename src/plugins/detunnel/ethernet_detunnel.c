@@ -104,25 +104,59 @@ process_buffer_4x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t* b[4
 	const u8 is_valid2 = vlib_buffer_has_space(b[2], sizeof(ethernet_header_t));
 	const u8 is_valid3 = vlib_buffer_has_space(b[3], sizeof(ethernet_header_t));
 
-	const u16 bytes0 = is_valid0 ? sizeof(ethernet_header_t) : 0;
-	const u16 bytes1 = is_valid1 ? sizeof(ethernet_header_t) : 0;
-	const u16 bytes2 = is_valid2 ? sizeof(ethernet_header_t) : 0;
-	const u16 bytes3 = is_valid3 ? sizeof(ethernet_header_t) : 0;
+	u16 bytes0 = 0;
+	u16 bytes1 = 0;
+	u16 bytes2 = 0;
+	u16 bytes3 = 0;
 
 	const ethernet_header_t *eth0 = vlib_buffer_get_current(b[0]);
 	const ethernet_header_t *eth1 = vlib_buffer_get_current(b[1]);
 	const ethernet_header_t *eth2 = vlib_buffer_get_current(b[2]);
 	const ethernet_header_t *eth3 = vlib_buffer_get_current(b[3]);
 
-	vlib_buffer_advance(b[0], bytes0);
-	vlib_buffer_advance(b[1], bytes1);
-	vlib_buffer_advance(b[2], bytes2);
-	vlib_buffer_advance(b[3], bytes3);
+	if (PREDICT_TRUE(is_valid0))
+	{
+		bytes0 = sizeof(ethernet_header_t);
+		vlib_buffer_advance(b[0], sizeof(ethernet_header_t));
+		next[0] = eth0->type;
+	}
+	else
+	{
+		next[0] = ETHERNET_TYPE_INVALID;
+	}
 
-	next[0] = is_valid0 ? eth0->type : ETHERNET_TYPE_INVALID;
-	next[1] = is_valid1 ? eth1->type : ETHERNET_TYPE_INVALID;
-	next[2] = is_valid2 ? eth2->type : ETHERNET_TYPE_INVALID;
-	next[3] = is_valid3 ? eth3->type : ETHERNET_TYPE_INVALID;
+	if (PREDICT_TRUE(is_valid1))
+	{
+		bytes1 = sizeof(ethernet_header_t);
+		vlib_buffer_advance(b[1], sizeof(ethernet_header_t));
+		next[1] = eth1->type;
+	}
+	else
+	{
+		next[1] = ETHERNET_TYPE_INVALID;
+	}
+
+	if (PREDICT_TRUE(is_valid2))
+	{
+		bytes2 = sizeof(ethernet_header_t);
+		vlib_buffer_advance(b[2], sizeof(ethernet_header_t));
+		next[2] = eth2->type;
+	}
+	else
+	{
+		next[2] = ETHERNET_TYPE_INVALID;
+	}
+
+	if (PREDICT_TRUE(is_valid3))
+	{
+		bytes3 = sizeof(ethernet_header_t);
+		vlib_buffer_advance(b[3], sizeof(ethernet_header_t));
+		next[3] = eth3->type;
+	}
+	else
+	{
+		next[3] = ETHERNET_TYPE_INVALID;
+	}
 
 	ethernet_detunnel_main_t *edm = &ethernet_detunnel_main;
 
@@ -159,14 +193,19 @@ process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, 
 	const u32 sw_idx = vnet_buffer(b)->sw_if_index[VLIB_RX];
 
 	const u8 is_valid = vlib_buffer_has_space(b, sizeof(ethernet_header_t));
-	const u16 bytes = is_valid ? sizeof(ethernet_header_t) : 0;
-
 	const ethernet_header_t *eth = vlib_buffer_get_current(b);
-	vlib_buffer_advance(b, bytes);
 
-	next[0] = is_valid ? eth->type : ETHERNET_TYPE_INVALID;
-	edm->cache_counters[sw_idx].packets += is_valid;
-	edm->cache_counters[sw_idx].bytes += bytes;
+	if (PREDICT_TRUE(is_valid))
+	{
+		vlib_buffer_advance(b, sizeof(ethernet_header_t));
+		edm->cache_counters[sw_idx].packets++;
+		edm->cache_counters[sw_idx].bytes += sizeof(ethernet_header_t);
+		next[0] = eth->type;
+	}
+	else
+	{
+		next[0] = ETHERNET_TYPE_INVALID;
+	}
 
 	if (PREDICT_FALSE(node->flags & VLIB_NODE_FLAG_TRACE))
 		add_trace(vm, node, b, eth, is_valid);
