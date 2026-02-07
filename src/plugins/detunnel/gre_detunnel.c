@@ -1,13 +1,15 @@
+#include <stdbool.h>
 #include <vlib/vlib.h>
 
-#include <vnet/ethernet/ethernet.h>
+#include <vnet/ethernet/packet.h>
+#include <vnet/gre/packet.h>
 #include <vnet/vnet.h>
 
 #include <vppinfra/clib.h>
 
 #include "detunnel.h"
 
-#define foreach_vlan_detunnel_next						\
+#define foreach_gre_detunnel_next						\
 	_(drop_next, DROP, "drop")							\
 	_(vlan_next, VLAN_DETUNNEL, "vlan-detunnel")		\
 	_(ipv4_next, IPV4_DETUNNEL, "ipv4-detunnel")		\
@@ -17,43 +19,41 @@
 
 enum
 {
-#define _(var, id, name) VLAN_NEXT_##id,
-	foreach_vlan_detunnel_next
+#define _(var, id, name) GRE_NEXT_##id,
+	foreach_gre_detunnel_next
 #undef _
-	VLAN_NEXT_N,
+	GRE_NEXT_N,
 };
 
 #define _(var, id, name) static SIMD_TYPE DETUNNEL_CONCAT(var, SIMD_TYPE);
 
-foreach_vlan_detunnel_next
+foreach_gre_detunnel_next
 #undef _
 
 enum
 {
-#define _(id, name) VLAN_##id,
+#define _(id, name) GRE_##id,
 	foreach_detunnel_counter
 #undef _
-	VLAN_COUNTER_N,
+	GRE_COUNTER_N,
 };
-
-typedef ethernet_vlan_header_t vlan_header_t;
 
 typedef struct
 {
-	vlan_header_t vlan;
-} vlan_trace_t;
+	gre_header_t gre;
+} gre_trace_t;
 
 typedef struct
 {
 	u32 counter_if_index;
 	vlib_counter_t cache_counters[MAX_IF_SIZE];
-	vlib_combined_counter_main_t counters[VLAN_COUNTER_N];
-} vlan_detunnel_main_t;
+	vlib_combined_counter_main_t counters[GRE_COUNTER_N];
+} gre_detunnel_main_t;
 
-extern vlan_detunnel_main_t vlan_detunnel_main;
+extern gre_detunnel_main_t gre_detunnel_main;
 
 static_always_inline void
-vlan_to_next(u16 *next, u16 len)
+gre_to_next(u16 *next, u16 len)
 {
 	for (u16 i = 0; i < len; i += SIMD_SIZE)
 	{
@@ -77,13 +77,72 @@ vlan_to_next(u16 *next, u16 len)
 
 static_always_inline void
 add_trace(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b,
-		const vlan_header_t *vlan, const u8 is_valid)
+		const gre_header_t *gre, const u8 is_valid)
 {
 	if (PREDICT_FALSE((node->flags & VLIB_NODE_FLAG_TRACE) && (b->flags & VLIB_BUFFER_IS_TRACED)))
 	{
-		vlan_trace_t *t = vlib_add_trace(vm, node, b, sizeof(*t));
-		t->vlan = is_valid ? *vlan : (vlan_header_t){0};
+		gre_trace_t *t = vlib_add_trace(vm, node, b, sizeof(*t));
+		t->gre = is_valid ? *gre : (gre_header_t){0};
 	}
+}
+
+u16 gre_header_size(const gre_header_t* gre_header, u16 remaining_size)
+{
+	u16 size = sizeof(gre_header_t);
+
+	/*
+	 * If either the checksum present bit or the routing present bit are set
+	 * both the checksum and offset fields are present in GRE packet
+	 */
+
+	const u16 flags_and_versions = gre_header->flags_and_version;
+
+	const bool checksum_flag = flags_and_versions & GRE_FLAGS_CHECKSUM;
+	const bool routing_flag = flags_and_versions & GRE_FLAGS_ROUTING;
+	const bool key_flag = flags_and_versions & GRE_FLAGS_KEY;
+	const bool sequence_flag = flags_and_versions & GRE_FLAGS_SEQUENCE;
+
+	size += (checksum_flag | routing_flag + key_flag + sequence_flag) * sizeof(u32);
+
+	switch (gre_header->protocol)
+	{
+		case ETHERNET_TYPE_PPP:
+		case ETHERNET_TYPE_3GPP2:
+		case ETHERNET_TYPE_CDMA_2000:
+			// Acknowledgement number
+				size += 4 * (bool) (flags_and_versions & GRE_FLAGS_ACK);
+			break;
+
+		case ETHERNET_TYPE_WCCP:
+        {
+			const uint8_t* byte_ptr = (const uint8_t*)(gre_header) + sizeof(gre_header_t);
+			/*
+			 * WCCP2 puts an extra 4 octets into the header, but uses the same
+			 * encapsulation type; if it looks as if the first octet of the packet
+			 * isn't the beginning of an IPv4 header, assume it's WCCP2.
+			 */
+			size += 4 * ((*byte_ptr & 0xF0) != 0x40);
+			break;
+        }
+	}
+
+	// Routing
+	while (PREDICT_FALSE(routing_flag))
+	{
+		if (PREDICT_FALSE(size > remaining_size))
+		{
+			clib_warning("Not enough bytes to read GRE routing header");
+			return remaining_size;
+		}
+
+		const GreRoutingHeader* routing_header = (const GreRoutingHeader*)((const uint8_t*)(gre_header) + size);
+		size += sizeof(GreRoutingHeader) + routing_header->sre_size;
+
+		if (PREDICT_TRUE(routing_header->address_family == 0x0000 && routing_header->sre_size == 0))
+			return size;
+	}
+
+	return size;
 }
 
 static_always_inline void
@@ -97,32 +156,32 @@ process_buffer_4x(vlib_main_t *vm, vlib_node_runtime_t *node,
 
 	const u8 sw_idx_eq = sw_idx0 == sw_idx1 && sw_idx2 == sw_idx3 && sw_idx0 == sw_idx2;
 
-	const u8 is_valid0 = vlib_buffer_has_space(b[0], sizeof(vlan_header_t));
-	const u8 is_valid1 = vlib_buffer_has_space(b[1], sizeof(vlan_header_t));
-	const u8 is_valid2 = vlib_buffer_has_space(b[2], sizeof(vlan_header_t));
-	const u8 is_valid3 = vlib_buffer_has_space(b[3], sizeof(vlan_header_t));
+	const u8 is_valid0 = vlib_buffer_has_space(b[0], sizeof(gre_header_t));
+	const u8 is_valid1 = vlib_buffer_has_space(b[1], sizeof(gre_header_t));
+	const u8 is_valid2 = vlib_buffer_has_space(b[2], sizeof(gre_header_t));
+	const u8 is_valid3 = vlib_buffer_has_space(b[3], sizeof(gre_header_t));
 
-	const u16 bytes0 = is_valid0 ? sizeof(vlan_header_t) : 0;
-	const u16 bytes1 = is_valid1 ? sizeof(vlan_header_t) : 0;
-	const u16 bytes2 = is_valid2 ? sizeof(vlan_header_t) : 0;
-	const u16 bytes3 = is_valid3 ? sizeof(vlan_header_t) : 0;
+	const u16 bytes0 = is_valid0 ? sizeof(gre_header_t) : 0;
+	const u16 bytes1 = is_valid1 ? sizeof(gre_header_t) : 0;
+	const u16 bytes2 = is_valid2 ? sizeof(gre_header_t) : 0;
+	const u16 bytes3 = is_valid3 ? sizeof(gre_header_t) : 0;
 
-	const vlan_header_t *vlan0 = vlib_buffer_get_current(b[0]);
-	const vlan_header_t *vlan1 = vlib_buffer_get_current(b[1]);
-	const vlan_header_t *vlan2 = vlib_buffer_get_current(b[2]);
-	const vlan_header_t *vlan3 = vlib_buffer_get_current(b[3]);
+	const gre_header_t *gre0 = vlib_buffer_get_current(b[0]);
+	const gre_header_t *gre1 = vlib_buffer_get_current(b[1]);
+	const gre_header_t *gre2 = vlib_buffer_get_current(b[2]);
+	const gre_header_t *gre3 = vlib_buffer_get_current(b[3]);
 
 	vlib_buffer_advance(b[0], bytes0);
 	vlib_buffer_advance(b[1], bytes1);
 	vlib_buffer_advance(b[2], bytes2);
 	vlib_buffer_advance(b[3], bytes3);
 
-	next[0] = is_valid0 ? vlan0->type : ETHERNET_TYPE_INVALID;
-	next[1] = is_valid1 ? vlan1->type : ETHERNET_TYPE_INVALID;
-	next[2] = is_valid2 ? vlan2->type : ETHERNET_TYPE_INVALID;
-	next[3] = is_valid3 ? vlan3->type : ETHERNET_TYPE_INVALID;
+	next[0] = is_valid0 ? gre0->type : ETHERNET_TYPE_INVALID;
+	next[1] = is_valid1 ? gre1->type : ETHERNET_TYPE_INVALID;
+	next[2] = is_valid2 ? gre2->type : ETHERNET_TYPE_INVALID;
+	next[3] = is_valid3 ? gre3->type : ETHERNET_TYPE_INVALID;
 
-	vlan_detunnel_main_t *vdm = &vlan_detunnel_main;
+	gre_detunnel_main_t *vdm = &gre_detunnel_main;
 
 	if (PREDICT_TRUE(sw_idx_eq))
 	{
@@ -143,34 +202,34 @@ process_buffer_4x(vlib_main_t *vm, vlib_node_runtime_t *node,
 
 	if (PREDICT_FALSE(node->flags & VLIB_NODE_FLAG_TRACE))
 	{
-		add_trace(vm, node, b[0], vlan0, is_valid0);
-		add_trace(vm, node, b[1], vlan1, is_valid1);
-		add_trace(vm, node, b[2], vlan2, is_valid2);
-		add_trace(vm, node, b[3], vlan3, is_valid3);
+		add_trace(vm, node, b[0], gre0, is_valid0);
+		add_trace(vm, node, b[1], gre1, is_valid1);
+		add_trace(vm, node, b[2], gre2, is_valid2);
+		add_trace(vm, node, b[3], gre3, is_valid3);
 	}
 }
 
 static_always_inline void
 process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, u16 *next)
 {
-	vlan_detunnel_main_t *vdm = &vlan_detunnel_main;
+	gre_detunnel_main_t *vdm = &gre_detunnel_main;
 	const u32 sw_idx = vnet_buffer(b)->sw_if_index[VLIB_RX];
 
-	const u8 is_valid = vlib_buffer_has_space(b, sizeof(vlan_header_t));
-	const u16 bytes = is_valid ? sizeof(vlan_header_t) : 0;
+	const u8 is_valid = vlib_buffer_has_space(b, sizeof(gre_header_t));
+	const u16 bytes = is_valid ? sizeof(gre_header_t) : 0;
 
-	const vlan_header_t *vlan = vlib_buffer_get_current(b);
+	const gre_header_t *gre = vlib_buffer_get_current(b);
 	vlib_buffer_advance(b, bytes);
 
-	next[0] = is_valid ? vlan->type : ETHERNET_TYPE_INVALID;
+	next[0] = is_valid ? gre->type : ETHERNET_TYPE_INVALID;
 	vdm->cache_counters[sw_idx].packets += is_valid;
 	vdm->cache_counters[sw_idx].bytes += bytes;
 
 	if (PREDICT_FALSE(node->flags & VLIB_NODE_FLAG_TRACE))
-		add_trace(vm, node, b, vlan, is_valid);
+		add_trace(vm, node, b, gre, is_valid);
 }
 
-VLIB_NODE_FN (vlan_detunnel) (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_frame_t *frame)
+VLIB_NODE_FN (gre_detunnel) (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_frame_t *frame)
 {
 	vlib_buffer_t *bufs[VLIB_FRAME_SIZE];
 	u16 nexts[VLIB_FRAME_SIZE];
@@ -186,17 +245,17 @@ VLIB_NODE_FN (vlan_detunnel) (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_f
 	vnet_interface_main_t *im = &vnm->interface_main;
 	u32 max_sw_if_index = pool_elts(im->sw_interfaces);
 
-	vlan_detunnel_main_t *vdm = &vlan_detunnel_main;
+	gre_detunnel_main_t *vdm = &gre_detunnel_main;
 
 	if (PREDICT_FALSE(vdm->counter_if_index < max_sw_if_index))
 	{
-#define _(id, name) vlib_validate_combined_counter(&vdm->counters[VLAN_##id], max_sw_if_index);
+#define _(id, name) vlib_validate_combined_counter(&vdm->counters[GRE_##id], max_sw_if_index);
 	foreach_detunnel_counter
 #undef _
 
 		for (u32 i = vdm->counter_if_index + 1; i <= max_sw_if_index; i++)
 		{
-#define _(id, name) vlib_zero_combined_counter(&vdm->counters[VLAN_##id], i);
+#define _(id, name) vlib_zero_combined_counter(&vdm->counters[GRE_##id], i);
 	foreach_detunnel_counter
 #undef _
 		}
@@ -238,73 +297,73 @@ VLIB_NODE_FN (vlan_detunnel) (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_f
 	for (u32 sw_idx = 0; sw_idx <= max_sw_if_index; sw_idx++)
 	{
 		vlib_counter_t *counter = &vdm->cache_counters[sw_idx];
-		vlib_increment_combined_counter(&vdm->counters[VLAN_PROCESSED], vm->thread_index,
+		vlib_increment_combined_counter(&vdm->counters[GRE_PROCESSED], vm->thread_index,
 				sw_idx, counter->packets, counter->bytes);
 
 		counter->packets = 0;
 		counter->bytes = 0;
 	}
 
-	vlan_to_next(nexts, frame->n_vectors);
+	gre_to_next(nexts, frame->n_vectors);
 	vlib_buffer_enqueue_to_next(vm, node, from, nexts, frame->n_vectors);
 
 	return frame->n_vectors;
 }
 
 #ifndef CLIB_MARCH_VARIANT
-vlan_detunnel_main_t vlan_detunnel_main;
+gre_detunnel_main_t gre_detunnel_main;
 
-static u8 *format_vlan_trace(u8 *s, va_list *args)
+static u8 *format_gre_trace(u8 *s, va_list *args)
 {
 	vlib_main_t __clib_unused *vm = va_arg(*args, vlib_main_t *);
 	vlib_node_t __clib_unused *node = va_arg(*args, vlib_node_t *);
-	vlan_trace_t *t = va_arg(*args, vlan_trace_t *);
+	gre_trace_t *t = va_arg(*args, gre_trace_t *);
 	return format(s, "priority_cfi_and_id   0x%04x\n"
 			"  ethertype             0x%04x",
-			t->vlan.priority_cfi_and_id,
-			clib_net_to_host_u16(t->vlan.type));
+			t->gre.priority_cfi_and_id,
+			clib_net_to_host_u16(t->gre.type));
 }
 
 /* Register node */
-VLIB_REGISTER_NODE (vlan_detunnel) = {
-	.name = "vlan-detunnel",
+VLIB_REGISTER_NODE (gre_detunnel) = {
+	.name = "gre-detunnel",
 	.vector_size = sizeof(u32),
-	.format_trace = format_vlan_trace,
+	.format_trace = format_gre_trace,
 	.type = VLIB_NODE_TYPE_INTERNAL,
-	.n_next_nodes = VLAN_NEXT_N,
+	.n_next_nodes = GRE_NEXT_N,
 	.next_nodes = {
-#define _(var, id, name) [VLAN_NEXT_##id] = (name),
-	foreach_vlan_detunnel_next
+#define _(var, id, name) [GRE_NEXT_##id] = (name),
+	foreach_gre_detunnel_next
 #undef _
 	},
 };
 #endif
 
-CLIB_MARCH_FN (vlan_detunnel_init, clib_error_t *, vlib_main_t __clib_unused *vm)
+CLIB_MARCH_FN (gre_detunnel_init, clib_error_t *, vlib_main_t __clib_unused *vm)
 {
 	clib_warning("size: %lu %s", SIMD_SIZE, CLIB_STRING_MACRO(SIMD_TYPE));
 
-	SIMD_VEC(drop_next) = SIMD_SPLAT(VLAN_NEXT_DROP);
-	SIMD_VEC(vlan_next) = SIMD_SPLAT(VLAN_NEXT_VLAN_DETUNNEL);
-	SIMD_VEC(ipv4_next) = SIMD_SPLAT(VLAN_NEXT_IPV4_DETUNNEL);
-	SIMD_VEC(ipv6_next) = SIMD_SPLAT(VLAN_NEXT_IPV6_DETUNNEL);
-	SIMD_VEC(mpls_next) = SIMD_SPLAT(VLAN_NEXT_MPLS_DETUNNEL);
-	SIMD_VEC(failed_next) = SIMD_SPLAT(VLAN_NEXT_FAILED_DETUNNEL);
+	SIMD_VEC(drop_next) = SIMD_SPLAT(GRE_NEXT_DROP);
+	SIMD_VEC(vlan_next) = SIMD_SPLAT(GRE_NEXT_VLAN_DETUNNEL);
+	SIMD_VEC(ipv4_next) = SIMD_SPLAT(GRE_NEXT_IPV4_DETUNNEL);
+	SIMD_VEC(ipv6_next) = SIMD_SPLAT(GRE_NEXT_IPV6_DETUNNEL);
+	SIMD_VEC(mpls_next) = SIMD_SPLAT(GRE_NEXT_MPLS_DETUNNEL);
+	SIMD_VEC(failed_next) = SIMD_SPLAT(GRE_NEXT_FAILED_DETUNNEL);
 
 	return 0;
 }
 
-static clib_error_t *vlan_detunnel_init(vlib_main_t *vm)
+static clib_error_t *gre_detunnel_init(vlib_main_t *vm)
 {
-	vlan_detunnel_main_t *vdm = &vlan_detunnel_main;
+	gre_detunnel_main_t *vdm = &gre_detunnel_main;
 	vnet_main_t *vnm = vnet_get_main();
 	vnet_interface_main_t *im = &vnm->interface_main;
 	vdm->counter_if_index = pool_elts(im->sw_interfaces);
 
 #define _(E, n)																\
-	vlib_combined_counter_main_t *cm_##n = &vdm->counters[VLAN_##E];		\
-	cm_##n->name = "vlan_" #n;												\
-	cm_##n->stat_segment_name = "/detunnel/vlan/" #n;						\
+	vlib_combined_counter_main_t *cm_##n = &vdm->counters[GRE_##E];		\
+	cm_##n->name = "gre_" #n;												\
+	cm_##n->stat_segment_name = "/detunnel/gre/" #n;						\
 	vlib_validate_combined_counter(cm_##n, vdm->counter_if_index);			\
 	vlib_zero_combined_counter(cm_##n, vdm->counter_if_index);
 
@@ -313,7 +372,7 @@ static clib_error_t *vlan_detunnel_init(vlib_main_t *vm)
 
 	clib_memset(vdm->cache_counters, 0, sizeof(vdm->cache_counters));
 
-	return CLIB_MARCH_FN_SELECT(vlan_detunnel_init) (vm);
+	return CLIB_MARCH_FN_SELECT(gre_detunnel_init) (vm);
 }
 
-VLIB_INIT_FUNCTION (vlan_detunnel_init);
+VLIB_INIT_FUNCTION (gre_detunnel_init);

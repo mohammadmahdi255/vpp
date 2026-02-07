@@ -55,6 +55,7 @@
 	_(ipsec_ah_protocol)		\
 	_(tcp_protocol)				\
 	_(udp_protocol)				\
+	_(gre_protocol)				\
 	_(invalid_protocol)
 
 #define _(var)	extern SIMD_TYPE DETUNNEL_CONCAT(var, SIMD_TYPE);
