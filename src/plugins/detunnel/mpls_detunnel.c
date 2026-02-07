@@ -1,3 +1,4 @@
+#include <stdbool.h>
 #include <vlib/vlib.h>
 
 #include <vnet/vnet.h>
@@ -12,17 +13,14 @@
 
 #define foreach_mpls_detunnel_next								\
 	_(ethernet_next, ETHERNET_DETUNNEL, "ethernet-detunnel")	\
-	_(mpls_next, MPLS_DETUNNEL, "mpls-detunnel")				\
 	_(ipv4_next, IPV4_DETUNNEL, "ipv4-detunnel")				\
 	_(ipv6_next, IPV6_DETUNNEL, "ipv6-detunnel")				\
 	_(failed_next, FAILED_DETUNNEL, "failed-detunnel")
 
 #define foreach_mpls_protocol	\
-	_(mpls_label)				\
 	_(ipv4_version)				\
 	_(ipv6_version)				\
 
-#define MPLS_LABEL		0x0010
 #define IPV4_VERSION	0x0040
 #define IPV6_VERSION	0x0060
 
@@ -54,7 +52,7 @@ enum
 
 typedef struct
 {
-	// mpls_header_t eth;
+	u32 label_count;
 } mpls_trace_t;
 
 typedef struct
@@ -73,13 +71,11 @@ mpls_to_next(u16 *next, u16 len)
 	for (u16 i = 0; i < len; i += SIMD_SIZE)
 	{
 		SIMD_TYPE next_vec = SIMD_LOAD(next + i);
-		SIMD_TYPE mpls_mask_vec = (next_vec == SIMD_VEC(mpls_label));
 		SIMD_TYPE ipv4_mask_vec = (next_vec == SIMD_VEC(ipv4_version));
 		SIMD_TYPE ipv6_mask_vec = (next_vec == SIMD_VEC(ipv6_version));
 		SIMD_TYPE failed_mask_vec = (next_vec == SIMD_VEC(invalid_protocol));
 
 		SIMD_TYPE result = SIMD_VEC(ethernet_next) |
-				(mpls_mask_vec & SIMD_VEC(mpls_next)) |
 				(ipv4_mask_vec & SIMD_VEC(ipv4_next)) |
 				(ipv6_mask_vec & SIMD_VEC(ipv6_next)) |
 				(failed_mask_vec & SIMD_VEC(failed_next));
@@ -88,105 +84,55 @@ mpls_to_next(u16 *next, u16 len)
 	}
 }
 
-// static_always_inline void
-// add_trace(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b,
-// 		const mpls_header_t *eth, const u8 is_valid)
-// {
-// 	if (PREDICT_FALSE((node->flags & VLIB_NODE_FLAG_TRACE) && (b->flags & VLIB_BUFFER_IS_TRACED)))
-// 	{
-// 		mpls_trace_t *t = vlib_add_trace(vm, node, b, sizeof(mpls_trace_t));
-// 		// t->eth = is_valid ? *eth : (mpls_header_t){0};
-// 	}
-// }
-
 static_always_inline void
-process_buffer_4x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t* b[4], u16 next[4])
+add_trace(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b,
+		const u32 label_count, const u8 is_valid)
 {
-	const u32 sw_idx0 = vnet_buffer(b[0])->sw_if_index[VLIB_RX];
-	const u32 sw_idx1 = vnet_buffer(b[1])->sw_if_index[VLIB_RX];
-	const u32 sw_idx2 = vnet_buffer(b[2])->sw_if_index[VLIB_RX];
-	const u32 sw_idx3 = vnet_buffer(b[3])->sw_if_index[VLIB_RX];
-
-	const u8 sw_idx_eq = sw_idx0 == sw_idx1 && sw_idx2 == sw_idx3 && sw_idx0 == sw_idx2;
-
-	const u8 is_valid0 = vlib_buffer_has_space(b[0], sizeof(mpls_label_t));
-	const u8 is_valid1 = vlib_buffer_has_space(b[1], sizeof(mpls_label_t));
-	const u8 is_valid2 = vlib_buffer_has_space(b[2], sizeof(mpls_label_t));
-	const u8 is_valid3 = vlib_buffer_has_space(b[3], sizeof(mpls_label_t));
-
-	const u16 bytes0 = is_valid0 ? sizeof(mpls_label_t) : 0;
-	const u16 bytes1 = is_valid1 ? sizeof(mpls_label_t) : 0;
-	const u16 bytes2 = is_valid2 ? sizeof(mpls_label_t) : 0;
-	const u16 bytes3 = is_valid3 ? sizeof(mpls_label_t) : 0;
-
-	const mpls_label_t *label0 = vlib_buffer_get_current(b[0]);
-	const mpls_label_t *label1 = vlib_buffer_get_current(b[1]);
-	const mpls_label_t *label2 = vlib_buffer_get_current(b[2]);
-	const mpls_label_t *label3 = vlib_buffer_get_current(b[3]);
-
-	vlib_buffer_advance(b[0], bytes0);
-	vlib_buffer_advance(b[1], bytes1);
-	vlib_buffer_advance(b[2], bytes2);
-	vlib_buffer_advance(b[3], bytes3);
-
-	const u8 is_eos0 = *label0 & clib_host_to_net_u32(MPLS_ENTRY_EOS_BIT);
-	const u8 is_eos1 = *label1 & clib_host_to_net_u32(MPLS_ENTRY_EOS_BIT);
-	const u8 is_eos2 = *label2 & clib_host_to_net_u32(MPLS_ENTRY_EOS_BIT);
-	const u8 is_eos3 = *label3 & clib_host_to_net_u32(MPLS_ENTRY_EOS_BIT);
-
-	next[0] = is_valid0 ? (is_eos0 ? (*(u8 *) vlib_buffer_get_current(b[0]) & 0xF0) : MPLS_LABEL) : IP_PROTOCOL_INVALID;
-	next[1] = is_valid1 ? (is_eos1 ? (*(u8 *) vlib_buffer_get_current(b[0]) & 0xF0) : MPLS_LABEL) : IP_PROTOCOL_INVALID;
-	next[2] = is_valid2 ? (is_eos2 ? (*(u8 *) vlib_buffer_get_current(b[0]) & 0xF0) : MPLS_LABEL) : IP_PROTOCOL_INVALID;
-	next[3] = is_valid3 ? (is_eos3 ? (*(u8 *) vlib_buffer_get_current(b[0]) & 0xF0) : MPLS_LABEL) : IP_PROTOCOL_INVALID;
-
-	mpls_detunnel_main_t *edm = &mpls_detunnel_main;
-
-	if (PREDICT_TRUE(sw_idx_eq))
+	if (PREDICT_FALSE(b->flags & VLIB_BUFFER_IS_TRACED))
 	{
-		edm->cache_counters[sw_idx0].packets += is_valid0 + is_valid1 + is_valid2 + is_valid3;
-		edm->cache_counters[sw_idx0].bytes +=  bytes0 + bytes1 + bytes2 + bytes3;
+		mpls_trace_t *t = vlib_add_trace(vm, node, b, sizeof(mpls_trace_t));
+		t->label_count = is_valid ? label_count : 0;
 	}
-	else
-	{
-		edm->cache_counters[sw_idx0].packets += is_valid0;
-		edm->cache_counters[sw_idx1].packets += is_valid1;
-		edm->cache_counters[sw_idx2].packets += is_valid2;
-		edm->cache_counters[sw_idx3].packets += is_valid3;
-		edm->cache_counters[sw_idx0].bytes += bytes0;
-		edm->cache_counters[sw_idx1].bytes += bytes1;
-		edm->cache_counters[sw_idx2].bytes += bytes2;
-		edm->cache_counters[sw_idx3].bytes += bytes3;
-	}
-
-	// if (PREDICT_FALSE(node->flags & VLIB_NODE_FLAG_TRACE))
-	// {
-		// add_trace(vm, node, b[0], eth0, is_valid0);
-		// add_trace(vm, node, b[1], eth1, is_valid1);
-		// add_trace(vm, node, b[2], eth2, is_valid2);
-		// add_trace(vm, node, b[3], eth3, is_valid3);
-	// }
 }
 
 static_always_inline void
 process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, u16 *next)
 {
 	mpls_detunnel_main_t *edm = &mpls_detunnel_main;
-	const u32 sw_idx = vnet_buffer(b)->sw_if_index[VLIB_RX];
-
-	const u8 is_valid = vlib_buffer_has_space(b, sizeof(mpls_label_t));
-	const u16 bytes = is_valid ? sizeof(mpls_label_t) : 0;
+    const u32 sw_idx = vnet_buffer(b)->sw_if_index[VLIB_RX];
+    u32 label_count = 1;
+	u8 is_valid;
 
 	const mpls_label_t *label = vlib_buffer_get_current(b);
-	vlib_buffer_advance(b, bytes);
+	const u32 mask = clib_host_to_net_u32(MPLS_ENTRY_EOS_BIT);
 
-	const u8 is_eos = *label & clib_host_to_net_u32(MPLS_ENTRY_EOS_BIT);
-	next[0] = is_valid ? (is_eos ? (*(u8 *) vlib_buffer_get_current(b) & 0xF0) : MPLS_LABEL) : IP_PROTOCOL_INVALID;
+    while (true)
+    {
+		is_valid = vlib_buffer_has_space(b, (u32) (label_count * sizeof(mpls_label_t)));
+        const u32 is_eos = *label & mask;
 
-	edm->cache_counters[sw_idx].packets += is_valid;
-	edm->cache_counters[sw_idx].bytes += bytes;
+        if (is_eos || !is_valid)
+			break;
 
-	// if (PREDICT_FALSE(node->flags & VLIB_NODE_FLAG_TRACE))
-	// 	add_trace(vm, node, b, eth, is_valid);
+        label++;
+        label_count++;
+    }
+
+	if (PREDICT_FALSE(is_valid))
+	{
+		const u16 bytes = label_count * sizeof(mpls_label_t);
+		vlib_buffer_advance(b, bytes);
+		edm->cache_counters[sw_idx].packets += label_count;
+		edm->cache_counters[sw_idx].bytes += bytes;
+		next[0] = *(u8 *)vlib_buffer_get_current(b) & 0xF0;
+	}
+	else
+	{
+		next[0] = IP_PROTOCOL_INVALID;
+	}
+
+	if (PREDICT_FALSE(node->flags & VLIB_NODE_FLAG_TRACE))
+		add_trace(vm, node, b, label_count, is_valid);
 }
 
 VLIB_NODE_FN (mpls_detunnel) (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_frame_t *frame)
@@ -239,7 +185,10 @@ VLIB_NODE_FN (mpls_detunnel) (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_f
 			vlib_prefetch_buffer_data(b[7], LOAD);
 		}
 
-		process_buffer_4x(vm, node, b, next);
+		process_buffer_1x(vm, node, b[0], &next[0]);
+		process_buffer_1x(vm, node, b[1], &next[1]);
+		process_buffer_1x(vm, node, b[2], &next[2]);
+		process_buffer_1x(vm, node, b[3], &next[3]);
 
 		b += 4;
 		next += 4;
@@ -278,14 +227,8 @@ static u8 *format_mpls_detunnel_trace(u8 *s, va_list *args)
 {
 	vlib_main_t __clib_unused *vm = va_arg(*args, vlib_main_t *);
 	vlib_node_t __clib_unused *node = va_arg(*args, vlib_node_t *);
-	// mpls_trace_t *t = va_arg(*args, mpls_trace_t *);
-	// return format(s, "dst mac    %U\n"
-	// 		"  src mac    %U\n"
-	// 		"  ethertype  0x%04x",
-	// 		format_mpls_address, t->eth.dst_address,
-	// 		format_mpls_address, t->eth.src_address,
-	// 		clib_net_to_host_u16(t->eth.type));
-	return 0;
+	mpls_trace_t *t = va_arg(*args, mpls_trace_t *);
+	return format(s, "count of labels %u", t->label_count);
 }
 
 VLIB_REGISTER_NODE (mpls_detunnel) = {
@@ -306,12 +249,10 @@ CLIB_MARCH_FN (mpls_detunnel_init, clib_error_t *, vlib_main_t __clib_unused *vm
 {
 	clib_warning("size: %lu %s", SIMD_SIZE, CLIB_STRING_MACRO(SIMD_TYPE));
 
-	SIMD_VEC(mpls_label) = SIMD_SPLAT(MPLS_LABEL);
 	SIMD_VEC(ipv4_version) = SIMD_SPLAT(IPV4_VERSION);
 	SIMD_VEC(ipv6_version) = SIMD_SPLAT(IPV6_VERSION);
 
 	SIMD_VEC(ethernet_next) = SIMD_SPLAT(MPLS_NEXT_ETHERNET_DETUNNEL);
-	SIMD_VEC(mpls_next) = SIMD_SPLAT(MPLS_NEXT_MPLS_DETUNNEL);
 	SIMD_VEC(ipv4_next) = SIMD_SPLAT(MPLS_NEXT_IPV4_DETUNNEL);
 	SIMD_VEC(ipv6_next) = SIMD_SPLAT(MPLS_NEXT_IPV6_DETUNNEL);
 	SIMD_VEC(failed_next) = SIMD_SPLAT(MPLS_NEXT_IPV6_DETUNNEL);
