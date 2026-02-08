@@ -238,7 +238,7 @@ CLIB_MARCH_FN (ethernet_detunnel_init, clib_error_t *, vlib_main_t __clib_unused
 	SIMD_VEC(ipv4_next) = SIMD_SPLAT(ETHERNET_NEXT_IPV4_DETUNNEL);
 	SIMD_VEC(ipv6_next) = SIMD_SPLAT(ETHERNET_NEXT_IPV6_DETUNNEL);
 	SIMD_VEC(mpls_next) = SIMD_SPLAT(ETHERNET_NEXT_MPLS_DETUNNEL);
-	SIMD_VEC(failed_next) = SIMD_SPLAT(ETHERNET_NEXT_IPV6_DETUNNEL);
+	SIMD_VEC(failed_next) = SIMD_SPLAT(ETHERNET_NEXT_FAILED_DETUNNEL);
 
 	return 0;
 }
