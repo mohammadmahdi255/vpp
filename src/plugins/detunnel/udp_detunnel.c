@@ -105,10 +105,9 @@ process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, 
 	udp_detunnel_main_t *udm = &udp_detunnel_main;
 	const u32 sw_idx = vnet_buffer(b)->sw_if_index[VLIB_RX];
 
-	const u8 is_valid = vlib_buffer_has_space(b, sizeof(udp_header_t));
 	const udp_header_t *udp = vlib_buffer_get_current(b);
 
-	if (PREDICT_FALSE(is_valid))
+	if (PREDICT_FALSE(!vlib_buffer_has_space(b, sizeof(udp_header_t))))
 	{
 		src_port[0] = INVALID_PORT;
 		dst_port[0] = INVALID_PORT;
@@ -251,7 +250,6 @@ CLIB_MARCH_FN (udp_detunnel_init, clib_error_t *, vlib_main_t __clib_unused *vm)
 
 	SIMD_VEC(drop_next) = SIMD_SPLAT(UDP_NEXT_DROP);
 	SIMD_VEC(l2tp_next) = SIMD_SPLAT(UDP_NEXT_L2TP_DETUNNEL);
-	SIMD_VEC(gtpu_next) = SIMD_SPLAT(UDP_NEXT_GTPU_DETUNNEL);
 	SIMD_VEC(gtpu_next) = SIMD_SPLAT(UDP_NEXT_GTPU_DETUNNEL);
 	SIMD_VEC(failed_next) = SIMD_SPLAT(UDP_NEXT_FAILED_DETUNNEL);
 
