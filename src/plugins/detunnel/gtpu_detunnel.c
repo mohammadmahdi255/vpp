@@ -119,13 +119,13 @@ process_buffer_4x(vlib_main_t *vm, vlib_node_runtime_t *node,
 	const gtpu_header_t *gtpu2 = vlib_buffer_get_current(b[2]);
 	const gtpu_header_t *gtpu3 = vlib_buffer_get_current(b[3]);
 
-	const u16 gtpu_hdr_len0 =
+	u16 gtpu_hdr_len0 =
 			sizeof(gtpu_header_t) - (((gtpu0->ver_flags & GTPU_E_S_PN_BIT) == 0) * sizeof(gtpu_ext_header_t));
-	const u16 gtpu_hdr_len1 =
+	u16 gtpu_hdr_len1 =
 			sizeof(gtpu_header_t) - (((gtpu1->ver_flags & GTPU_E_S_PN_BIT) == 0) * sizeof(gtpu_ext_header_t));
-	const u16 gtpu_hdr_len2 =
+	u16 gtpu_hdr_len2 =
 			sizeof(gtpu_header_t) - (((gtpu2->ver_flags & GTPU_E_S_PN_BIT) == 0) * sizeof(gtpu_ext_header_t));
-	const u16 gtpu_hdr_len3 =
+	u16 gtpu_hdr_len3 =
 			sizeof(gtpu_header_t) - (((gtpu3->ver_flags & GTPU_E_S_PN_BIT) == 0) * sizeof(gtpu_ext_header_t));
 
 	const u8 is_valid0 = vlib_buffer_has_space(b[0], gtpu_hdr_len0);
@@ -133,25 +133,49 @@ process_buffer_4x(vlib_main_t *vm, vlib_node_runtime_t *node,
 	const u8 is_valid2 = vlib_buffer_has_space(b[2], gtpu_hdr_len2);
 	const u8 is_valid3 = vlib_buffer_has_space(b[3], gtpu_hdr_len3);
 
-	const u16 bytes0 = is_valid0 ? gtpu_hdr_len0 : 0;
-	const u16 bytes1 = is_valid1 ? gtpu_hdr_len1 : 0;
-	const u16 bytes2 = is_valid2 ? gtpu_hdr_len2 : 0;
-	const u16 bytes3 = is_valid3 ? gtpu_hdr_len3 : 0;
+	if (PREDICT_TRUE(is_valid0))
+	{
+		vlib_buffer_advance(b[0], gtpu_hdr_len0);
+		next[0] = (*(u8 *) vlib_buffer_get_current(b[0]) & 0xF0) | (gtpu0->ver_flags & GTPU_E_BIT);
+	}
+	else
+	{
+		gtpu_hdr_len0 = 0;
+		next[0] = ETHERNET_TYPE_INVALID;
+	}
 
-	vlib_buffer_advance(b[0], bytes0);
-	vlib_buffer_advance(b[1], bytes1);
-	vlib_buffer_advance(b[2], bytes2);
-	vlib_buffer_advance(b[3], bytes3);
+	if (PREDICT_TRUE(is_valid1))
+	{
+		vlib_buffer_advance(b[1], gtpu_hdr_len1);
+		next[1] = (*(u8 *) vlib_buffer_get_current(b[1]) & 0xF0) | (gtpu0->ver_flags & GTPU_E_BIT);
+	}
+	else
+	{
+		gtpu_hdr_len1 = 0;
+		next[1] = ETHERNET_TYPE_INVALID;
+	}
 
-	next[0] = (*(u8 *) vlib_buffer_get_current(b[0]) & 0xF0) | (gtpu0->ver_flags & GTPU_E_BIT);
-	next[1] = (*(u8 *) vlib_buffer_get_current(b[1]) & 0xF0) | (gtpu0->ver_flags & GTPU_E_BIT);
-	next[2] = (*(u8 *) vlib_buffer_get_current(b[2]) & 0xF0) | (gtpu0->ver_flags & GTPU_E_BIT);
-	next[3] = (*(u8 *) vlib_buffer_get_current(b[3]) & 0xF0) | (gtpu0->ver_flags & GTPU_E_BIT);
+	if (PREDICT_TRUE(is_valid2))
+	{
+		vlib_buffer_advance(b[2], gtpu_hdr_len2);
+		next[2] = (*(u8 *) vlib_buffer_get_current(b[2]) & 0xF0) | (gtpu0->ver_flags & GTPU_E_BIT);
+	}
+	else
+	{
+		gtpu_hdr_len2 = 0;
+		next[2] = ETHERNET_TYPE_INVALID;
+	}
 
-	next[0] = is_valid0 ? next[0] : IP_PROTOCOL_INVALID;
-	next[1] = is_valid1 ? next[1] : IP_PROTOCOL_INVALID;
-	next[2] = is_valid2 ? next[2] : IP_PROTOCOL_INVALID;
-	next[3] = is_valid3 ? next[3] : IP_PROTOCOL_INVALID;
+	if (PREDICT_TRUE(is_valid3))
+	{
+		vlib_buffer_advance(b[3], gtpu_hdr_len3);
+		next[3] = (*(u8 *) vlib_buffer_get_current(b[3]) & 0xF0) | (gtpu0->ver_flags & GTPU_E_BIT);
+	}
+	else
+	{
+		gtpu_hdr_len3 = 0;
+		next[3] = ETHERNET_TYPE_INVALID;
+	}
 
 	gtpu_detunnel_main_t *gdm = &gtpu_detunnel_main;
 
@@ -166,10 +190,10 @@ process_buffer_4x(vlib_main_t *vm, vlib_node_runtime_t *node,
 		gdm->cache_counters[sw_idx1].packets += is_valid1;
 		gdm->cache_counters[sw_idx2].packets += is_valid2;
 		gdm->cache_counters[sw_idx3].packets += is_valid3;
-		gdm->cache_counters[sw_idx0].bytes += bytes0;
-		gdm->cache_counters[sw_idx1].bytes += bytes1;
-		gdm->cache_counters[sw_idx2].bytes += bytes2;
-		gdm->cache_counters[sw_idx3].bytes += bytes3;
+		gdm->cache_counters[sw_idx0].bytes += gtpu_hdr_len0;
+		gdm->cache_counters[sw_idx1].bytes += gtpu_hdr_len1;
+		gdm->cache_counters[sw_idx2].bytes += gtpu_hdr_len2;
+		gdm->cache_counters[sw_idx3].bytes += gtpu_hdr_len3;
 	}
 
 	if (PREDICT_FALSE(node->flags & VLIB_NODE_FLAG_TRACE))

@@ -104,10 +104,10 @@ process_buffer_4x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t* b[4
 	const u8 is_valid2 = vlib_buffer_has_space(b[2], sizeof(ethernet_header_t));
 	const u8 is_valid3 = vlib_buffer_has_space(b[3], sizeof(ethernet_header_t));
 
-	u16 bytes0 = 0;
-	u16 bytes1 = 0;
-	u16 bytes2 = 0;
-	u16 bytes3 = 0;
+	u16 eth_hdr_len0 = 0;
+	u16 eth_hdr_len1 = 0;
+	u16 eth_hdr_len2 = 0;
+	u16 eth_hdr_len3 = 0;
 
 	const ethernet_header_t *eth0 = vlib_buffer_get_current(b[0]);
 	const ethernet_header_t *eth1 = vlib_buffer_get_current(b[1]);
@@ -116,7 +116,7 @@ process_buffer_4x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t* b[4
 
 	if (PREDICT_TRUE(is_valid0))
 	{
-		bytes0 = sizeof(ethernet_header_t);
+		eth_hdr_len0 = sizeof(ethernet_header_t);
 		vlib_buffer_advance(b[0], sizeof(ethernet_header_t));
 		next[0] = eth0->type;
 	}
@@ -127,7 +127,7 @@ process_buffer_4x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t* b[4
 
 	if (PREDICT_TRUE(is_valid1))
 	{
-		bytes1 = sizeof(ethernet_header_t);
+		eth_hdr_len1 = sizeof(ethernet_header_t);
 		vlib_buffer_advance(b[1], sizeof(ethernet_header_t));
 		next[1] = eth1->type;
 	}
@@ -138,7 +138,7 @@ process_buffer_4x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t* b[4
 
 	if (PREDICT_TRUE(is_valid2))
 	{
-		bytes2 = sizeof(ethernet_header_t);
+		eth_hdr_len2 = sizeof(ethernet_header_t);
 		vlib_buffer_advance(b[2], sizeof(ethernet_header_t));
 		next[2] = eth2->type;
 	}
@@ -149,7 +149,7 @@ process_buffer_4x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t* b[4
 
 	if (PREDICT_TRUE(is_valid3))
 	{
-		bytes3 = sizeof(ethernet_header_t);
+		eth_hdr_len3 = sizeof(ethernet_header_t);
 		vlib_buffer_advance(b[3], sizeof(ethernet_header_t));
 		next[3] = eth3->type;
 	}
@@ -163,7 +163,7 @@ process_buffer_4x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t* b[4
 	if (PREDICT_TRUE(sw_idx_eq))
 	{
 		edm->cache_counters[sw_idx0].packets += is_valid0 + is_valid1 + is_valid2 + is_valid3;
-		edm->cache_counters[sw_idx0].bytes +=  bytes0 + bytes1 + bytes2 + bytes3;
+		edm->cache_counters[sw_idx0].bytes +=  eth_hdr_len0 + eth_hdr_len1 + eth_hdr_len2 + eth_hdr_len3;
 	}
 	else
 	{
@@ -171,10 +171,10 @@ process_buffer_4x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t* b[4
 		edm->cache_counters[sw_idx1].packets += is_valid1;
 		edm->cache_counters[sw_idx2].packets += is_valid2;
 		edm->cache_counters[sw_idx3].packets += is_valid3;
-		edm->cache_counters[sw_idx0].bytes += bytes0;
-		edm->cache_counters[sw_idx1].bytes += bytes1;
-		edm->cache_counters[sw_idx2].bytes += bytes2;
-		edm->cache_counters[sw_idx3].bytes += bytes3;
+		edm->cache_counters[sw_idx0].bytes += eth_hdr_len0;
+		edm->cache_counters[sw_idx1].bytes += eth_hdr_len1;
+		edm->cache_counters[sw_idx2].bytes += eth_hdr_len2;
+		edm->cache_counters[sw_idx3].bytes += eth_hdr_len3;
 	}
 
 	if (PREDICT_FALSE(node->flags & VLIB_NODE_FLAG_TRACE))

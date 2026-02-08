@@ -115,37 +115,74 @@ process_buffer_4x(vlib_main_t *vm, vlib_node_runtime_t *node,
 	const u8 is_valid2 = vlib_buffer_has_space(b[2], sizeof(udp_header_t));
 	const u8 is_valid3 = vlib_buffer_has_space(b[3], sizeof(udp_header_t));
 
-	const u16 bytes0 = is_valid0 ? sizeof(udp_header_t) : 0;
-	const u16 bytes1 = is_valid1 ? sizeof(udp_header_t) : 0;
-	const u16 bytes2 = is_valid2 ? sizeof(udp_header_t) : 0;
-	const u16 bytes3 = is_valid3 ? sizeof(udp_header_t) : 0;
+	u16 udp_hdr_len0 = 0;
+	u16 udp_hdr_len1 = 0;
+	u16 udp_hdr_len2 = 0;
+	u16 udp_hdr_len3 = 0;
 
 	const udp_header_t *udp0 = vlib_buffer_get_current(b[0]);
 	const udp_header_t *udp1 = vlib_buffer_get_current(b[1]);
 	const udp_header_t *udp2 = vlib_buffer_get_current(b[2]);
 	const udp_header_t *udp3 = vlib_buffer_get_current(b[3]);
 
-	vlib_buffer_advance(b[0], bytes0);
-	vlib_buffer_advance(b[1], bytes1);
-	vlib_buffer_advance(b[2], bytes2);
-	vlib_buffer_advance(b[3], bytes3);
+	if (PREDICT_TRUE(is_valid0))
+	{
+		udp_hdr_len0 = sizeof(udp_header_t);
+		vlib_buffer_advance(b[0], sizeof(udp_header_t));
+		src_port[0] = udp0->src_port;
+		dst_port[0] = udp0->dst_port;
+	}
+	else
+	{
+		src_port[0] = INVALID_PORT;
+		dst_port[0] = INVALID_PORT;
+	}
 
-	src_port[0] = is_valid0 ? udp0->src_port : INVALID_PORT;
-	src_port[1] = is_valid1 ? udp1->src_port : INVALID_PORT;
-	src_port[2] = is_valid2 ? udp2->src_port : INVALID_PORT;
-	src_port[3] = is_valid3 ? udp3->src_port : INVALID_PORT;
+	if (PREDICT_TRUE(is_valid1))
+	{
+		udp_hdr_len1 = sizeof(udp_header_t);
+		vlib_buffer_advance(b[1], sizeof(udp_header_t));
+		src_port[1] = udp1->src_port;
+		dst_port[1] = udp1->dst_port;
+	}
+	else
+	{
+		src_port[1] = INVALID_PORT;
+		dst_port[1] = INVALID_PORT;
+	}
 
-	dst_port[0] = is_valid0 ? udp0->dst_port : INVALID_PORT;
-	dst_port[1] = is_valid1 ? udp1->dst_port : INVALID_PORT;
-	dst_port[2] = is_valid2 ? udp2->dst_port : INVALID_PORT;
-	dst_port[3] = is_valid3 ? udp3->dst_port : INVALID_PORT;
+	if (PREDICT_TRUE(is_valid2))
+	{
+		udp_hdr_len2 = sizeof(udp_header_t);
+		vlib_buffer_advance(b[2], sizeof(udp_header_t));
+		src_port[2] = udp2->src_port;
+		dst_port[2] = udp2->dst_port;
+	}
+	else
+	{
+		src_port[2] = INVALID_PORT;
+		dst_port[2] = INVALID_PORT;
+	}
+
+	if (PREDICT_TRUE(is_valid3))
+	{
+		udp_hdr_len3 = sizeof(udp_header_t);
+		vlib_buffer_advance(b[3], sizeof(udp_header_t));
+		src_port[3] = udp3->src_port;
+		dst_port[3] = udp3->dst_port;
+	}
+	else
+	{
+		src_port[3] = INVALID_PORT;
+		dst_port[3] = INVALID_PORT;
+	}
 
 	udp_detunnel_main_t *udm = &udp_detunnel_main;
 
 	if (PREDICT_TRUE(sw_idx_eq))
 	{
 		udm->cache_counters[sw_idx0].packets += is_valid0 + is_valid1 + is_valid2 + is_valid3;
-		udm->cache_counters[sw_idx0].bytes += bytes0 + bytes1 + bytes2 + bytes3;
+		udm->cache_counters[sw_idx0].bytes += udp_hdr_len0 + udp_hdr_len1 + udp_hdr_len2 + udp_hdr_len3;
 	}
 	else
 	{
@@ -153,10 +190,10 @@ process_buffer_4x(vlib_main_t *vm, vlib_node_runtime_t *node,
 		udm->cache_counters[sw_idx1].packets += is_valid1;
 		udm->cache_counters[sw_idx2].packets += is_valid2;
 		udm->cache_counters[sw_idx3].packets += is_valid3;
-		udm->cache_counters[sw_idx0].bytes += bytes0;
-		udm->cache_counters[sw_idx1].bytes += bytes1;
-		udm->cache_counters[sw_idx2].bytes += bytes2;
-		udm->cache_counters[sw_idx3].bytes += bytes3;
+		udm->cache_counters[sw_idx0].bytes += udp_hdr_len0;
+		udm->cache_counters[sw_idx1].bytes += udp_hdr_len1;
+		udm->cache_counters[sw_idx2].bytes += udp_hdr_len2;
+		udm->cache_counters[sw_idx3].bytes += udp_hdr_len3;
 	}
 
 	if (PREDICT_FALSE(node->flags & VLIB_NODE_FLAG_TRACE))
