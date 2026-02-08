@@ -88,12 +88,12 @@ gre_to_next(u16 *next, u16 len)
 
 static_always_inline void
 add_trace(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b,
-		const gre_header_t *gre, const u8 is_valid)
+		const gre_header_t *gre)
 {
 	if (PREDICT_FALSE((node->flags & VLIB_NODE_FLAG_TRACE) && (b->flags & VLIB_BUFFER_IS_TRACED)))
 	{
 		gre_trace_t *t = vlib_add_trace(vm, node, b, sizeof(*t));
-		t->gre = is_valid ? *gre : (gre_header_t){0};
+		t->gre = *gre;
 	}
 }
 
@@ -120,9 +120,11 @@ u16 advance_gre_header(vlib_buffer_t *b)
 		case __builtin_bswap16(ETHERNET_TYPE_PPP):
 		case __builtin_bswap16(ETHERNET_TYPE_3GPP2):
 		case __builtin_bswap16(ETHERNET_TYPE_CDMA_2000):
+		{
 			// Acknowledgement number
 				size += ack_flag * sizeof(u32);
 			break;
+		}
 
 		case __builtin_bswap16(ETHERNET_TYPE_WCCP):
         {
@@ -134,6 +136,8 @@ u16 advance_gre_header(vlib_buffer_t *b)
 			size += ((*(u8 *) vlib_buffer_get_current(b) & 0xF0) != 0x40) * sizeof(u32);
 			break;
         }
+		default:
+			break;
 	}
 
 

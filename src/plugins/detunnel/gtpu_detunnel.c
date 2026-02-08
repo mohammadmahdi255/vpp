@@ -114,20 +114,18 @@ process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, 
 	const u16 gtpu_hdr_len =
 			sizeof(gtpu_header_t) - (((gtpu->ver_flags & GTPU_E_S_PN_BIT) == 0) * sizeof(gtpu_ext_header_t));
 
-	const u8 is_valid = vlib_buffer_has_space(b, gtpu_hdr_len);
-
-	if (PREDICT_TRUE(is_valid))
-	{
-		vlib_buffer_advance(b, gtpu_hdr_len);
-		gdm->cache_counters[sw_idx].packets++;
-		gdm->cache_counters[sw_idx].bytes += gtpu_hdr_len;
-		next[0] = (*(u8 *) vlib_buffer_get_current(b) & 0xF0) | (gtpu->ver_flags & GTPU_E_BIT);
-	}
-	else
+	if (PREDICT_FALSE(!vlib_buffer_has_space(b, gtpu_hdr_len)))
 	{
 		next[0] = IP_PROTOCOL_INVALID;
+		goto trace;
 	}
 
+	vlib_buffer_advance(b, gtpu_hdr_len);
+	gdm->cache_counters[sw_idx].packets++;
+	gdm->cache_counters[sw_idx].bytes += gtpu_hdr_len;
+	next[0] = (*(u8 *) vlib_buffer_get_current(b) & 0xF0) | (gtpu->ver_flags & GTPU_E_BIT);
+
+trace:
 	if (PREDICT_FALSE(b->flags & VLIB_BUFFER_IS_TRACED))
 		add_trace(vm, node, b, gtpu);
 }

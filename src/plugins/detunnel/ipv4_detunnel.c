@@ -76,12 +76,12 @@ ipv4_to_next(u16 *next, u16 len)
 
 static_always_inline void
 add_trace(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b,
-		const ip4_header_t *ip4, const u8 is_valid)
+		const ip4_header_t *ip4)
 {
 	if (PREDICT_FALSE((node->flags & VLIB_NODE_FLAG_TRACE) && (b->flags & VLIB_BUFFER_IS_TRACED)))
 	{
 		ip4_trace_t *t = vlib_add_trace(vm, node, b, sizeof(*t));
-		t->ip4 = is_valid ? *ip4 : (ip4_header_t){0};
+		t->ip4 = *ip4;
 	}
 }
 
@@ -92,28 +92,25 @@ process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, 
 	u32 sw_idx = vnet_buffer(b)->sw_if_index[VLIB_RX];
 
 	const ip4_header_t *ip4 = vlib_buffer_get_current(b);
-	const u16 ip4_hdr_len = ip4_header_bytes(ip4);
+	const u16 ip4_hdr_len = clib_max(ip4_header_bytes(ip4), sizeof(ip4_header_t));
 	const u16 len = vlib_buffer_length_in_chain(vm, b);
 	const u16 ip4_len = clib_net_to_host_u16(ip4->length);
 	const i32 ip4_pad_len = len - ip4_len;
 
-	const u8 is_valid =
-			ip4_pad_len >= 0 && ip4_hdr_len >= sizeof(ip4_header_t) && vlib_buffer_has_space(b, ip4_hdr_len);
-
-	if (PREDICT_TRUE(is_valid))
-	{
-		vlib_buffer_advance(b, ip4_hdr_len);
-		idm->cache_counters[sw_idx].packets++;
-		idm->cache_counters[sw_idx].bytes += ip4_hdr_len;
-		next[0] = ip4->protocol;
-	}
-	else
+	if (PREDICT_FALSE(ip4_pad_len < 0 || !vlib_buffer_has_space(b, ip4_hdr_len)))
 	{
 		next[0] = IP_PROTOCOL_INVALID;
+		goto trace;
 	}
 
+	vlib_buffer_advance(b, ip4_hdr_len);
+	idm->cache_counters[sw_idx].packets++;
+	idm->cache_counters[sw_idx].bytes += ip4_hdr_len;
+	next[0] = ip4->protocol;
+
+trace:
 	if (PREDICT_FALSE(b->flags & VLIB_BUFFER_IS_TRACED))
-		add_trace(vm, node, b, ip4, is_valid);
+		add_trace(vm, node, b, ip4);
 }
 
 VLIB_NODE_FN (ipv4_detunnel) (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_frame_t *frame)

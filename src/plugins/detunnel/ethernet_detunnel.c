@@ -80,12 +80,12 @@ ethernet_to_next(u16 *next, u16 len)
 
 static_always_inline void
 add_trace(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b,
-		const ethernet_header_t *eth, const u8 is_valid)
+		const ethernet_header_t *eth)
 {
 	if (PREDICT_FALSE((node->flags & VLIB_NODE_FLAG_TRACE) && (b->flags & VLIB_BUFFER_IS_TRACED)))
 	{
 		ethernet_trace_t *t = vlib_add_trace(vm, node, b, sizeof(ethernet_trace_t));
-		t->eth = is_valid ? *eth : (ethernet_header_t){0};
+		t->eth = *eth;
 	}
 }
 
@@ -94,24 +94,22 @@ process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, 
 {
 	ethernet_detunnel_main_t *edm = &ethernet_detunnel_main;
 	const u32 sw_idx = vnet_buffer(b)->sw_if_index[VLIB_RX];
-
-	const u8 is_valid = vlib_buffer_has_space(b, sizeof(ethernet_header_t));
 	const ethernet_header_t *eth = vlib_buffer_get_current(b);
 
-	if (PREDICT_TRUE(is_valid))
-	{
-		vlib_buffer_advance(b, sizeof(ethernet_header_t));
-		edm->cache_counters[sw_idx].packets++;
-		edm->cache_counters[sw_idx].bytes += sizeof(ethernet_header_t);
-		next[0] = eth->type;
-	}
-	else
+	if (PREDICT_FALSE(!vlib_buffer_has_space(b, sizeof(ethernet_header_t))))
 	{
 		next[0] = ETHERNET_TYPE_INVALID;
+		goto trace;
 	}
 
+	vlib_buffer_advance(b, sizeof(ethernet_header_t));
+	edm->cache_counters[sw_idx].packets++;
+	edm->cache_counters[sw_idx].bytes += sizeof(ethernet_header_t);
+	next[0] = eth->type;
+
+trace:
 	if (PREDICT_FALSE(node->flags & VLIB_NODE_FLAG_TRACE))
-		add_trace(vm, node, b, eth, is_valid);
+		add_trace(vm, node, b, eth);
 }
 
 VLIB_NODE_FN (ethernet_detunnel) (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_frame_t *frame)

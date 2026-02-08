@@ -90,12 +90,12 @@ udp_to_next(u16 *src_port, u16 *dst_port, u16 *next, u16 len)
 
 static_always_inline void
 add_trace(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b,
-        const udp_header_t *udp, const u8 is_valid)
+        const udp_header_t *udp)
 {
 	if (PREDICT_FALSE((node->flags & VLIB_NODE_FLAG_TRACE) && (b->flags & VLIB_BUFFER_IS_TRACED)))
 	{
 		udp_trace_t *t = vlib_add_trace(vm, node, b, sizeof(udp_trace_t));
-		t->udp = is_valid ? *udp : (udp_header_t){0};
+		t->udp = *udp;
 	}
 }
 
@@ -108,22 +108,22 @@ process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, 
 	const u8 is_valid = vlib_buffer_has_space(b, sizeof(udp_header_t));
 	const udp_header_t *udp = vlib_buffer_get_current(b);
 
-	if (PREDICT_TRUE(is_valid))
-	{
-		vlib_buffer_advance(b, sizeof(udp_header_t));
-		udm->cache_counters[sw_idx].packets++;
-		udm->cache_counters[sw_idx].bytes += sizeof(udp_header_t);
-		src_port[0] = udp->src_port;
-		dst_port[0] = udp->dst_port;
-	}
-	else
+	if (PREDICT_FALSE(is_valid))
 	{
 		src_port[0] = INVALID_PORT;
 		dst_port[0] = INVALID_PORT;
+		goto trace;
 	}
 
+	vlib_buffer_advance(b, sizeof(udp_header_t));
+	udm->cache_counters[sw_idx].packets++;
+	udm->cache_counters[sw_idx].bytes += sizeof(udp_header_t);
+	src_port[0] = udp->src_port;
+	dst_port[0] = udp->dst_port;
+
+trace:
 	if (PREDICT_FALSE(node->flags & VLIB_NODE_FLAG_TRACE))
-		add_trace(vm, node, b, udp, is_valid);
+		add_trace(vm, node, b, udp);
 }
 
 VLIB_NODE_FN (udp_detunnel) (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_frame_t *frame)

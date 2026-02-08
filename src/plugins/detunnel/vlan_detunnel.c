@@ -77,12 +77,12 @@ vlan_to_next(u16 *next, u16 len)
 
 static_always_inline void
 add_trace(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b,
-		const vlan_header_t *vlan, const u8 is_valid)
+		const vlan_header_t *vlan)
 {
 	if (PREDICT_FALSE((node->flags & VLIB_NODE_FLAG_TRACE) && (b->flags & VLIB_BUFFER_IS_TRACED)))
 	{
 		vlan_trace_t *t = vlib_add_trace(vm, node, b, sizeof(*t));
-		t->vlan = is_valid ? *vlan : (vlan_header_t){0};
+		t->vlan = *vlan;
 	}
 }
 
@@ -92,23 +92,22 @@ process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, 
 	vlan_detunnel_main_t *vdm = &vlan_detunnel_main;
 	const u32 sw_idx = vnet_buffer(b)->sw_if_index[VLIB_RX];
 
-	const u8 is_valid = vlib_buffer_has_space(b, sizeof(vlan_header_t));
 	const vlan_header_t *vlan = vlib_buffer_get_current(b);
 
-	if (PREDICT_TRUE(is_valid))
-	{
-		vlib_buffer_advance(b, sizeof(vlan_header_t));
-		vdm->cache_counters[sw_idx].packets++;
-		vdm->cache_counters[sw_idx].bytes += sizeof(vlan_header_t);
-		next[0] = vlan->type;
-	}
-	else
+	if (PREDICT_FALSE(!vlib_buffer_has_space(b, sizeof(vlan_header_t))))
 	{
 		next[0] = ETHERNET_TYPE_INVALID;
+		goto trace;
 	}
 
+	vlib_buffer_advance(b, sizeof(vlan_header_t));
+	vdm->cache_counters[sw_idx].packets++;
+	vdm->cache_counters[sw_idx].bytes += sizeof(vlan_header_t);
+	next[0] = vlan->type;
+
+trace:
 	if (PREDICT_FALSE(node->flags & VLIB_NODE_FLAG_TRACE))
-		add_trace(vm, node, b, vlan, is_valid);
+		add_trace(vm, node, b, vlan);
 }
 
 VLIB_NODE_FN (vlan_detunnel) (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_frame_t *frame)

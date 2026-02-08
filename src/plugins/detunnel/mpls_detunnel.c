@@ -86,12 +86,12 @@ mpls_to_next(u16 *next, u16 len)
 
 static_always_inline void
 add_trace(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b,
-		const u32 label_count, const u8 is_valid)
+		const u32 label_count)
 {
 	if (PREDICT_FALSE(b->flags & VLIB_BUFFER_IS_TRACED))
 	{
 		mpls_trace_t *t = vlib_add_trace(vm, node, b, sizeof(mpls_trace_t));
-		t->label_count = is_valid ? label_count : 0;
+		t->label_count = label_count;
 	}
 }
 
@@ -100,39 +100,34 @@ process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, 
 {
 	mpls_detunnel_main_t *edm = &mpls_detunnel_main;
     const u32 sw_idx = vnet_buffer(b)->sw_if_index[VLIB_RX];
-    u32 label_count = 1;
-	u8 is_valid;
+    u32 offset = sizeof(mpls_label_t);
+	u32 is_eos;
 
 	const mpls_label_t *label = vlib_buffer_get_current(b);
 	const u32 mask = clib_host_to_net_u32(MPLS_ENTRY_EOS_BIT);
 
-    while (true)
-    {
-		is_valid = vlib_buffer_has_space(b, (u32) (label_count * sizeof(mpls_label_t)));
-        const u32 is_eos = *label & mask;
-
-        if (is_eos || !is_valid)
-			break;
-
-        label++;
-        label_count++;
-    }
-
-	if (PREDICT_FALSE(is_valid))
+	do
 	{
-		const u16 bytes = label_count * sizeof(mpls_label_t);
-		vlib_buffer_advance(b, bytes);
-		edm->cache_counters[sw_idx].packets += label_count;
-		edm->cache_counters[sw_idx].bytes += bytes;
-		next[0] = *(u8 *)vlib_buffer_get_current(b) & 0xF0;
-	}
-	else
-	{
-		next[0] = IP_PROTOCOL_INVALID;
-	}
+		if (PREDICT_FALSE(!vlib_buffer_has_space(b, offset)))
+		{
+			next[0] = IP_PROTOCOL_INVALID;
+			goto trace;
+		}
 
+		is_eos = *label & mask;
+
+		label++;
+		offset += sizeof(mpls_label_t);
+	} while (!is_eos);
+
+	vlib_buffer_advance(b, offset);
+	edm->cache_counters[sw_idx].packets++;
+	edm->cache_counters[sw_idx].bytes += offset;
+	next[0] = *(u8 *)vlib_buffer_get_current(b) & 0xF0;
+
+trace:
 	if (PREDICT_FALSE(node->flags & VLIB_NODE_FLAG_TRACE))
-		add_trace(vm, node, b, label_count, is_valid);
+		add_trace(vm, node, b, offset / sizeof(mpls_label_t));
 }
 
 VLIB_NODE_FN (mpls_detunnel) (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_frame_t *frame)

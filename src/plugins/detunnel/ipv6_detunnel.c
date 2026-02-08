@@ -81,12 +81,12 @@ ipv6_to_next(u16 *next, u16 len)
 
 static_always_inline void
 add_trace(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b,
-		const ip6_header_t *ip6, const u8 is_valid)
+		const ip6_header_t *ip6)
 {
 	if (PREDICT_FALSE((node->flags & VLIB_NODE_FLAG_TRACE) && (b->flags & VLIB_BUFFER_IS_TRACED)))
 	{
 		ip6_trace_t *t = vlib_add_trace(vm, node, b, sizeof(*t));
-		t->ip6 = is_valid ? *ip6 : (ip6_header_t){0};
+		t->ip6 = *ip6;
 	}
 }
 
@@ -101,9 +101,7 @@ process_buffer_1x (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b,
 	const u16 len = vlib_buffer_length_in_chain(vm, b);
 	const u16 ip6_len = payload_len + sizeof(ip6_header_t);
 
-	const u8 is_valid = len >= ip6_len && vlib_buffer_has_space(b, sizeof(ip6_header_t));
-
-	if (PREDICT_FALSE(!is_valid))
+	if (PREDICT_FALSE(len < ip6_len || !vlib_buffer_has_space(b, sizeof(ip6_header_t))))
 	{
 		next[0] = IP_PROTOCOL_INVALID;
 		goto trace;
@@ -138,7 +136,7 @@ process_buffer_1x (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b,
 
 trace:
 	if (PREDICT_FALSE (b->flags & VLIB_BUFFER_IS_TRACED))
-		add_trace(vm, node, b, ip6, is_valid);
+		add_trace(vm, node, b, ip6);
 }
 
 VLIB_NODE_FN (ipv6_detunnel) (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_frame_t *frame)
