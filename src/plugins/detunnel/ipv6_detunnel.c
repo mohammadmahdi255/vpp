@@ -14,7 +14,7 @@
 #include "vnet/ip/ip_packet.h"
 
 #define foreach_ipv6_detunnel_next							\
-	_(ipv6_etc_next, IPV6_ETC_DETUNNEL, "ip6-drop")			\
+	_(ipv6_etc_next, IPV6_ETC_DETUNNEL, "drop")				\
 	_(ipv4_next, IPV4_DETUNNEL, "ipv4-detunnel")			\
 	_(ipv6_next, IPV6_DETUNNEL, "ipv6-detunnel")			\
 	_(ipv6_frag_next, IPV6_FRAG_DETUNNEL, "ip6-input")		\
