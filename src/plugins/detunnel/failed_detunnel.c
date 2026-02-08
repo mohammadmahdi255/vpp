@@ -36,44 +36,6 @@ add_trace(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b)
 }
 
 static_always_inline void
-process_buffer_4x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t* b[4], u16 next[4])
-{
-	const u32 sw_idx0 = vnet_buffer(b[0])->sw_if_index[VLIB_RX];
-	const u32 sw_idx1 = vnet_buffer(b[1])->sw_if_index[VLIB_RX];
-	const u32 sw_idx2 = vnet_buffer(b[2])->sw_if_index[VLIB_RX];
-	const u32 sw_idx3 = vnet_buffer(b[3])->sw_if_index[VLIB_RX];
-
-	const u8 sw_idx_eq = sw_idx0 == sw_idx1 && sw_idx2 == sw_idx3 && sw_idx0 == sw_idx2;
-
-	failed_detunnel_main_t *fdm = &failed_detunnel_main;
-
-	next[0] = FAILED_NEXT_DROP;
-	next[1] = FAILED_NEXT_DROP;
-	next[2] = FAILED_NEXT_DROP;
-	next[3] = FAILED_NEXT_DROP;
-
-	if (PREDICT_TRUE(sw_idx_eq))
-	{
-		fdm->cache_counter[sw_idx0] += 4;
-	}
-	else
-	{
-		fdm->cache_counter[sw_idx0]++;
-		fdm->cache_counter[sw_idx1]++;
-		fdm->cache_counter[sw_idx2]++;
-		fdm->cache_counter[sw_idx3]++;
-	}
-
-	if (PREDICT_FALSE(node->flags & VLIB_NODE_FLAG_TRACE))
-	{
-		add_trace(vm, node, b[0]);
-		add_trace(vm, node, b[1]);
-		add_trace(vm, node, b[2]);
-		add_trace(vm, node, b[3]);
-	}
-}
-
-static_always_inline void
 process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, u16 *next)
 {
 	failed_detunnel_main_t *fdm = &failed_detunnel_main;
@@ -132,7 +94,10 @@ VLIB_NODE_FN (failed_detunnel) (vlib_main_t *vm, vlib_node_runtime_t *node, vlib
 			vlib_prefetch_buffer_data(b[7], LOAD);
 		}
 
-		process_buffer_4x(vm, node, b, next);
+		process_buffer_1x(vm, node, b[0], &next[0]);
+		process_buffer_1x(vm, node, b[1], &next[1]);
+		process_buffer_1x(vm, node, b[2], &next[2]);
+		process_buffer_1x(vm, node, b[3], &next[3]);
 
 		b += 4;
 		next += 4;

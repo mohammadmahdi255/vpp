@@ -104,108 +104,6 @@ add_trace(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b,
 }
 
 static_always_inline void
-process_buffer_4x(vlib_main_t *vm, vlib_node_runtime_t *node,
-		vlib_buffer_t* b[4], u16 next[4])
-{
-	const u32 sw_idx0 = vnet_buffer(b[0])->sw_if_index[VLIB_RX];
-	const u32 sw_idx1 = vnet_buffer(b[1])->sw_if_index[VLIB_RX];
-	const u32 sw_idx2 = vnet_buffer(b[2])->sw_if_index[VLIB_RX];
-	const u32 sw_idx3 = vnet_buffer(b[3])->sw_if_index[VLIB_RX];
-
-	const u8 sw_idx_eq = sw_idx0 == sw_idx1 && sw_idx2 == sw_idx3 && sw_idx0 == sw_idx2;
-
-	const gtpu_header_t *gtpu0 = vlib_buffer_get_current(b[0]);
-	const gtpu_header_t *gtpu1 = vlib_buffer_get_current(b[1]);
-	const gtpu_header_t *gtpu2 = vlib_buffer_get_current(b[2]);
-	const gtpu_header_t *gtpu3 = vlib_buffer_get_current(b[3]);
-
-	u16 gtpu_hdr_len0 =
-			sizeof(gtpu_header_t) - (((gtpu0->ver_flags & GTPU_E_S_PN_BIT) == 0) * sizeof(gtpu_ext_header_t));
-	u16 gtpu_hdr_len1 =
-			sizeof(gtpu_header_t) - (((gtpu1->ver_flags & GTPU_E_S_PN_BIT) == 0) * sizeof(gtpu_ext_header_t));
-	u16 gtpu_hdr_len2 =
-			sizeof(gtpu_header_t) - (((gtpu2->ver_flags & GTPU_E_S_PN_BIT) == 0) * sizeof(gtpu_ext_header_t));
-	u16 gtpu_hdr_len3 =
-			sizeof(gtpu_header_t) - (((gtpu3->ver_flags & GTPU_E_S_PN_BIT) == 0) * sizeof(gtpu_ext_header_t));
-
-	const u8 is_valid0 = vlib_buffer_has_space(b[0], gtpu_hdr_len0);
-	const u8 is_valid1 = vlib_buffer_has_space(b[1], gtpu_hdr_len1);
-	const u8 is_valid2 = vlib_buffer_has_space(b[2], gtpu_hdr_len2);
-	const u8 is_valid3 = vlib_buffer_has_space(b[3], gtpu_hdr_len3);
-
-	if (PREDICT_TRUE(is_valid0))
-	{
-		vlib_buffer_advance(b[0], gtpu_hdr_len0);
-		next[0] = (*(u8 *) vlib_buffer_get_current(b[0]) & 0xF0) | (gtpu0->ver_flags & GTPU_E_BIT);
-	}
-	else
-	{
-		gtpu_hdr_len0 = 0;
-		next[0] = ETHERNET_TYPE_INVALID;
-	}
-
-	if (PREDICT_TRUE(is_valid1))
-	{
-		vlib_buffer_advance(b[1], gtpu_hdr_len1);
-		next[1] = (*(u8 *) vlib_buffer_get_current(b[1]) & 0xF0) | (gtpu0->ver_flags & GTPU_E_BIT);
-	}
-	else
-	{
-		gtpu_hdr_len1 = 0;
-		next[1] = ETHERNET_TYPE_INVALID;
-	}
-
-	if (PREDICT_TRUE(is_valid2))
-	{
-		vlib_buffer_advance(b[2], gtpu_hdr_len2);
-		next[2] = (*(u8 *) vlib_buffer_get_current(b[2]) & 0xF0) | (gtpu0->ver_flags & GTPU_E_BIT);
-	}
-	else
-	{
-		gtpu_hdr_len2 = 0;
-		next[2] = ETHERNET_TYPE_INVALID;
-	}
-
-	if (PREDICT_TRUE(is_valid3))
-	{
-		vlib_buffer_advance(b[3], gtpu_hdr_len3);
-		next[3] = (*(u8 *) vlib_buffer_get_current(b[3]) & 0xF0) | (gtpu0->ver_flags & GTPU_E_BIT);
-	}
-	else
-	{
-		gtpu_hdr_len3 = 0;
-		next[3] = ETHERNET_TYPE_INVALID;
-	}
-
-	gtpu_detunnel_main_t *gdm = &gtpu_detunnel_main;
-
-	if (PREDICT_TRUE(sw_idx_eq))
-	{
-		gdm->cache_counters[sw_idx0].packets += is_valid0 + is_valid1 + is_valid2 + is_valid3;
-		gdm->cache_counters[sw_idx0].bytes += gtpu_hdr_len0 + gtpu_hdr_len1 + gtpu_hdr_len2 + gtpu_hdr_len3;
-	}
-	else
-	{
-		gdm->cache_counters[sw_idx0].packets += is_valid0;
-		gdm->cache_counters[sw_idx1].packets += is_valid1;
-		gdm->cache_counters[sw_idx2].packets += is_valid2;
-		gdm->cache_counters[sw_idx3].packets += is_valid3;
-		gdm->cache_counters[sw_idx0].bytes += gtpu_hdr_len0;
-		gdm->cache_counters[sw_idx1].bytes += gtpu_hdr_len1;
-		gdm->cache_counters[sw_idx2].bytes += gtpu_hdr_len2;
-		gdm->cache_counters[sw_idx3].bytes += gtpu_hdr_len3;
-	}
-
-	if (PREDICT_FALSE(node->flags & VLIB_NODE_FLAG_TRACE))
-	{
-		add_trace(vm, node, b[0], gtpu0);
-		add_trace(vm, node, b[1], gtpu1);
-		add_trace(vm, node, b[2], gtpu2);
-		add_trace(vm, node, b[3], gtpu3);
-	}
-}
-
-static_always_inline void
 process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, u16 *next)
 {
 	gtpu_detunnel_main_t *gdm = &gtpu_detunnel_main;
@@ -217,14 +115,18 @@ process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, 
 			sizeof(gtpu_header_t) - (((gtpu->ver_flags & GTPU_E_S_PN_BIT) == 0) * sizeof(gtpu_ext_header_t));
 
 	const u8 is_valid = vlib_buffer_has_space(b, gtpu_hdr_len);
-	vlib_buffer_advance(b, gtpu_hdr_len);
 
-	gdm->cache_counters[sw_idx].packets += is_valid;
-	gdm->cache_counters[sw_idx].bytes += gtpu_hdr_len;
-
-	next[0] = (*(u8 *) vlib_buffer_get_current(b) & 0xF0) | (gtpu->ver_flags & GTPU_E_BIT);
-
-	next[0] = is_valid ? next[0] : IP_PROTOCOL_INVALID;
+	if (PREDICT_TRUE(is_valid))
+	{
+		vlib_buffer_advance(b, gtpu_hdr_len);
+		gdm->cache_counters[sw_idx].packets++;
+		gdm->cache_counters[sw_idx].bytes += gtpu_hdr_len;
+		next[0] = (*(u8 *) vlib_buffer_get_current(b) & 0xF0) | (gtpu->ver_flags & GTPU_E_BIT);
+	}
+	else
+	{
+		next[0] = IP_PROTOCOL_INVALID;
+	}
 
 	if (PREDICT_FALSE(b->flags & VLIB_BUFFER_IS_TRACED))
 		add_trace(vm, node, b, gtpu);
@@ -281,7 +183,10 @@ VLIB_NODE_FN (gtpu_detunnel) (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_f
 			vlib_prefetch_buffer_data(b[7], LOAD);
 		}
 
-		process_buffer_4x(vm, node, b, next);
+		process_buffer_1x(vm, node, b[0], &next[0]);
+		process_buffer_1x(vm, node, b[1], &next[1]);
+		process_buffer_1x(vm, node, b[2], &next[2]);
+		process_buffer_1x(vm, node, b[3], &next[3]);
 
 		b += 4;
 		next += 4;

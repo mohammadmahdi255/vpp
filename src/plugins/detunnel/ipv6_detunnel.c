@@ -7,15 +7,17 @@
 #include <vppinfra/error.h>
 
 #include "detunnel.h"
+#include "vlib/buffer.h"
 #include "vlib/buffer_funcs.h"
 #include "vnet/ip/format.h"
 #include "vnet/ip/ip6_packet.h"
+#include "vnet/ip/ip_packet.h"
 
 #define foreach_ipv6_detunnel_next							\
 	_(ipv6_etc_next, IPV6_ETC_DETUNNEL, "ip6-drop")			\
 	_(ipv4_next, IPV4_DETUNNEL, "ipv4-detunnel")			\
 	_(ipv6_next, IPV6_DETUNNEL, "ipv6-detunnel")			\
-	_(ipv6_frag_next, IPV6_FRAG_DETUNNEL, "ip4-drop")		\
+	_(ipv6_frag_next, IPV6_FRAG_DETUNNEL, "ip6-input")		\
 	_(udp_next, UDP_DETUNNEL, "udp-detunnel")				\
 	_(failed_next, FAILED_DETUNNEL, "failed-detunnel")
 
@@ -89,105 +91,53 @@ add_trace(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b,
 }
 
 static_always_inline void
-process_buffer_4x(vlib_main_t *vm, vlib_node_runtime_t *node,
-		vlib_buffer_t* b[4], u16 next[4])
-{
-	ipv6_detunnel_main_t *idm = &ipv6_detunnel_main;
-
-	const u32 sw_idx0 = vnet_buffer(b[0])->sw_if_index[VLIB_RX];
-	const u32 sw_idx1 = vnet_buffer(b[1])->sw_if_index[VLIB_RX];
-	const u32 sw_idx2 = vnet_buffer(b[2])->sw_if_index[VLIB_RX];
-	const u32 sw_idx3 = vnet_buffer(b[3])->sw_if_index[VLIB_RX];
-
-	const u8 sw_idx_eq = sw_idx0 == sw_idx1 && sw_idx2 == sw_idx3 && sw_idx0 == sw_idx2;
-
-	const ip6_header_t *ip0 = vlib_buffer_get_current(b[0]);
-	const ip6_header_t *ip1 = vlib_buffer_get_current(b[1]);
-	const ip6_header_t *ip2 = vlib_buffer_get_current(b[2]);
-	const ip6_header_t *ip3 = vlib_buffer_get_current(b[3]);
-
-	const u16 len0 = vlib_buffer_length_in_chain(vm, b[0]);
-	const u16 len1 = vlib_buffer_length_in_chain(vm, b[1]);
-	const u16 len2 = vlib_buffer_length_in_chain(vm, b[2]);
-	const u16 len3 = vlib_buffer_length_in_chain(vm, b[3]);
-
-	const u16 ip6_payload_len0 = clib_net_to_host_u16(ip0->payload_length);
-	const u16 ip6_payload_len1 = clib_net_to_host_u16(ip1->payload_length);
-	const u16 ip6_payload_len2 = clib_net_to_host_u16(ip2->payload_length);
-	const u16 ip6_payload_len3 = clib_net_to_host_u16(ip3->payload_length);
-
-	const i32 ip6_pad_len0 = len0 - ip6_payload_len0 - (i32) sizeof(ip6_header_t);
-	const i32 ip6_pad_len1 = len1 - ip6_payload_len1 - (i32) sizeof(ip6_header_t);
-	const i32 ip6_pad_len2 = len2 - ip6_payload_len2 - (i32) sizeof(ip6_header_t);
-	const i32 ip6_pad_len3 = len3 - ip6_payload_len3 - (i32) sizeof(ip6_header_t);
-
-	const u8 is_valid0 = ip6_pad_len0 >= 0 && vlib_buffer_has_space(b[0], sizeof(ip6_header_t));
-	const u8 is_valid1 = ip6_pad_len1 >= 0 && vlib_buffer_has_space(b[1], sizeof(ip6_header_t));
-	const u8 is_valid2 = ip6_pad_len2 >= 0 && vlib_buffer_has_space(b[2], sizeof(ip6_header_t));
-	const u8 is_valid3 = ip6_pad_len3 >= 0 && vlib_buffer_has_space(b[3], sizeof(ip6_header_t));
-
-	const u16 bytes0 = is_valid0 ? sizeof(ip6_header_t) : 0;
-	const u16 bytes1 = is_valid1 ? sizeof(ip6_header_t) : 0;
-	const u16 bytes2 = is_valid2 ? sizeof(ip6_header_t) : 0;
-	const u16 bytes3 = is_valid3 ? sizeof(ip6_header_t) : 0;
-
-	vlib_buffer_advance(b[0], bytes0);
-	vlib_buffer_advance(b[1], bytes1);
-	vlib_buffer_advance(b[2], bytes2);
-	vlib_buffer_advance(b[3], bytes3);
-
-	next[0] = is_valid0 ? ip0->protocol : IP_PROTOCOL_INVALID;
-	next[1] = is_valid1 ? ip1->protocol : IP_PROTOCOL_INVALID;
-	next[2] = is_valid2 ? ip2->protocol : IP_PROTOCOL_INVALID;
-	next[3] = is_valid3 ? ip3->protocol : IP_PROTOCOL_INVALID;
-
-	if (PREDICT_TRUE(sw_idx_eq))
-	{
-		idm->cache_counters[sw_idx0].packets += is_valid0 + is_valid1 + is_valid2 + is_valid3;
-		idm->cache_counters[sw_idx0].bytes += bytes0 + bytes1 + bytes2 + bytes3;
-	}
-	else
-	{
-		idm->cache_counters[sw_idx0].packets += is_valid0;
-		idm->cache_counters[sw_idx1].packets += is_valid1;
-		idm->cache_counters[sw_idx2].packets += is_valid2;
-		idm->cache_counters[sw_idx3].packets += is_valid3;
-		idm->cache_counters[sw_idx0].bytes += bytes0;
-		idm->cache_counters[sw_idx1].bytes += bytes1;
-		idm->cache_counters[sw_idx2].bytes += bytes2;
-		idm->cache_counters[sw_idx3].bytes += bytes3;
-	}
-
-	if (PREDICT_FALSE(node->flags & VLIB_NODE_FLAG_TRACE))
-	{
-		add_trace(vm, node, b[0], ip0, is_valid0);
-		add_trace(vm, node, b[1], ip1, is_valid1);
-		add_trace(vm, node, b[2], ip2, is_valid2);
-		add_trace(vm, node, b[3], ip3, is_valid3);
-	}
-}
-
-static_always_inline void
-process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, u16 *next)
+process_buffer_1x (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, u16 *next)
 {
 	ipv6_detunnel_main_t *idm = &ipv6_detunnel_main;
 	u32 sw_idx = vnet_buffer(b)->sw_if_index[VLIB_RX];
 
 	const ip6_header_t *ip6 = vlib_buffer_get_current(b);
-	const u16 ip6_payload_len = clib_net_to_host_u16(ip6->payload_length);
+	const u16 payload_len = clib_net_to_host_u16(ip6->payload_length);
 	const u16 len = vlib_buffer_length_in_chain(vm, b);
-	const i32 ip6_pad_len = len - ip6_payload_len - (i32) sizeof(ip6_header_t);
+	const u16 ip6_len = payload_len + sizeof(ip6_header_t);
 
-	const u8 is_valid = ip6_pad_len >= 0 && vlib_buffer_has_space(b, sizeof(ip6_header_t));
+	const u8 is_valid = len >= ip6_len && vlib_buffer_has_space(b, sizeof(ip6_header_t));
 
-	const u16 bytes = is_valid ? sizeof(ip6_header_t) : 0;
-	vlib_buffer_advance(b, bytes);
+	if (PREDICT_FALSE(!is_valid))
+	{
+		next[0] = IP_PROTOCOL_INVALID;
+		goto trace;
+	}
 
-	next[0] = is_valid ? ip6->protocol : IP_PROTOCOL_INVALID;
-	idm->cache_counters[sw_idx].packets += is_valid;
-	idm->cache_counters[sw_idx].bytes += bytes;
+	const void *data = ip6;
+	u16 offset = sizeof(ip6_header_t);
+	u8 protocol = ip6->protocol;
 
-	if (PREDICT_FALSE(b->flags & VLIB_BUFFER_IS_TRACED))
+	while (ip6_ext_hdr(protocol))
+	{
+		const ip6_ext_header_t *ext_hdr = data + offset;
+
+		if (PREDICT_FALSE(vlib_buffer_has_space(b, offset + sizeof(ip6_ext_header_t))))
+		{
+			next[0] = IP_PROTOCOL_INVALID;
+			goto trace;
+		}
+
+		offset += protocol == IP_PROTOCOL_IPSEC_AH ? ip6_ext_authhdr_len(ext_hdr) : ip6_ext_header_len(ext_hdr);
+		protocol = ext_hdr->next_hdr;
+	}
+
+	next[0] = protocol;
+
+	if (PREDICT_TRUE(protocol != IP_PROTOCOL_IPV6_FRAGMENTATION))
+	{
+		idm->cache_counters[sw_idx].packets++;
+		idm->cache_counters[sw_idx].bytes += offset;
+		vlib_buffer_advance(b, offset);
+	}
+
+trace:
+	if (PREDICT_FALSE (b->flags & VLIB_BUFFER_IS_TRACED))
 		add_trace(vm, node, b, ip6, is_valid);
 }
 
@@ -242,7 +192,10 @@ VLIB_NODE_FN (ipv6_detunnel) (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_f
 			vlib_prefetch_buffer_data(b[7], LOAD);
 		}
 
-		process_buffer_4x(vm, node, b, next);
+		process_buffer_1x(vm, node, b[0], &next[0]);
+		process_buffer_1x(vm, node, b[1], &next[1]);
+		process_buffer_1x(vm, node, b[2], &next[2]);
+		process_buffer_1x(vm, node, b[3], &next[3]);
 
 		b += 4;
 		next += 4;

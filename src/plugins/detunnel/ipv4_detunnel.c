@@ -86,123 +86,6 @@ add_trace(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b,
 }
 
 static_always_inline void
-process_buffer_4x(vlib_main_t *vm, vlib_node_runtime_t *node,
-		vlib_buffer_t* b[4], u16 next[4])
-{
-	ipv4_detunnel_main_t *idm = &ipv4_detunnel_main;
-
-	const u32 sw_idx0 = vnet_buffer(b[0])->sw_if_index[VLIB_RX];
-	const u32 sw_idx1 = vnet_buffer(b[1])->sw_if_index[VLIB_RX];
-	const u32 sw_idx2 = vnet_buffer(b[2])->sw_if_index[VLIB_RX];
-	const u32 sw_idx3 = vnet_buffer(b[3])->sw_if_index[VLIB_RX];
-
-	const u8 sw_idx_eq = sw_idx0 == sw_idx1 && sw_idx2 == sw_idx3 && sw_idx0 == sw_idx2;
-
-	const ip4_header_t *ip0 = vlib_buffer_get_current(b[0]);
-	const ip4_header_t *ip1 = vlib_buffer_get_current(b[1]);
-	const ip4_header_t *ip2 = vlib_buffer_get_current(b[2]);
-	const ip4_header_t *ip3 = vlib_buffer_get_current(b[3]);
-
-	u16 ip4_hdr_len0 = ip4_header_bytes(ip0);
-	u16 ip4_hdr_len1 = ip4_header_bytes(ip1);
-	u16 ip4_hdr_len2 = ip4_header_bytes(ip2);
-	u16 ip4_hdr_len3 = ip4_header_bytes(ip3);
-
-	const u16 len0 = vlib_buffer_length_in_chain(vm, b[0]);
-	const u16 len1 = vlib_buffer_length_in_chain(vm, b[1]);
-	const u16 len2 = vlib_buffer_length_in_chain(vm, b[2]);
-	const u16 len3 = vlib_buffer_length_in_chain(vm, b[3]);
-
-	const u16 ip4_len0 = clib_net_to_host_u16(ip0->length);
-	const u16 ip4_len1 = clib_net_to_host_u16(ip1->length);
-	const u16 ip4_len2 = clib_net_to_host_u16(ip2->length);
-	const u16 ip4_len3 = clib_net_to_host_u16(ip3->length);
-
-	const i32 ip4_pad_len0 = len0 - ip4_len0;
-	const i32 ip4_pad_len1 = len1 - ip4_len1;
-	const i32 ip4_pad_len2 = len2 - ip4_len2;
-	const i32 ip4_pad_len3 = len3 - ip4_len3;
-
-	const u8 is_valid0 =
-			ip4_pad_len0 >= 0 && ip4_hdr_len0 >= sizeof(ip4_header_t) && vlib_buffer_has_space(b[0], ip4_hdr_len0);
-	const u8 is_valid1 =
-			ip4_pad_len1 >= 0 && ip4_hdr_len1 >= sizeof(ip4_header_t) && vlib_buffer_has_space(b[1], ip4_hdr_len1);
-	const u8 is_valid2 =
-			ip4_pad_len2 >= 0 && ip4_hdr_len2 >= sizeof(ip4_header_t) && vlib_buffer_has_space(b[2], ip4_hdr_len2);
-	const u8 is_valid3 =
-			ip4_pad_len3 >= 0 && ip4_hdr_len3 >= sizeof(ip4_header_t) && vlib_buffer_has_space(b[3], ip4_hdr_len3);
-
-	if (PREDICT_TRUE(is_valid0))
-	{
-		vlib_buffer_advance(b[0], ip4_hdr_len0);
-		next[0] = ip0->protocol;
-	}
-	else
-	{
-		ip4_hdr_len0 = 0;
-		next[0] = IP_PROTOCOL_INVALID;
-	}
-
-	if (PREDICT_TRUE(is_valid1))
-	{
-		vlib_buffer_advance(b[1], ip4_hdr_len1);
-		next[1] = ip1->protocol;
-	}
-	else
-	{
-		ip4_hdr_len1 = 0;
-		next[1] = IP_PROTOCOL_INVALID;
-	}
-
-	if (PREDICT_TRUE(is_valid2))
-	{
-		vlib_buffer_advance(b[2], ip4_hdr_len2);
-		next[2] = ip2->protocol;
-	}
-	else
-	{
-		ip4_hdr_len2 = 0;
-		next[2] = IP_PROTOCOL_INVALID;
-	}
-
-	if (PREDICT_TRUE(is_valid3))
-	{
-		vlib_buffer_advance(b[3], ip4_hdr_len3);
-		next[3] = ip3->protocol;
-	}
-	else
-	{
-		ip4_hdr_len3 = 0;
-		next[3] = IP_PROTOCOL_INVALID;
-	}
-
-	if (PREDICT_TRUE(sw_idx_eq))
-	{
-		idm->cache_counters[sw_idx0].packets += is_valid0 + is_valid1 + is_valid2 + is_valid3;
-		idm->cache_counters[sw_idx0].bytes += ip4_hdr_len0 + ip4_hdr_len1 + ip4_hdr_len2 + ip4_hdr_len3;
-	}
-	else
-	{
-		idm->cache_counters[sw_idx0].packets += is_valid0;
-		idm->cache_counters[sw_idx1].packets += is_valid1;
-		idm->cache_counters[sw_idx2].packets += is_valid2;
-		idm->cache_counters[sw_idx3].packets += is_valid3;
-		idm->cache_counters[sw_idx0].bytes += ip4_hdr_len0;
-		idm->cache_counters[sw_idx1].bytes += ip4_hdr_len1;
-		idm->cache_counters[sw_idx2].bytes += ip4_hdr_len2;
-		idm->cache_counters[sw_idx3].bytes += ip4_hdr_len3;
-	}
-
-	if (PREDICT_FALSE(node->flags & VLIB_NODE_FLAG_TRACE))
-	{
-		add_trace(vm, node, b[0], ip0, is_valid0);
-		add_trace(vm, node, b[1], ip1, is_valid1);
-		add_trace(vm, node, b[2], ip2, is_valid2);
-		add_trace(vm, node, b[3], ip3, is_valid3);
-	}
-}
-
-static_always_inline void
 process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, u16 *next)
 {
 	ipv4_detunnel_main_t *idm = &ipv4_detunnel_main;
@@ -220,9 +103,9 @@ process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, 
 	if (PREDICT_TRUE(is_valid))
 	{
 		vlib_buffer_advance(b, ip4_hdr_len);
-		next[0] = ip4->protocol;
 		idm->cache_counters[sw_idx].packets++;
 		idm->cache_counters[sw_idx].bytes += ip4_hdr_len;
+		next[0] = ip4->protocol;
 	}
 	else
 	{
@@ -284,7 +167,10 @@ VLIB_NODE_FN (ipv4_detunnel) (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_f
 			vlib_prefetch_buffer_data(b[7], LOAD);
 		}
 
-		process_buffer_4x(vm, node, b, next);
+		process_buffer_1x(vm, node, b[0], &next[0]);
+		process_buffer_1x(vm, node, b[1], &next[1]);
+		process_buffer_1x(vm, node, b[2], &next[2]);
+		process_buffer_1x(vm, node, b[3], &next[3]);
 
 		b += 4;
 		next += 4;
