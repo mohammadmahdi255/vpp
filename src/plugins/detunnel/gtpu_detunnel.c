@@ -13,23 +13,18 @@
 
 #include "detunnel.h"
 
-#define foreach_gtpu_detunnel_next					    \
-	_(drop_next, DROP, "drop")						    \
-	_(ipv4_next, IPV4_DETUNNEL, "ipv4-detunnel")	    \
-	_(ipv6_next, IPV6_DETUNNEL, "ipv6-detunnel")	    \
-	_(gtpu_ext_next, GTPU_EXT_DETUNNEL, "error-drop")   \
+#define foreach_gtpu_detunnel_next					    		\
+	_(ethernet_next, ETHERNET_DETUNNEL, "ethernet-detunnel")	\
+	_(ipv4_next, IPV4_DETUNNEL, "ipv4-detunnel")	   			\
+	_(ipv6_next, IPV6_DETUNNEL, "ipv6-detunnel")	    		\
     _(failed_next, FAILED_DETUNNEL, "failed-detunnel")
 
 #define foreach_gtpu_protocol	\
 	_(ipv4_version)				\
-	_(ipv6_version)				\
-	_(gtpu4_ext)				\
-	_(gtpu6_ext)
+	_(ipv6_version)
 
 #define IPV4_VERSION	0x0040
 #define IPV6_VERSION	0x0060
-#define GTPU4_EXT		0x0044
-#define GTPU6_EXT		0x0064
 
 enum
 {
@@ -79,13 +74,11 @@ gtpu_to_next(u16 *next, u16 len)
 		SIMD_TYPE next_vec = SIMD_LOAD(next + i);
 		SIMD_TYPE ipv4_mask_vec = (next_vec == SIMD_VEC(ipv4_version));
 		SIMD_TYPE ipv6_mask_vec = (next_vec == SIMD_VEC(ipv6_version));
-		SIMD_TYPE gtpu_ext_mask_vec = (next_vec == SIMD_VEC(gtpu4_ext)) | (next_vec == SIMD_VEC(gtpu6_ext));
 		SIMD_TYPE failed_mask_vec = (next_vec == SIMD_VEC(invalid_protocol));
 
-		SIMD_TYPE result = SIMD_VEC(drop_next) |
+		SIMD_TYPE result = SIMD_VEC(ethernet_next) |
 				(ipv4_mask_vec & SIMD_VEC(ipv4_next)) |
 				(ipv6_mask_vec & SIMD_VEC(ipv6_next)) |
-				(gtpu_ext_mask_vec & SIMD_VEC(gtpu_ext_next)) |
                 (failed_mask_vec & SIMD_VEC(failed_next));
 
 		SIMD_STORE(result, next + i);
@@ -111,7 +104,7 @@ process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, 
 
 	const gtpu_header_t *gtpu = vlib_buffer_get_current(b);
 
-	const u16 gtpu_hdr_len =
+	u16 gtpu_hdr_len =
 			sizeof(gtpu_header_t) - (((gtpu->ver_flags & GTPU_E_S_PN_BIT) == 0) * sizeof(gtpu_ext_header_t));
 
 	if (PREDICT_FALSE(!vlib_buffer_has_space(b, gtpu_hdr_len)))
@@ -120,10 +113,28 @@ process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, 
 		goto trace;
 	}
 
+	if (gtpu->ver_flags & GTPU_E_BIT) {
+
+		gtpu_ext_header_t *ext = (gtpu_ext_header_t *) &gtpu->next_ext_type;
+
+		while (ext->type)
+		{
+			gtpu_hdr_len += ext->len * sizeof(gtpu_ext_header_t);
+
+			if (PREDICT_FALSE(!vlib_buffer_has_space(b, gtpu_hdr_len)))
+			{
+				next[0] = IP_PROTOCOL_INVALID;
+				goto trace;
+			}
+
+			ext += ext->len;
+		}
+	}
+
 	vlib_buffer_advance(b, gtpu_hdr_len);
 	gdm->cache_counters[sw_idx].packets++;
 	gdm->cache_counters[sw_idx].bytes += gtpu_hdr_len;
-	next[0] = (*(u8 *) vlib_buffer_get_current(b) & 0xF0) | (gtpu->ver_flags & GTPU_E_BIT);
+	next[0] = (*(u8 *) vlib_buffer_get_current(b) & 0xF0);
 
 trace:
 	if (PREDICT_FALSE(b->flags & VLIB_BUFFER_IS_TRACED))
@@ -251,13 +262,10 @@ CLIB_MARCH_FN (gtpu_detunnel_init, clib_error_t *, vlib_main_t __clib_unused *vm
 
 	SIMD_VEC(ipv4_version) = SIMD_SPLAT(IPV4_VERSION);
 	SIMD_VEC(ipv6_version) = SIMD_SPLAT(IPV6_VERSION);
-	SIMD_VEC(gtpu4_ext) = SIMD_SPLAT(GTPU4_EXT);
-	SIMD_VEC(gtpu6_ext) = SIMD_SPLAT(GTPU6_EXT);
 
-	SIMD_VEC(drop_next) = SIMD_SPLAT(GTPU_NEXT_DROP);
+	SIMD_VEC(ethernet_next) = SIMD_SPLAT(GTPU_NEXT_ETHERNET_DETUNNEL);
 	SIMD_VEC(ipv4_next) = SIMD_SPLAT(GTPU_NEXT_IPV4_DETUNNEL);
 	SIMD_VEC(ipv6_next) = SIMD_SPLAT(GTPU_NEXT_IPV6_DETUNNEL);
-	SIMD_VEC(gtpu_ext_next) = SIMD_SPLAT(GTPU_NEXT_GTPU_EXT_DETUNNEL);
 	SIMD_VEC(failed_next) = SIMD_SPLAT(GTPU_NEXT_FAILED_DETUNNEL);
 
 	return 0;
