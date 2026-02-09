@@ -13,10 +13,10 @@
 
 #include "detunnel.h"
 
-#define foreach_gtpu_detunnel_next					    		\
-	_(ethernet_next, ETHERNET_DETUNNEL, "ethernet-detunnel")	\
-	_(ipv4_next, IPV4_DETUNNEL, "ipv4-detunnel")	   			\
-	_(ipv6_next, IPV6_DETUNNEL, "ipv6-detunnel")	    		\
+#define foreach_gtpu_detunnel_next					\
+	_(drop_next, DROP, "drop")						\
+	_(ipv4_next, IPV4_DETUNNEL, "ipv4-detunnel")	\
+	_(ipv6_next, IPV6_DETUNNEL, "ipv6-detunnel")	\
     _(failed_next, FAILED_DETUNNEL, "failed-detunnel")
 
 #define foreach_gtpu_protocol	\
@@ -76,7 +76,7 @@ gtpu_to_next(u16 *next, u16 len)
 		SIMD_TYPE ipv6_mask_vec = (next_vec == SIMD_VEC(ipv6_version));
 		SIMD_TYPE failed_mask_vec = (next_vec == SIMD_VEC(invalid_protocol));
 
-		SIMD_TYPE result = SIMD_VEC(ethernet_next) |
+		SIMD_TYPE result = SIMD_VEC(drop_next) |
 				(ipv4_mask_vec & SIMD_VEC(ipv4_next)) |
 				(ipv6_mask_vec & SIMD_VEC(ipv6_next)) |
                 (failed_mask_vec & SIMD_VEC(failed_next));
@@ -121,7 +121,7 @@ process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, 
 		{
 			gtpu_hdr_len += ext->len * sizeof(gtpu_ext_header_t);
 
-			if (PREDICT_FALSE(!vlib_buffer_has_space(b, gtpu_hdr_len)))
+			if (PREDICT_FALSE(ext->len == 0 || !vlib_buffer_has_space(b, gtpu_hdr_len)))
 			{
 				next[0] = IP_PROTOCOL_INVALID;
 				goto trace;
@@ -263,7 +263,7 @@ CLIB_MARCH_FN (gtpu_detunnel_init, clib_error_t *, vlib_main_t __clib_unused *vm
 	SIMD_VEC(ipv4_version) = SIMD_SPLAT(IPV4_VERSION);
 	SIMD_VEC(ipv6_version) = SIMD_SPLAT(IPV6_VERSION);
 
-	SIMD_VEC(ethernet_next) = SIMD_SPLAT(GTPU_NEXT_ETHERNET_DETUNNEL);
+	SIMD_VEC(drop_next) = SIMD_SPLAT(GTPU_NEXT_DROP);
 	SIMD_VEC(ipv4_next) = SIMD_SPLAT(GTPU_NEXT_IPV4_DETUNNEL);
 	SIMD_VEC(ipv6_next) = SIMD_SPLAT(GTPU_NEXT_IPV6_DETUNNEL);
 	SIMD_VEC(failed_next) = SIMD_SPLAT(GTPU_NEXT_FAILED_DETUNNEL);
