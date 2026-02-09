@@ -18,6 +18,7 @@
 	_(ipv4_next, IPV4_DETUNNEL, "ipv4-detunnel")			\
 	_(ipv6_next, IPV6_DETUNNEL, "ipv6-detunnel")			\
 	_(ipv6_frag_next, IPV6_FRAG_DETUNNEL, "ip6-input")		\
+	_(gre_next, GRE_DETUNNEL, "gre-detunnel")				\
 	_(udp_next, UDP_DETUNNEL, "udp-detunnel")				\
 	_(failed_next, FAILED_DETUNNEL, "failed-detunnel")
 
@@ -65,6 +66,7 @@ ipv6_to_next(u16 *next, u16 len)
 		SIMD_TYPE ipv4_mask_vec = (next_vec == SIMD_VEC(ipv4_protocol));
 		SIMD_TYPE ipv6_mask_vec = (next_vec == SIMD_VEC(ipv6_protocol));
 		SIMD_TYPE ipv6_frag_mask_vec = (next_vec == SIMD_VEC(ipv6_frag_protocol));
+		SIMD_TYPE gre_mask_vec = (next_vec == SIMD_VEC(gre_protocol));
 		SIMD_TYPE udp_mask_vec = (next_vec == SIMD_VEC(udp_protocol));
 		SIMD_TYPE failed_mask_vec = (next_vec == SIMD_VEC(invalid_protocol));
 
@@ -72,6 +74,7 @@ ipv6_to_next(u16 *next, u16 len)
 				(ipv4_mask_vec & SIMD_VEC(ipv4_next)) |
 				(ipv6_mask_vec & SIMD_VEC(ipv6_next)) |
 				(ipv6_frag_mask_vec & SIMD_VEC(ipv6_frag_next)) |
+				(gre_mask_vec & SIMD_VEC(gre_next)) |
 				(udp_mask_vec & SIMD_VEC(udp_next)) |
 				(failed_mask_vec & SIMD_VEC(failed_next));
 
@@ -202,7 +205,7 @@ VLIB_NODE_FN (ipv6_detunnel) (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_f
 
 	while (n_left_from > 0)
 	{
-		process_buffer_1x(vm, node, b[0], &next[0]);
+		process_buffer_1x(vm, node, b[0], next);
 
 		b++;
 		next++;
@@ -259,6 +262,7 @@ CLIB_MARCH_FN (ipv6_detunnel_init, clib_error_t *, vlib_main_t __clib_unused *vm
 	SIMD_VEC(ipv4_next) = SIMD_SPLAT(IPV6_NEXT_IPV4_DETUNNEL);
 	SIMD_VEC(ipv6_next) = SIMD_SPLAT(IPV6_NEXT_IPV6_DETUNNEL);
 	SIMD_VEC(ipv6_frag_next) = SIMD_SPLAT(IPV6_NEXT_IPV6_FRAG_DETUNNEL);
+	SIMD_VEC(gre_next) = SIMD_SPLAT(IPV6_NEXT_GRE_DETUNNEL);
 	SIMD_VEC(udp_next) = SIMD_SPLAT(IPV6_NEXT_UDP_DETUNNEL);
 	SIMD_VEC(failed_next) = SIMD_SPLAT(IPV6_NEXT_FAILED_DETUNNEL);
 

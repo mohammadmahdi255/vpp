@@ -204,7 +204,7 @@ VLIB_NODE_FN (gtpu_detunnel) (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_f
 
 	while (n_left_from > 0)
 	{
-		process_buffer_1x(vm, node, b[0], &next[0]);
+		process_buffer_1x(vm, node, b[0], next);
 
 		b++;
 		next++;

@@ -8,6 +8,7 @@
 #include <vppinfra/clib.h>
 
 #include "detunnel.h"
+#include "gre/gre.h"
 #include "vlib/buffer.h"
 #include "vppinfra/byte_order.h"
 
@@ -97,23 +98,32 @@ add_trace(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b,
 	}
 }
 
-u16 advance_gre_header(vlib_buffer_t *b)
+static_always_inline void
+process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, u16 *next)
 {
-	const gre_header_t* gre = vlib_buffer_get_current(b);
-	vlib_buffer_advance(b, sizeof(gre_header_t));
+	gre_detunnel_main_t *vdm = &gre_detunnel_main;
+	const u32 sw_idx = vnet_buffer(b)->sw_if_index[VLIB_RX];
+
+	if (vlib_buffer_has_space(b, sizeof(gre_header_t)))
+	{
+		next[0] = ETHERNET_TYPE_INVALID;
+		goto trace;
+	}
+
+	const void *data = vlib_buffer_get_current(b);
+	const gre_header_t* gre = data;
 
 	/*
 	 * If either the checksum present bit or the routing present bit are set
 	 * both the checksum and offset fields are present in GRE packet
 	 */
-
 	const bool checksum_flag = gre->flags_and_version & GRE_FLAGS_CHECKSUM;
 	const bool routing_flag = gre->flags_and_version & GRE_FLAGS_ROUTING;
 	const bool key_flag = gre->flags_and_version & GRE_FLAGS_KEY;
 	const bool sequence_flag = gre->flags_and_version & GRE_FLAGS_SEQUENCE;
 	const bool ack_flag = gre->flags_and_version & GRE_FLAGS_ACK;
 
-	u16 size = (checksum_flag | routing_flag + key_flag + sequence_flag) * sizeof(u32);
+	u16 offset = (checksum_flag | routing_flag + key_flag + sequence_flag) * sizeof(u32);
 
 	switch (gre->protocol)
 	{
@@ -122,7 +132,7 @@ u16 advance_gre_header(vlib_buffer_t *b)
 		case __builtin_bswap16(ETHERNET_TYPE_CDMA_2000):
 		{
 			// Acknowledgement number
-				size += ack_flag * sizeof(u32);
+			offset += ack_flag * sizeof(u32);
 			break;
 		}
 
@@ -133,113 +143,37 @@ u16 advance_gre_header(vlib_buffer_t *b)
 			 * encapsulation type; if it looks as if the first octet of the packet
 			 * isn't the beginning of an IPv4 header, assume it's WCCP2.
 			 */
-			size += ((*(u8 *) vlib_buffer_get_current(b) & 0xF0) != 0x40) * sizeof(u32);
+			offset += ((*(u8 *) (data + offset) & 0xF0) != 0x40) * sizeof(u32);
 			break;
         }
 		default:
 			break;
 	}
 
-
 	// Routing
 	while (PREDICT_FALSE(routing_flag))
 	{
-		const gre_routing_header_t* routing_header = vlib_buffer_get_current(b) + size;
-		size += sizeof(gre_routing_header_t) + routing_header->sre_size;
+		const gre_routing_header_t* routing_header = data + offset;
+		offset += sizeof(gre_routing_header_t) + routing_header->sre_size;
+
+		if (PREDICT_FALSE(vlib_buffer_has_space(b, offset)))
+		{
+			next[0] = ETHERNET_TYPE_INVALID;
+			goto trace;
+		}
 
 		if (PREDICT_TRUE(routing_header->address_family == 0x0000 && routing_header->sre_size == 0))
 			break;
-
-		if (PREDICT_FALSE(vlib_buffer_has_space(b, size)))
-			return ETHERNET_TYPE_INVALID;
 	}
 
-	vlib_buffer_advance(b, size);
-	return gre->protocol;
-}
+	vlib_buffer_advance(b, offset);
+	vdm->cache_counters[sw_idx].packets++;
+	vdm->cache_counters[sw_idx].bytes += offset;
+	next[0] = gre->protocol;
 
-static_always_inline void
-process_buffer_4x(vlib_main_t *vm, vlib_node_runtime_t *node,
-		vlib_buffer_t* b[4], u16 next[4])
-{
-	const u32 sw_idx0 = vnet_buffer(b[0])->sw_if_index[VLIB_RX];
-	const u32 sw_idx1 = vnet_buffer(b[1])->sw_if_index[VLIB_RX];
-	const u32 sw_idx2 = vnet_buffer(b[2])->sw_if_index[VLIB_RX];
-	const u32 sw_idx3 = vnet_buffer(b[3])->sw_if_index[VLIB_RX];
-
-	const u8 sw_idx_eq = sw_idx0 == sw_idx1 && sw_idx2 == sw_idx3 && sw_idx0 == sw_idx2;
-
-	const u8 is_valid0 = vlib_buffer_has_space(b[0], sizeof(gre_header_t));
-	const u8 is_valid1 = vlib_buffer_has_space(b[1], sizeof(gre_header_t));
-	const u8 is_valid2 = vlib_buffer_has_space(b[2], sizeof(gre_header_t));
-	const u8 is_valid3 = vlib_buffer_has_space(b[3], sizeof(gre_header_t));
-
-	const u16 bytes0 = is_valid0 ? sizeof(gre_header_t) : 0;
-	const u16 bytes1 = is_valid1 ? sizeof(gre_header_t) : 0;
-	const u16 bytes2 = is_valid2 ? sizeof(gre_header_t) : 0;
-	const u16 bytes3 = is_valid3 ? sizeof(gre_header_t) : 0;
-
-	const gre_header_t *gre0 = vlib_buffer_get_current(b[0]);
-	const gre_header_t *gre1 = vlib_buffer_get_current(b[1]);
-	const gre_header_t *gre2 = vlib_buffer_get_current(b[2]);
-	const gre_header_t *gre3 = vlib_buffer_get_current(b[3]);
-
-	vlib_buffer_advance(b[0], bytes0);
-	vlib_buffer_advance(b[1], bytes1);
-	vlib_buffer_advance(b[2], bytes2);
-	vlib_buffer_advance(b[3], bytes3);
-
-	next[0] = is_valid0 ? gre0->type : ETHERNET_TYPE_INVALID;
-	next[1] = is_valid1 ? gre1->type : ETHERNET_TYPE_INVALID;
-	next[2] = is_valid2 ? gre2->type : ETHERNET_TYPE_INVALID;
-	next[3] = is_valid3 ? gre3->type : ETHERNET_TYPE_INVALID;
-
-	gre_detunnel_main_t *vdm = &gre_detunnel_main;
-
-	if (PREDICT_TRUE(sw_idx_eq))
-	{
-		vdm->cache_counters[sw_idx0].packets += is_valid0 + is_valid1 + is_valid2 + is_valid3;
-		vdm->cache_counters[sw_idx0].bytes += bytes0 + bytes1 + bytes2 + bytes3;
-	}
-	else
-	{
-		vdm->cache_counters[sw_idx0].packets += is_valid0;
-		vdm->cache_counters[sw_idx1].packets += is_valid1;
-		vdm->cache_counters[sw_idx2].packets += is_valid2;
-		vdm->cache_counters[sw_idx3].packets += is_valid3;
-		vdm->cache_counters[sw_idx0].bytes += bytes0;
-		vdm->cache_counters[sw_idx1].bytes += bytes1;
-		vdm->cache_counters[sw_idx2].bytes += bytes2;
-		vdm->cache_counters[sw_idx3].bytes += bytes3;
-	}
-
+trace:
 	if (PREDICT_FALSE(node->flags & VLIB_NODE_FLAG_TRACE))
-	{
-		add_trace(vm, node, b[0], gre0, is_valid0);
-		add_trace(vm, node, b[1], gre1, is_valid1);
-		add_trace(vm, node, b[2], gre2, is_valid2);
-		add_trace(vm, node, b[3], gre3, is_valid3);
-	}
-}
-
-static_always_inline void
-process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, u16 *next)
-{
-	gre_detunnel_main_t *vdm = &gre_detunnel_main;
-	const u32 sw_idx = vnet_buffer(b)->sw_if_index[VLIB_RX];
-
-	const u8 is_valid = vlib_buffer_has_space(b, sizeof(gre_header_t));
-	const u16 bytes = is_valid ? sizeof(gre_header_t) : 0;
-
-	const gre_header_t *gre = vlib_buffer_get_current(b);
-	vlib_buffer_advance(b, bytes);
-
-	next[0] = is_valid ? gre->type : ETHERNET_TYPE_INVALID;
-	vdm->cache_counters[sw_idx].packets += is_valid;
-	vdm->cache_counters[sw_idx].bytes += bytes;
-
-	if (PREDICT_FALSE(node->flags & VLIB_NODE_FLAG_TRACE))
-		add_trace(vm, node, b, gre, is_valid);
+		add_trace(vm, node, b, gre);
 }
 
 VLIB_NODE_FN (gre_detunnel) (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_frame_t *frame)
@@ -291,7 +225,10 @@ VLIB_NODE_FN (gre_detunnel) (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_fr
 			vlib_prefetch_buffer_data(b[7], LOAD);
 		}
 
-		process_buffer_4x(vm, node, b, next);
+		process_buffer_1x(vm, node, b[0], &next[0]);
+		process_buffer_1x(vm, node, b[1], &next[1]);
+		process_buffer_1x(vm, node, b[2], &next[2]);
+		process_buffer_1x(vm, node, b[3], &next[3]);
 
 		b += 4;
 		next += 4;
@@ -331,10 +268,8 @@ static u8 *format_gre_trace(u8 *s, va_list *args)
 	vlib_main_t __clib_unused *vm = va_arg(*args, vlib_main_t *);
 	vlib_node_t __clib_unused *node = va_arg(*args, vlib_node_t *);
 	gre_trace_t *t = va_arg(*args, gre_trace_t *);
-	return format(s, "priority_cfi_and_id   0x%04x\n"
-			"  ethertype             0x%04x",
-			t->gre.priority_cfi_and_id,
-			clib_net_to_host_u16(t->gre.type));
+	return format (s, "GRE flags_and_version 0x%04x protocol 0x%04x",
+			t->gre.flags_and_version, t->gre.protocol);
 }
 
 /* Register node */
