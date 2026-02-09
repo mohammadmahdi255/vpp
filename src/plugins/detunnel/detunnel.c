@@ -21,12 +21,13 @@ foreach_ip_protocol
 CLIB_MARCH_FN (detunnel_init, clib_error_t *, vlib_main_t __clib_unused *vm)
 {
 	clib_warning("size: %lu %s", SIMD_SIZE, CLIB_STRING_MACRO(SIMD_TYPE));
+	SIMD_VEC(eoip_ethertype) = SIMD_SPLAT(clib_host_to_net_u16(ETHERNET_TYPE_EOIP));
 	SIMD_VEC(vlan_ethertype) = SIMD_SPLAT(clib_host_to_net_u16(ETHERNET_TYPE_VLAN));
 	SIMD_VEC(ipv4_ethertype) = SIMD_SPLAT(clib_host_to_net_u16(ETHERNET_TYPE_IP4));
 	SIMD_VEC(ipv6_ethertype) = SIMD_SPLAT(clib_host_to_net_u16(ETHERNET_TYPE_IP6));
 	SIMD_VEC(mpls_ethertype) = SIMD_SPLAT(clib_host_to_net_u16(ETHERNET_TYPE_MPLS));
 	SIMD_VEC(invalid_ethertype) = SIMD_SPLAT(clib_host_to_net_u16(ETHERNET_TYPE_INVALID));
-	
+
 	SIMD_VEC(ipv4_protocol) = SIMD_SPLAT(IP_PROTOCOL_IP_IN_IP);
 	SIMD_VEC(ipv6_protocol) = SIMD_SPLAT(IP_PROTOCOL_IPV6);
 	SIMD_VEC(ipv6_frag_protocol) = SIMD_SPLAT(IP_PROTOCOL_IPV6_FRAGMENTATION);

@@ -11,13 +11,15 @@
 #include "gre/gre.h"
 #include "vlib/buffer.h"
 #include "vppinfra/byte_order.h"
+#include "vppinfra/error.h"
 
-#define foreach_gre_detunnel_next						\
-	_(drop_next, DROP, "drop")							\
-	_(vlan_next, VLAN_DETUNNEL, "vlan-detunnel")		\
-	_(ipv4_next, IPV4_DETUNNEL, "ipv4-detunnel")		\
-	_(ipv6_next, IPV6_DETUNNEL, "ipv6-detunnel")		\
-	_(mpls_next, MPLS_DETUNNEL, "mpls-detunnel")		\
+#define foreach_gre_detunnel_next								\
+	_(drop_next, DROP, "drop")									\
+	_(ethernet_next, ETHERNET_DETUNNEL, "ethernet-detunnel")	\
+	_(vlan_next, VLAN_DETUNNEL, "vlan-detunnel")				\
+	_(ipv4_next, IPV4_DETUNNEL, "ipv4-detunnel")				\
+	_(ipv6_next, IPV6_DETUNNEL, "ipv6-detunnel")				\
+	_(mpls_next, MPLS_DETUNNEL, "mpls-detunnel")				\
 	_(failed_next, FAILED_DETUNNEL, "failed-detunnel")
 
 #define GRE_FLAGS_ACK	(1 << 7)
@@ -70,6 +72,7 @@ gre_to_next(u16 *next, u16 len)
 	for (u16 i = 0; i < len; i += SIMD_SIZE)
 	{
 		SIMD_TYPE next_vec = SIMD_LOAD(next + i);
+		SIMD_TYPE ethernet_mask_vec = (next_vec == SIMD_VEC(eoip_ethertype));
 		SIMD_TYPE vlan_mask_vec = (next_vec == SIMD_VEC(vlan_ethertype));
 		SIMD_TYPE ipv4_mask_vec = (next_vec == SIMD_VEC(ipv4_ethertype));
 		SIMD_TYPE ipv6_mask_vec = (next_vec == SIMD_VEC(ipv6_ethertype));
@@ -77,6 +80,7 @@ gre_to_next(u16 *next, u16 len)
 		SIMD_TYPE failed_mask_vec = (next_vec == SIMD_VEC(invalid_ethertype));
 
 		SIMD_TYPE result = SIMD_VEC(drop_next) |
+				(ethernet_mask_vec & SIMD_VEC(ethernet_next)) |
 				(vlan_mask_vec & SIMD_VEC(vlan_next)) |
 				(ipv4_mask_vec & SIMD_VEC(ipv4_next)) |
 				(ipv6_mask_vec & SIMD_VEC(ipv6_next)) |
@@ -104,26 +108,26 @@ process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, 
 	gre_detunnel_main_t *vdm = &gre_detunnel_main;
 	const u32 sw_idx = vnet_buffer(b)->sw_if_index[VLIB_RX];
 
-	if (vlib_buffer_has_space(b, sizeof(gre_header_t)))
+	const void *data = vlib_buffer_get_current(b);
+	const gre_header_t* gre = data;
+
+	if (PREDICT_FALSE(!vlib_buffer_has_space(b, sizeof(gre_header_t))))
 	{
 		next[0] = ETHERNET_TYPE_INVALID;
 		goto trace;
 	}
 
-	const void *data = vlib_buffer_get_current(b);
-	const gre_header_t* gre = data;
-
 	/*
 	 * If either the checksum present bit or the routing present bit are set
 	 * both the checksum and offset fields are present in GRE packet
 	 */
-	const bool checksum_flag = gre->flags_and_version & GRE_FLAGS_CHECKSUM;
-	const bool routing_flag = gre->flags_and_version & GRE_FLAGS_ROUTING;
-	const bool key_flag = gre->flags_and_version & GRE_FLAGS_KEY;
-	const bool sequence_flag = gre->flags_and_version & GRE_FLAGS_SEQUENCE;
-	const bool ack_flag = gre->flags_and_version & GRE_FLAGS_ACK;
+	const bool checksum_flag = gre->flags_and_version & clib_host_to_net_u16(GRE_FLAGS_CHECKSUM);
+	const bool routing_flag = gre->flags_and_version & clib_host_to_net_u16(GRE_FLAGS_ROUTING);
+	const bool key_flag = gre->flags_and_version & clib_host_to_net_u16(GRE_FLAGS_KEY);
+	const bool sequence_flag = gre->flags_and_version & clib_host_to_net_u16(GRE_FLAGS_SEQUENCE);
+	const bool ack_flag = gre->flags_and_version & clib_host_to_net_u16(GRE_FLAGS_ACK);
 
-	u16 offset = (checksum_flag | routing_flag + key_flag + sequence_flag) * sizeof(u32);
+	u16 offset = sizeof(gre_header_t) + (checksum_flag | routing_flag + key_flag + sequence_flag) * sizeof(u32);
 
 	switch (gre->protocol)
 	{
@@ -156,7 +160,7 @@ process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, 
 		const gre_routing_header_t* routing_header = data + offset;
 		offset += sizeof(gre_routing_header_t) + routing_header->sre_size;
 
-		if (PREDICT_FALSE(vlib_buffer_has_space(b, offset)))
+		if (PREDICT_FALSE(!vlib_buffer_has_space(b, offset)))
 		{
 			next[0] = ETHERNET_TYPE_INVALID;
 			goto trace;
@@ -292,6 +296,7 @@ CLIB_MARCH_FN (gre_detunnel_init, clib_error_t *, vlib_main_t __clib_unused *vm)
 	clib_warning("size: %lu %s", SIMD_SIZE, CLIB_STRING_MACRO(SIMD_TYPE));
 
 	SIMD_VEC(drop_next) = SIMD_SPLAT(GRE_NEXT_DROP);
+	SIMD_VEC(ethernet_next) = SIMD_SPLAT(GRE_NEXT_ETHERNET_DETUNNEL);
 	SIMD_VEC(vlan_next) = SIMD_SPLAT(GRE_NEXT_VLAN_DETUNNEL);
 	SIMD_VEC(ipv4_next) = SIMD_SPLAT(GRE_NEXT_IPV4_DETUNNEL);
 	SIMD_VEC(ipv6_next) = SIMD_SPLAT(GRE_NEXT_IPV6_DETUNNEL);

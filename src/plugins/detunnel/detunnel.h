@@ -39,6 +39,7 @@
 #define IP_PROTOCOL_INVALID	0xFFFF
 
 #define foreach_ethertype	\
+	_(eoip_ethertype)		\
 	_(vlan_ethertype)		\
 	_(ipv4_ethertype)		\
 	_(ipv6_ethertype)		\

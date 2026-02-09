@@ -100,7 +100,7 @@ process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, 
 {
 	mpls_detunnel_main_t *edm = &mpls_detunnel_main;
     const u32 sw_idx = vnet_buffer(b)->sw_if_index[VLIB_RX];
-    u32 offset = sizeof(mpls_label_t);
+    u32 offset = 0;
 	u32 is_eos;
 
 	const mpls_label_t *label = vlib_buffer_get_current(b);
@@ -114,10 +114,9 @@ process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, 
 			goto trace;
 		}
 
-		is_eos = *label & mask;
-
-		label++;
 		offset += sizeof(mpls_label_t);
+		is_eos = *label & mask;
+		label++;
 	} while (!is_eos);
 
 	vlib_buffer_advance(b, offset);

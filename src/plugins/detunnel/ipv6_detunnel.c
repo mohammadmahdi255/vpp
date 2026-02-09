@@ -118,7 +118,7 @@ process_buffer_1x (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b,
 	{
 		const ip6_ext_header_t *ext_hdr = data + offset;
 
-		if (PREDICT_FALSE(vlib_buffer_has_space(b, offset + sizeof(ip6_ext_header_t))))
+		if (PREDICT_FALSE(!vlib_buffer_has_space(b, offset + sizeof(ip6_ext_header_t))))
 		{
 			next[0] = IP_PROTOCOL_INVALID;
 			goto trace;
