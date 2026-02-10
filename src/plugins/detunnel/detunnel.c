@@ -1,11 +1,13 @@
+#include <vnet/ethernet/ethernet.h>
+#include <vnet/ethernet/packet.h>
+#include <vnet/ip/ip_packet.h>
+
+#include <vppinfra/clib.h>
+#include <vppinfra/error.h>
+
+#include <ppp/packet.h>
 
 #include "detunnel.h"
-#include "vnet/ethernet/packet.h"
-#include "vnet/ip/ip_packet.h"
-#include "vppinfra/clib.h"
-#include "vppinfra/error.h"
-
-#include <vnet/ethernet/ethernet.h>
 
 #ifndef CLIB_MARCH_VARIANT
 #define _(var)						\
@@ -15,6 +17,7 @@
 
 foreach_ethertype
 foreach_ip_protocol
+foreach_ppp_protocol
 #undef _
 #endif
 
@@ -39,6 +42,10 @@ CLIB_MARCH_FN (detunnel_init, clib_error_t *, vlib_main_t __clib_unused *vm)
 	SIMD_VEC(udp_protocol) = SIMD_SPLAT(IP_PROTOCOL_UDP);
 	SIMD_VEC(gre_protocol) = SIMD_SPLAT(IP_PROTOCOL_GRE);
 	SIMD_VEC(invalid_protocol) = SIMD_SPLAT(IP_PROTOCOL_INVALID);
+
+	SIMD_VEC(ipv4_ppp_protocol) = SIMD_SPLAT(clib_host_to_net_u16(PPP_PROTOCOL_ip4));
+	SIMD_VEC(ipv6_ppp_protocol) = SIMD_SPLAT(clib_host_to_net_u16(PPP_PROTOCOL_ip6));
+	SIMD_VEC(invalid_ppp_protocol) = SIMD_SPLAT(clib_host_to_net_u16(PPP_PROTOCOL_INVALID));
 
 	return 0;
 }

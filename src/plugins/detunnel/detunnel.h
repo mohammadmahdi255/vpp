@@ -36,7 +36,8 @@
 
 #define MAX_IF_SIZE	10
 #define ETHERNET_TYPE_INVALID	0x0000
-#define IP_PROTOCOL_INVALID	0xFFFF
+#define IP_PROTOCOL_INVALID		0xFFFF
+#define PPP_PROTOCOL_INVALID	0xFFFF
 
 #define foreach_ethertype	\
 	_(eoip_ethertype)		\
@@ -59,10 +60,17 @@
 	_(gre_protocol)				\
 	_(invalid_protocol)
 
+#undef foreach_ppp_protocol
+#define foreach_ppp_protocol		\
+	_(ipv4_ppp_protocol)			\
+	_(ipv6_ppp_protocol)			\
+	_(invalid_ppp_protocol)
+
 #define _(var)	extern SIMD_TYPE DETUNNEL_CONCAT(var, SIMD_TYPE);
 
 foreach_ethertype
 foreach_ip_protocol
+foreach_ppp_protocol
 #undef _
 
 typedef struct {
