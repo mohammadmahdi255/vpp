@@ -47,6 +47,7 @@
 	_(mpls_ethertype)				\
 	_(pppoe_session_ethertype)		\
 	_(pppoe_discovery_ethertype)	\
+	_(ppp_ethertype)				\
 	_(invalid_ethertype)
 
 #define foreach_ip_protocol		\

@@ -31,6 +31,7 @@ CLIB_MARCH_FN (detunnel_init, clib_error_t *, vlib_main_t __clib_unused *vm)
 	SIMD_VEC(mpls_ethertype) = SIMD_SPLAT(clib_host_to_net_u16(ETHERNET_TYPE_MPLS));
 	SIMD_VEC(pppoe_session_ethertype) = SIMD_SPLAT(clib_host_to_net_u16(ETHERNET_TYPE_PPPOE_SESSION));
 	SIMD_VEC(pppoe_discovery_ethertype) = SIMD_SPLAT(clib_host_to_net_u16(ETHERNET_TYPE_PPPOE_DISCOVERY));
+	SIMD_VEC(ppp_ethertype) = SIMD_SPLAT(clib_host_to_net_u16(ETHERNET_TYPE_PPP));
 	SIMD_VEC(invalid_ethertype) = SIMD_SPLAT(clib_host_to_net_u16(ETHERNET_TYPE_INVALID));
 
 	SIMD_VEC(ipv4_protocol) = SIMD_SPLAT(IP_PROTOCOL_IP_IN_IP);

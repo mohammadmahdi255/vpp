@@ -5,11 +5,12 @@
 
 #include <vppinfra/clib.h>
 
-#include <pppoe/pppoe.h>
+#include <ppp/ppp.h>
 
 #include "detunnel.h"
+#include "vppinfra/byte_order.h"
 
-#define foreach_pppoe_detunnel_next						\
+#define foreach_ppp_detunnel_next						\
 	_(drop_next, DROP, "drop")							\
 	_(ipv4_next, IPV4_DETUNNEL, "ipv4-detunnel")		\
 	_(ipv6_next, IPV6_DETUNNEL, "ipv6-detunnel")		\
@@ -17,41 +18,43 @@
 
 enum
 {
-#define _(var, id, name) PPPOE_NEXT_##id,
-	foreach_pppoe_detunnel_next
+#define _(var, id, name) PPP_NEXT_##id,
+	foreach_ppp_detunnel_next
 #undef _
-	PPPOE_NEXT_N,
+	PPP_NEXT_N,
 };
 
 #define _(var, id, name) static SIMD_TYPE DETUNNEL_CONCAT(var, SIMD_TYPE);
 
-foreach_pppoe_detunnel_next
+foreach_ppp_detunnel_next
 #undef _
 
 enum
 {
-#define _(id, name) PPPOE_##id,
+#define _(id, name) PPP_##id,
 	foreach_detunnel_counter
 #undef _
-	PPPOE_COUNTER_N,
+	PPP_COUNTER_N,
 };
+
+#define PPP_COMPRESSED_SIGNATURE	0x01
 
 typedef struct
 {
-	pppoe_header_t pppoe;
-} pppoe_trace_t;
+	ppp_header_t ppp;
+} ppp_trace_t;
 
 typedef struct
 {
 	u32 counter_if_index;
 	vlib_counter_t cache_counters[MAX_IF_SIZE];
-	vlib_combined_counter_main_t counters[PPPOE_COUNTER_N];
-} pppoe_detunnel_main_t;
+	vlib_combined_counter_main_t counters[PPP_COUNTER_N];
+} ppp_detunnel_main_t;
 
-extern pppoe_detunnel_main_t pppoe_detunnel_main;
+extern ppp_detunnel_main_t ppp_detunnel_main;
 
 static_always_inline void
-pppoe_to_next(u16 *next, u16 len)
+ppp_to_next(u16 *next, u16 len)
 {
 	for (u16 i = 0; i < len; i += SIMD_SIZE)
 	{
@@ -71,40 +74,56 @@ pppoe_to_next(u16 *next, u16 len)
 
 static_always_inline void
 add_trace(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b,
-		const pppoe_header_t *pppoe)
+		const ppp_header_t *ppp)
 {
 	if (PREDICT_FALSE((node->flags & VLIB_NODE_FLAG_TRACE) && (b->flags & VLIB_BUFFER_IS_TRACED)))
 	{
-		pppoe_trace_t *t = vlib_add_trace(vm, node, b, sizeof(*t));
-		t->pppoe = *pppoe;
+		ppp_trace_t *t = vlib_add_trace(vm, node, b, sizeof(*t));
+		t->ppp = *ppp;
 	}
 }
 
 static_always_inline void
 process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, u16 *next)
 {
-	pppoe_detunnel_main_t *pdm = &pppoe_detunnel_main;
+	ppp_detunnel_main_t *pdm = &ppp_detunnel_main;
 	const u32 sw_idx = vnet_buffer(b)->sw_if_index[VLIB_RX];
 
-	const pppoe_header_t *pppoe = vlib_buffer_get_current(b);
+	const u8 *data = vlib_buffer_get_current(b);
+	u16 offset = 0;
 
-	if (PREDICT_FALSE(!vlib_buffer_has_space(b, sizeof(pppoe_header_t))))
+	if (PREDICT_FALSE(!vlib_buffer_has_space(b, sizeof(ppp_header_t))))
 	{
 		next[0] = PPP_PROTOCOL_INVALID;
 		goto trace;
 	}
 
-	vlib_buffer_advance(b, sizeof(pppoe_header_t));
+	if (data[0] == 0xFF && data[1] == 0x03)
+	{
+		offset = sizeof(u16);
+	}
+
+	if (data[offset] & PPP_COMPRESSED_SIGNATURE)
+	{
+		offset += sizeof(u8);
+		next[0] = data[offset] << clib_arch_is_little_endian * 8;
+	}
+	else
+	{
+		offset += sizeof(u16);
+		next[0] = *(u16 *) (data + offset);
+	}
+
+	vlib_buffer_advance(b, offset);
 	pdm->cache_counters[sw_idx].packets++;
-	pdm->cache_counters[sw_idx].bytes += sizeof(pppoe_header_t);
-	next[0] = pppoe->ppp_proto;
+	pdm->cache_counters[sw_idx].bytes += offset;
 
 trace:
 	if (PREDICT_FALSE(node->flags & VLIB_NODE_FLAG_TRACE))
-		add_trace(vm, node, b, pppoe);
+		add_trace(vm, node, b, (ppp_header_t *) data);
 }
 
-VLIB_NODE_FN (pppoe_detunnel) (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_frame_t *frame)
+VLIB_NODE_FN (ppp_detunnel) (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_frame_t *frame)
 {
 	vlib_buffer_t *bufs[VLIB_FRAME_SIZE];
 	u16 nexts[VLIB_FRAME_SIZE];
@@ -120,17 +139,17 @@ VLIB_NODE_FN (pppoe_detunnel) (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_
 	vnet_interface_main_t *im = &vnm->interface_main;
 	u32 max_sw_if_index = pool_elts(im->sw_interfaces);
 
-	pppoe_detunnel_main_t *pdm = &pppoe_detunnel_main;
+	ppp_detunnel_main_t *pdm = &ppp_detunnel_main;
 
 	if (PREDICT_FALSE(pdm->counter_if_index < max_sw_if_index))
 	{
-#define _(id, name) vlib_validate_combined_counter(&pdm->counters[PPPOE_##id], max_sw_if_index);
+#define _(id, name) vlib_validate_combined_counter(&pdm->counters[PPP_##id], max_sw_if_index);
 	foreach_detunnel_counter
 #undef _
 
 		for (u32 i = pdm->counter_if_index + 1; i <= max_sw_if_index; i++)
 		{
-#define _(id, name) vlib_zero_combined_counter(&pdm->counters[PPPOE_##id], i);
+#define _(id, name) vlib_zero_combined_counter(&pdm->counters[PPP_##id], i);
 	foreach_detunnel_counter
 #undef _
 		}
@@ -175,76 +194,73 @@ VLIB_NODE_FN (pppoe_detunnel) (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_
 	for (u32 sw_idx = 0; sw_idx <= max_sw_if_index; sw_idx++)
 	{
 		vlib_counter_t *counter = &pdm->cache_counters[sw_idx];
-		vlib_increment_combined_counter(&pdm->counters[PPPOE_PROCESSED], vm->thread_index,
+		vlib_increment_combined_counter(&pdm->counters[PPP_PROCESSED], vm->thread_index,
 				sw_idx, counter->packets, counter->bytes);
 
 		counter->packets = 0;
 		counter->bytes = 0;
 	}
 
-	pppoe_to_next(nexts, frame->n_vectors);
+	ppp_to_next(nexts, frame->n_vectors);
 	vlib_buffer_enqueue_to_next(vm, node, from, nexts, frame->n_vectors);
 
 	return frame->n_vectors;
 }
 
 #ifndef CLIB_MARCH_VARIANT
-pppoe_detunnel_main_t pppoe_detunnel_main;
+ppp_detunnel_main_t ppp_detunnel_main;
 
-static u8 *format_pppoe_trace(u8 *s, va_list *args)
+static u8 *format_ppp_trace(u8 *s, va_list *args)
 {
 	vlib_main_t __clib_unused *vm = va_arg(*args, vlib_main_t *);
 	vlib_node_t __clib_unused *node = va_arg(*args, vlib_node_t *);
-	pppoe_trace_t *t = va_arg(*args, pppoe_trace_t *);
-	return format(s, "ver_type     0x%02x\n"
-			"  code         0x%02x\n"
-			"  session id   0x%04x\n"
-			"  payload      %u\n"
-			"  protocol     0x%04x",
-			t->pppoe.ver_type,
-			t->pppoe.code,
-			t->pppoe.session_id,
-			t->pppoe.length);
+	ppp_trace_t *t = va_arg(*args, ppp_trace_t *);
+	return format(s, "address   0x%02x\n"
+			"  control   0x%02x\n"
+			"  protocol  0x%04x",
+			t->ppp.address,
+			t->ppp.control,
+			t->ppp.protocol);
 }
 
 /* Register node */
-VLIB_REGISTER_NODE (pppoe_detunnel) = {
-	.name = "pppoe-detunnel",
+VLIB_REGISTER_NODE (ppp_detunnel) = {
+	.name = "ppp-detunnel",
 	.vector_size = sizeof(u32),
-	.format_trace = format_pppoe_trace,
+	.format_trace = format_ppp_trace,
 	.type = VLIB_NODE_TYPE_INTERNAL,
-	.n_next_nodes = PPPOE_NEXT_N,
+	.n_next_nodes = PPP_NEXT_N,
 	.next_nodes = {
-#define _(var, id, name) [PPPOE_NEXT_##id] = (name),
-	foreach_pppoe_detunnel_next
+#define _(var, id, name) [PPP_NEXT_##id] = (name),
+	foreach_ppp_detunnel_next
 #undef _
 	},
 };
 #endif
 
-CLIB_MARCH_FN (pppoe_detunnel_init, clib_error_t *, vlib_main_t __clib_unused *vm)
+CLIB_MARCH_FN (ppp_detunnel_init, clib_error_t *, vlib_main_t __clib_unused *vm)
 {
 	clib_warning("size: %lu %s", SIMD_SIZE, CLIB_STRING_MACRO(SIMD_TYPE));
 
-	SIMD_VEC(drop_next) = SIMD_SPLAT(PPPOE_NEXT_DROP);
-	SIMD_VEC(ipv4_next) = SIMD_SPLAT(PPPOE_NEXT_IPV4_DETUNNEL);
-	SIMD_VEC(ipv6_next) = SIMD_SPLAT(PPPOE_NEXT_IPV6_DETUNNEL);
-	SIMD_VEC(failed_next) = SIMD_SPLAT(PPPOE_NEXT_FAILED_DETUNNEL);
+	SIMD_VEC(drop_next) = SIMD_SPLAT(PPP_NEXT_DROP);
+	SIMD_VEC(ipv4_next) = SIMD_SPLAT(PPP_NEXT_IPV4_DETUNNEL);
+	SIMD_VEC(ipv6_next) = SIMD_SPLAT(PPP_NEXT_IPV6_DETUNNEL);
+	SIMD_VEC(failed_next) = SIMD_SPLAT(PPP_NEXT_FAILED_DETUNNEL);
 
 	return 0;
 }
 
-static clib_error_t *pppoe_detunnel_init(vlib_main_t *vm)
+static clib_error_t *ppp_detunnel_init(vlib_main_t *vm)
 {
-	pppoe_detunnel_main_t *pdm = &pppoe_detunnel_main;
+	ppp_detunnel_main_t *pdm = &ppp_detunnel_main;
 	vnet_main_t *vnm = vnet_get_main();
 	vnet_interface_main_t *im = &vnm->interface_main;
 	pdm->counter_if_index = pool_elts(im->sw_interfaces);
 
 #define _(E, n)																\
-	vlib_combined_counter_main_t *cm_##n = &pdm->counters[PPPOE_##E];		\
-	cm_##n->name = "pppoe_" #n;												\
-	cm_##n->stat_segment_name = "/detunnel/pppoe/" #n;						\
+	vlib_combined_counter_main_t *cm_##n = &pdm->counters[PPP_##E];		\
+	cm_##n->name = "ppp_" #n;												\
+	cm_##n->stat_segment_name = "/detunnel/ppp/" #n;						\
 	vlib_validate_combined_counter(cm_##n, pdm->counter_if_index);			\
 	vlib_zero_combined_counter(cm_##n, pdm->counter_if_index);
 
@@ -253,7 +269,7 @@ static clib_error_t *pppoe_detunnel_init(vlib_main_t *vm)
 
 	clib_memset(pdm->cache_counters, 0, sizeof(pdm->cache_counters));
 
-	return CLIB_MARCH_FN_SELECT(pppoe_detunnel_init) (vm);
+	return CLIB_MARCH_FN_SELECT(ppp_detunnel_init) (vm);
 }
 
-VLIB_INIT_FUNCTION (pppoe_detunnel_init);
+VLIB_INIT_FUNCTION (ppp_detunnel_init);
