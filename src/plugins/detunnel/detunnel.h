@@ -39,12 +39,14 @@
 #define IP_PROTOCOL_INVALID		0xFFFF
 #define PPP_PROTOCOL_INVALID	0xFFFF
 
-#define foreach_ethertype	\
-	_(eoip_ethertype)		\
-	_(vlan_ethertype)		\
-	_(ipv4_ethertype)		\
-	_(ipv6_ethertype)		\
-	_(mpls_ethertype)		\
+#define foreach_ethertype			\
+	_(eoip_ethertype)				\
+	_(vlan_ethertype)				\
+	_(ipv4_ethertype)				\
+	_(ipv6_ethertype)				\
+	_(mpls_ethertype)				\
+	_(pppoe_session_ethertype)		\
+	_(pppoe_discovery_ethertype)	\
 	_(invalid_ethertype)
 
 #define foreach_ip_protocol		\

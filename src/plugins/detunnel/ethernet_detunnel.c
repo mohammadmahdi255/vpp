@@ -17,6 +17,7 @@
 	_(ipv4_next, IPV4_DETUNNEL, "ipv4-detunnel")		\
 	_(ipv6_next, IPV6_DETUNNEL, "ipv6-detunnel")		\
 	_(mpls_next, MPLS_DETUNNEL, "mpls-detunnel")		\
+	_(pppoe_next, PPPOE_DETUNNEL, "pppoe-detunnel")		\
 	_(failed_next, FAILED_DETUNNEL, "failed-detunnel")
 
 enum
@@ -65,6 +66,8 @@ ethernet_to_next(u16 *next, u16 len)
 		SIMD_TYPE ipv4_mask_vec = (next_vec == SIMD_VEC(ipv4_ethertype));
 		SIMD_TYPE ipv6_mask_vec = (next_vec == SIMD_VEC(ipv6_ethertype));
 		SIMD_TYPE mpls_mask_vec = (next_vec == SIMD_VEC(mpls_ethertype));
+		SIMD_TYPE pppoe_mask_vec = (next_vec == SIMD_VEC(pppoe_session_ethertype)) |
+				(next_vec == SIMD_VEC(pppoe_discovery_ethertype));
 		SIMD_TYPE failed_mask_vec = (next_vec == SIMD_VEC(invalid_ethertype));
 
 		SIMD_TYPE result = SIMD_VEC(drop_next) |
@@ -72,6 +75,7 @@ ethernet_to_next(u16 *next, u16 len)
 				(ipv4_mask_vec & SIMD_VEC(ipv4_next)) |
 				(ipv6_mask_vec & SIMD_VEC(ipv6_next)) |
 				(mpls_mask_vec & SIMD_VEC(mpls_next)) |
+				(pppoe_mask_vec & SIMD_VEC(pppoe_next)) |
 				(failed_mask_vec & SIMD_VEC(failed_next));
 
 		SIMD_STORE(result, next + i);
@@ -236,6 +240,7 @@ CLIB_MARCH_FN (ethernet_detunnel_init, clib_error_t *, vlib_main_t __clib_unused
 	SIMD_VEC(ipv4_next) = SIMD_SPLAT(ETHERNET_NEXT_IPV4_DETUNNEL);
 	SIMD_VEC(ipv6_next) = SIMD_SPLAT(ETHERNET_NEXT_IPV6_DETUNNEL);
 	SIMD_VEC(mpls_next) = SIMD_SPLAT(ETHERNET_NEXT_MPLS_DETUNNEL);
+	SIMD_VEC(pppoe_next) = SIMD_SPLAT(ETHERNET_NEXT_PPPOE_DETUNNEL);
 	SIMD_VEC(failed_next) = SIMD_SPLAT(ETHERNET_NEXT_FAILED_DETUNNEL);
 
 	return 0;
