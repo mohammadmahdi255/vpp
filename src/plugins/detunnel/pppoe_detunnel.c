@@ -83,7 +83,7 @@ add_trace(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b,
 static_always_inline void
 process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, u16 *next)
 {
-	pppoe_detunnel_main_t *vdm = &pppoe_detunnel_main;
+	pppoe_detunnel_main_t *pdm = &pppoe_detunnel_main;
 	const u32 sw_idx = vnet_buffer(b)->sw_if_index[VLIB_RX];
 
 	const pppoe_header_t *pppoe = vlib_buffer_get_current(b);
@@ -95,8 +95,8 @@ process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, 
 	}
 
 	vlib_buffer_advance(b, sizeof(pppoe_header_t));
-	vdm->cache_counters[sw_idx].packets++;
-	vdm->cache_counters[sw_idx].bytes += sizeof(pppoe_header_t);
+	pdm->cache_counters[sw_idx].packets++;
+	pdm->cache_counters[sw_idx].bytes += sizeof(pppoe_header_t);
 	next[0] = pppoe->ppp_proto;
 
 trace:
@@ -120,22 +120,22 @@ VLIB_NODE_FN (pppoe_detunnel) (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_
 	vnet_interface_main_t *im = &vnm->interface_main;
 	u32 max_sw_if_index = pool_elts(im->sw_interfaces);
 
-	pppoe_detunnel_main_t *vdm = &pppoe_detunnel_main;
+	pppoe_detunnel_main_t *pdm = &pppoe_detunnel_main;
 
-	if (PREDICT_FALSE(vdm->counter_if_index < max_sw_if_index))
+	if (PREDICT_FALSE(pdm->counter_if_index < max_sw_if_index))
 	{
-#define _(id, name) vlib_validate_combined_counter(&vdm->counters[PPPOE_##id], max_sw_if_index);
+#define _(id, name) vlib_validate_combined_counter(&pdm->counters[PPPOE_##id], max_sw_if_index);
 	foreach_detunnel_counter
 #undef _
 
-		for (u32 i = vdm->counter_if_index + 1; i <= max_sw_if_index; i++)
+		for (u32 i = pdm->counter_if_index + 1; i <= max_sw_if_index; i++)
 		{
-#define _(id, name) vlib_zero_combined_counter(&vdm->counters[PPPOE_##id], i);
+#define _(id, name) vlib_zero_combined_counter(&pdm->counters[PPPOE_##id], i);
 	foreach_detunnel_counter
 #undef _
 		}
 
-		vdm->counter_if_index = max_sw_if_index;
+		pdm->counter_if_index = max_sw_if_index;
 	}
 
 	while (n_left_from >= 4)
@@ -174,8 +174,8 @@ VLIB_NODE_FN (pppoe_detunnel) (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_
 
 	for (u32 sw_idx = 0; sw_idx <= max_sw_if_index; sw_idx++)
 	{
-		vlib_counter_t *counter = &vdm->cache_counters[sw_idx];
-		vlib_increment_combined_counter(&vdm->counters[PPPOE_PROCESSED], vm->thread_index,
+		vlib_counter_t *counter = &pdm->cache_counters[sw_idx];
+		vlib_increment_combined_counter(&pdm->counters[PPPOE_PROCESSED], vm->thread_index,
 				sw_idx, counter->packets, counter->bytes);
 
 		counter->packets = 0;
@@ -236,22 +236,22 @@ CLIB_MARCH_FN (pppoe_detunnel_init, clib_error_t *, vlib_main_t __clib_unused *v
 
 static clib_error_t *pppoe_detunnel_init(vlib_main_t *vm)
 {
-	pppoe_detunnel_main_t *vdm = &pppoe_detunnel_main;
+	pppoe_detunnel_main_t *pdm = &pppoe_detunnel_main;
 	vnet_main_t *vnm = vnet_get_main();
 	vnet_interface_main_t *im = &vnm->interface_main;
-	vdm->counter_if_index = pool_elts(im->sw_interfaces);
+	pdm->counter_if_index = pool_elts(im->sw_interfaces);
 
 #define _(E, n)																\
-	vlib_combined_counter_main_t *cm_##n = &vdm->counters[PPPOE_##E];		\
+	vlib_combined_counter_main_t *cm_##n = &pdm->counters[PPPOE_##E];		\
 	cm_##n->name = "pppoe_" #n;												\
 	cm_##n->stat_segment_name = "/detunnel/pppoe/" #n;						\
-	vlib_validate_combined_counter(cm_##n, vdm->counter_if_index);			\
-	vlib_zero_combined_counter(cm_##n, vdm->counter_if_index);
+	vlib_validate_combined_counter(cm_##n, pdm->counter_if_index);			\
+	vlib_zero_combined_counter(cm_##n, pdm->counter_if_index);
 
 	foreach_detunnel_counter
 #undef _
 
-	clib_memset(vdm->cache_counters, 0, sizeof(vdm->cache_counters));
+	clib_memset(pdm->cache_counters, 0, sizeof(pdm->cache_counters));
 
 	return CLIB_MARCH_FN_SELECT(pppoe_detunnel_init) (vm);
 }
