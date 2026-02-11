@@ -14,6 +14,7 @@ extern void ipv4_detunnel_counter_validate(u32 sw_if_index);
 extern void udp_detunnel_counter_validate(u32 sw_if_index);
 extern void gtpu_detunnel_counter_validate(u32 sw_if_index);
 extern void gre_detunnel_counter_validate(u32 sw_if_index);
+extern void ipv6_detunnel_counter_validate(u32 sw_if_index);
 
 static clib_error_t *
 set_interface_detunnel_command_fn(vlib_main_t __clib_unused *vm, unformat_input_t *input,
@@ -58,6 +59,7 @@ set_interface_detunnel_command_fn(vlib_main_t __clib_unused *vm, unformat_input_
 	udp_detunnel_counter_validate(sw_if_index);
 	gtpu_detunnel_counter_validate(sw_if_index);
 	gre_detunnel_counter_validate(sw_if_index);
+	ipv6_detunnel_counter_validate(sw_if_index);
 
 	return 0;
 }
