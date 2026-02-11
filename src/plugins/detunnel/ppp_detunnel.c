@@ -76,7 +76,7 @@ static_always_inline void
 add_trace(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b,
 		const ppp_header_t *ppp)
 {
-	if (PREDICT_FALSE((node->flags & VLIB_NODE_FLAG_TRACE) && (b->flags & VLIB_BUFFER_IS_TRACED)))
+	if (PREDICT_FALSE(b->flags & VLIB_BUFFER_IS_TRACED))
 	{
 		ppp_trace_t *t = vlib_add_trace(vm, node, b, sizeof(*t));
 		t->ppp = *ppp;
@@ -84,7 +84,7 @@ add_trace(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b,
 }
 
 static_always_inline void
-process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, u16 *next)
+process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, u16 *next, u8 is_trace)
 {
 	ppp_detunnel_main_t *pdm = &ppp_detunnel_main;
 	const u32 sw_idx = vnet_buffer(b)->sw_if_index[VLIB_RX];
@@ -119,11 +119,12 @@ process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, 
 	pdm->cache_counters[sw_idx].bytes += offset;
 
 trace:
-	if (PREDICT_FALSE(node->flags & VLIB_NODE_FLAG_TRACE))
+	if (is_trace)
 		add_trace(vm, node, b, (ppp_header_t *) data);
 }
 
-VLIB_NODE_FN (ppp_detunnel) (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_frame_t *frame)
+static_always_inline u64
+ppp_detunnel_inline(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_frame_t *frame, u8 is_trace)
 {
 	vlib_buffer_t *bufs[VLIB_FRAME_SIZE];
 	u16 nexts[VLIB_FRAME_SIZE];
@@ -135,27 +136,7 @@ VLIB_NODE_FN (ppp_detunnel) (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_fr
 
 	vlib_get_buffers(vm, from, bufs, n_left_from);
 
-	vnet_main_t *vnm = vnet_get_main();
-	vnet_interface_main_t *im = &vnm->interface_main;
-	u32 max_sw_if_index = pool_elts(im->sw_interfaces);
-
 	ppp_detunnel_main_t *pdm = &ppp_detunnel_main;
-
-	if (PREDICT_FALSE(pdm->counter_if_index < max_sw_if_index))
-	{
-#define _(id, name) vlib_validate_combined_counter(&pdm->counters[PPP_##id], max_sw_if_index);
-	foreach_detunnel_counter
-#undef _
-
-		for (u32 i = pdm->counter_if_index + 1; i <= max_sw_if_index; i++)
-		{
-#define _(id, name) vlib_zero_combined_counter(&pdm->counters[PPP_##id], i);
-	foreach_detunnel_counter
-#undef _
-		}
-
-		pdm->counter_if_index = max_sw_if_index;
-	}
 
 	while (n_left_from >= 4)
 	{
@@ -172,10 +153,10 @@ VLIB_NODE_FN (ppp_detunnel) (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_fr
 			vlib_prefetch_buffer_data(b[7], LOAD);
 		}
 
-		process_buffer_1x(vm, node, b[0], &next[0]);
-		process_buffer_1x(vm, node, b[1], &next[1]);
-		process_buffer_1x(vm, node, b[2], &next[2]);
-		process_buffer_1x(vm, node, b[3], &next[3]);
+		process_buffer_1x(vm, node, b[0], &next[0], is_trace);
+		process_buffer_1x(vm, node, b[1], &next[1], is_trace);
+		process_buffer_1x(vm, node, b[2], &next[2], is_trace);
+		process_buffer_1x(vm, node, b[3], &next[3], is_trace);
 
 		b += 4;
 		next += 4;
@@ -184,14 +165,14 @@ VLIB_NODE_FN (ppp_detunnel) (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_fr
 
 	while (n_left_from > 0)
 	{
-		process_buffer_1x(vm, node, b[0], next);
+		process_buffer_1x(vm, node, b[0], next, is_trace);
 
 		b++;
 		next++;
 		n_left_from--;
 	}
 
-	for (u32 sw_idx = 0; sw_idx <= max_sw_if_index; sw_idx++)
+	for (u32 sw_idx = 0; sw_idx <= pdm->counter_if_index; sw_idx++)
 	{
 		vlib_counter_t *counter = &pdm->cache_counters[sw_idx];
 		vlib_increment_combined_counter(&pdm->counters[PPP_PROCESSED], vm->thread_index,
@@ -205,6 +186,11 @@ VLIB_NODE_FN (ppp_detunnel) (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_fr
 	vlib_buffer_enqueue_to_next(vm, node, from, nexts, frame->n_vectors);
 
 	return frame->n_vectors;
+}
+
+VLIB_NODE_FN (ppp_detunnel) (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_frame_t *frame)
+{
+	return ppp_detunnel_inline(vm, node, frame, node->flags & VLIB_NODE_FLAG_TRACE);
 }
 
 #ifndef CLIB_MARCH_VARIANT
@@ -236,6 +222,30 @@ VLIB_REGISTER_NODE (ppp_detunnel) = {
 #undef _
 	},
 };
+
+void ppp_detunnel_counter_validate(u32 sw_if_index)
+{
+	ppp_detunnel_main_t *pdm = &ppp_detunnel_main;
+
+	clib_warning("interface max index %u", sw_if_index);
+
+	if (PREDICT_FALSE(pdm->counter_if_index < sw_if_index))
+	{
+#define _(id, name) vlib_validate_combined_counter(&pdm->counters[PPP_##id], sw_if_index);
+	foreach_detunnel_counter
+#undef _
+
+		for (u32 i = pdm->counter_if_index + 1; i <= sw_if_index; i++)
+		{
+#define _(id, name) vlib_zero_combined_counter(&pdm->counters[PPP_##id], i);
+	foreach_detunnel_counter
+#undef _
+		}
+
+		pdm->counter_if_index = sw_if_index;
+	}
+}
+
 #endif
 
 CLIB_MARCH_FN (ppp_detunnel_init, clib_error_t *, vlib_main_t __clib_unused *vm)
