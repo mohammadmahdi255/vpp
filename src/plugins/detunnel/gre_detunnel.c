@@ -254,10 +254,7 @@ gre_detunnel_inline(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_frame_t *fr
 
 VLIB_NODE_FN (gre_detunnel) (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_frame_t *frame)
 {
-	if (PREDICT_FALSE(node->flags & VLIB_NODE_FLAG_TRACE))
-		return gre_detunnel_inline(vm, node, frame, 1);
-	else
-		return gre_detunnel_inline(vm, node, frame, 0);
+	return gre_detunnel_inline(vm, node, frame, node->flags & VLIB_NODE_FLAG_TRACE);
 }
 
 #ifndef CLIB_MARCH_VARIANT

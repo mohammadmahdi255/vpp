@@ -199,10 +199,7 @@ udp_detunnel_inline(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_frame_t *fr
 
 VLIB_NODE_FN (udp_detunnel) (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_frame_t *frame)
 {
-	if (PREDICT_FALSE(node->flags & VLIB_NODE_FLAG_TRACE))
-		return udp_detunnel_inline(vm, node, frame, 1);
-	else
-		return udp_detunnel_inline(vm, node, frame, 0);
+	return udp_detunnel_inline(vm, node, frame, node->flags & VLIB_NODE_FLAG_TRACE);
 }
 
 #ifndef CLIB_MARCH_VARIANT

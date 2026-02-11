@@ -68,7 +68,7 @@ static_always_inline void
 add_trace(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b,
 		const l2tp_header_t *l2tp)
 {
-	if (PREDICT_FALSE((node->flags & VLIB_NODE_FLAG_TRACE) && (b->flags & VLIB_BUFFER_IS_TRACED)))
+	if (PREDICT_FALSE(b->flags & VLIB_BUFFER_IS_TRACED))
 	{
 		l2tp_trace_t *t = vlib_add_trace(vm, node, b, sizeof(l2tp_trace_t));
 		t->l2tp = *l2tp;
@@ -76,7 +76,7 @@ add_trace(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b,
 }
 
 static_always_inline void
-process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, u16 *next)
+process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, u16 *next, u8 is_trace)
 {
 	l2tp_detunnel_main_t *ldm = &l2tp_detunnel_main;
 	const u32 sw_idx = vnet_buffer(b)->sw_if_index[VLIB_RX];
@@ -109,11 +109,12 @@ process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, 
 	next[0] = L2TP_NEXT_PPP_DETUNNEL;
 
 trace:
-	if (PREDICT_FALSE(node->flags & VLIB_NODE_FLAG_TRACE))
+	if (is_trace)
 		add_trace(vm, node, b, l2tp);
 }
 
-VLIB_NODE_FN (l2tp_detunnel) (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_frame_t *frame)
+static_always_inline u64
+l2tp_detunnel_inline(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_frame_t *frame, u8 is_trace)
 {
 	vlib_buffer_t *bufs[VLIB_FRAME_SIZE];
 	u16 nexts[VLIB_FRAME_SIZE];
@@ -125,27 +126,7 @@ VLIB_NODE_FN (l2tp_detunnel) (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_f
 
 	vlib_get_buffers(vm, from, bufs, n_left_from);
 
-	vnet_main_t *vnm = vnet_get_main();
-	vnet_interface_main_t *im = &vnm->interface_main;
-	u32 max_sw_if_index = pool_elts(im->sw_interfaces);
-
 	l2tp_detunnel_main_t *ldm = &l2tp_detunnel_main;
-
-	if (PREDICT_FALSE(ldm->counter_if_index < max_sw_if_index))
-	{
-#define _(id, name) vlib_validate_combined_counter(&ldm->counters[L2TP_##id], max_sw_if_index);
-	foreach_detunnel_counter
-#undef _
-
-		for (u32 i = ldm->counter_if_index + 1; i <= max_sw_if_index; i++)
-		{
-#define _(id, name) vlib_zero_combined_counter(&ldm->counters[L2TP_##id], i);
-	foreach_detunnel_counter
-#undef _
-		}
-
-		ldm->counter_if_index = max_sw_if_index;
-	}
 
 	while (n_left_from >= 4)
 	{
@@ -163,10 +144,10 @@ VLIB_NODE_FN (l2tp_detunnel) (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_f
 			vlib_prefetch_buffer_data(b[7], LOAD);
 		}
 
-		process_buffer_1x(vm, node, b[0], &next[0]);
-		process_buffer_1x(vm, node, b[1], &next[1]);
-		process_buffer_1x(vm, node, b[2], &next[2]);
-		process_buffer_1x(vm, node, b[3], &next[3]);
+		process_buffer_1x(vm, node, b[0], &next[0], is_trace);
+		process_buffer_1x(vm, node, b[1], &next[1], is_trace);
+		process_buffer_1x(vm, node, b[2], &next[2], is_trace);
+		process_buffer_1x(vm, node, b[3], &next[3], is_trace);
 
 		b += 4;
 		next += 4;
@@ -175,14 +156,14 @@ VLIB_NODE_FN (l2tp_detunnel) (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_f
 
 	while (n_left_from > 0)
 	{
-		process_buffer_1x(vm, node, b[0], next);
+		process_buffer_1x(vm, node, b[0], next, is_trace);
 
 		b++;
 		next++;
 		n_left_from--;
 	}
 
-	for (u32 sw_idx = 0; sw_idx <= max_sw_if_index; sw_idx++)
+	for (u32 sw_idx = 0; sw_idx <= ldm->counter_if_index; sw_idx++)
 	{
 		vlib_counter_t *counter = &ldm->cache_counters[sw_idx];
 		vlib_increment_combined_counter(&ldm->counters[L2TP_PROCESSED], vm->thread_index,
@@ -195,6 +176,11 @@ VLIB_NODE_FN (l2tp_detunnel) (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_f
 	vlib_buffer_enqueue_to_next(vm, node, from, nexts, frame->n_vectors);
 
 	return frame->n_vectors;
+}
+
+VLIB_NODE_FN (l2tp_detunnel) (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_frame_t *frame)
+{
+	return l2tp_detunnel_inline(vm, node, frame, node->flags & VLIB_NODE_FLAG_TRACE);
 }
 
 #ifndef CLIB_MARCH_VARIANT
@@ -221,6 +207,30 @@ VLIB_REGISTER_NODE (l2tp_detunnel) = {
 #undef _
 	},
 };
+
+void l2tp_detunnel_counter_validate(u32 sw_if_index)
+{
+	l2tp_detunnel_main_t *ldm = &l2tp_detunnel_main;
+
+	clib_warning("interface max index %u", sw_if_index);
+
+	if (PREDICT_FALSE(ldm->counter_if_index < sw_if_index))
+	{
+#define _(id, name) vlib_validate_combined_counter(&ldm->counters[L2TP_##id], sw_if_index);
+	foreach_detunnel_counter
+#undef _
+
+		for (u32 i = ldm->counter_if_index + 1; i <= sw_if_index; i++)
+		{
+#define _(id, name) vlib_zero_combined_counter(&ldm->counters[L2TP_##id], i);
+	foreach_detunnel_counter
+#undef _
+		}
+
+		ldm->counter_if_index = sw_if_index;
+	}
+}
+
 #endif
 
 static clib_error_t *l2tp_detunnel_init(vlib_main_t __clib_unused *vm)
