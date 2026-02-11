@@ -96,9 +96,9 @@ add_trace(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b,
 }
 
 static_always_inline void
-process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, u16 *next)
+process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, u16 *next, u8 is_trace)
 {
-	mpls_detunnel_main_t *edm = &mpls_detunnel_main;
+	mpls_detunnel_main_t *mdm = &mpls_detunnel_main;
     const u32 sw_idx = vnet_buffer(b)->sw_if_index[VLIB_RX];
     u32 offset = 0;
 	u32 is_eos;
@@ -120,16 +120,17 @@ process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, 
 	} while (!is_eos);
 
 	vlib_buffer_advance(b, offset);
-	edm->cache_counters[sw_idx].packets++;
-	edm->cache_counters[sw_idx].bytes += offset;
+	mdm->cache_counters[sw_idx].packets++;
+	mdm->cache_counters[sw_idx].bytes += offset;
 	next[0] = *(u8 *)vlib_buffer_get_current(b) & 0xF0;
 
 trace:
-	if (PREDICT_FALSE(node->flags & VLIB_NODE_FLAG_TRACE))
+	if (is_trace)
 		add_trace(vm, node, b, offset / sizeof(mpls_label_t));
 }
 
-VLIB_NODE_FN (mpls_detunnel) (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_frame_t *frame)
+static_always_inline u64
+mpls_detunnel_inline(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_frame_t *frame, u8 is_trace)
 {
 	vlib_buffer_t *bufs[VLIB_FRAME_SIZE];
 	u16 nexts[VLIB_FRAME_SIZE];
@@ -141,27 +142,7 @@ VLIB_NODE_FN (mpls_detunnel) (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_f
 
 	vlib_get_buffers(vm, from, bufs, n_left_from);
 
-	vnet_main_t *vnm = vnet_get_main();
-	vnet_interface_main_t *im = &vnm->interface_main;
-	u32 max_sw_if_index = pool_elts(im->sw_interfaces);
-
-	mpls_detunnel_main_t *edm = &mpls_detunnel_main;
-
-	if (PREDICT_FALSE(edm->counter_if_index < max_sw_if_index))
-	{
-#define _(id, name) vlib_validate_combined_counter(&edm->counters[MPLS_##id], max_sw_if_index);
-	foreach_detunnel_counter
-#undef _
-
-		for (u32 i = edm->counter_if_index + 1; i <= max_sw_if_index; i++)
-		{
-#define _(id, name) vlib_zero_combined_counter(&edm->counters[MPLS_##id], i);
-	foreach_detunnel_counter
-#undef _
-		}
-
-		edm->counter_if_index = max_sw_if_index;
-	}
+	mpls_detunnel_main_t *mdm = &mpls_detunnel_main;
 
 	while (n_left_from >= 4)
 	{
@@ -179,10 +160,10 @@ VLIB_NODE_FN (mpls_detunnel) (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_f
 			vlib_prefetch_buffer_data(b[7], LOAD);
 		}
 
-		process_buffer_1x(vm, node, b[0], &next[0]);
-		process_buffer_1x(vm, node, b[1], &next[1]);
-		process_buffer_1x(vm, node, b[2], &next[2]);
-		process_buffer_1x(vm, node, b[3], &next[3]);
+		process_buffer_1x(vm, node, b[0], &next[0], is_trace);
+		process_buffer_1x(vm, node, b[1], &next[1], is_trace);
+		process_buffer_1x(vm, node, b[2], &next[2], is_trace);
+		process_buffer_1x(vm, node, b[3], &next[3], is_trace);
 
 		b += 4;
 		next += 4;
@@ -191,17 +172,17 @@ VLIB_NODE_FN (mpls_detunnel) (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_f
 
 	while (n_left_from > 0)
 	{
-		process_buffer_1x(vm, node, b[0], next);
+		process_buffer_1x(vm, node, b[0], next, is_trace);
 
 		b++;
 		next++;
 		n_left_from--;
 	}
 
-	for (u32 sw_idx = 0; sw_idx <= max_sw_if_index; sw_idx++)
+	for (u32 sw_idx = 0; sw_idx <= mdm->counter_if_index; sw_idx++)
 	{
-		vlib_counter_t *counter = &edm->cache_counters[sw_idx];
-		vlib_increment_combined_counter(&edm->counters[MPLS_PROCESSED], vm->thread_index,
+		vlib_counter_t *counter = &mdm->cache_counters[sw_idx];
+		vlib_increment_combined_counter(&mdm->counters[MPLS_PROCESSED], vm->thread_index,
 				sw_idx, counter->packets, counter->bytes);
 
 		counter->packets = 0;
@@ -212,6 +193,11 @@ VLIB_NODE_FN (mpls_detunnel) (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_f
 	vlib_buffer_enqueue_to_next(vm, node, from, nexts, frame->n_vectors);
 
 	return frame->n_vectors;
+}
+
+VLIB_NODE_FN (mpls_detunnel) (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_frame_t *frame)
+{
+	return mpls_detunnel_inline(vm, node, frame, node->flags & VLIB_NODE_FLAG_TRACE);
 }
 
 #ifndef CLIB_MARCH_VARIANT
@@ -237,6 +223,30 @@ VLIB_REGISTER_NODE (mpls_detunnel) = {
 #undef _
 	},
 };
+
+void mpls_detunnel_counter_validate(u32 sw_if_index)
+{
+	mpls_detunnel_main_t *mdm = &mpls_detunnel_main;
+
+	clib_warning("interface max index %u", sw_if_index);
+
+	if (PREDICT_FALSE(mdm->counter_if_index < sw_if_index))
+	{
+#define _(id, name) vlib_validate_combined_counter(&mdm->counters[MPLS_##id], sw_if_index);
+	foreach_detunnel_counter
+#undef _
+
+		for (u32 i = mdm->counter_if_index + 1; i <= sw_if_index; i++)
+		{
+#define _(id, name) vlib_zero_combined_counter(&mdm->counters[MPLS_##id], i);
+	foreach_detunnel_counter
+#undef _
+		}
+
+		mdm->counter_if_index = sw_if_index;
+	}
+}
+
 #endif
 
 CLIB_MARCH_FN (mpls_detunnel_init, clib_error_t *, vlib_main_t __clib_unused *vm)
@@ -256,22 +266,22 @@ CLIB_MARCH_FN (mpls_detunnel_init, clib_error_t *, vlib_main_t __clib_unused *vm
 
 static clib_error_t *mpls_detunnel_init(vlib_main_t *vm)
 {
-	mpls_detunnel_main_t *edm = &mpls_detunnel_main;
+	mpls_detunnel_main_t *mdm = &mpls_detunnel_main;
 	vnet_main_t *vnm = vnet_get_main();
 	vnet_interface_main_t *im = &vnm->interface_main;
-	edm->counter_if_index = pool_elts(im->sw_interfaces);
+	mdm->counter_if_index = pool_elts(im->sw_interfaces);
 
 #define _(E, n)																\
-	vlib_combined_counter_main_t *cm_##n = &edm->counters[MPLS_##E];	\
+	vlib_combined_counter_main_t *cm_##n = &mdm->counters[MPLS_##E];	\
 	cm_##n->name = "mpls_" #n;											\
 	cm_##n->stat_segment_name = "/detunnel/mpls/" #n;					\
-	vlib_validate_combined_counter(cm_##n, edm->counter_if_index);			\
-	vlib_zero_combined_counter(cm_##n, edm->counter_if_index);
+	vlib_validate_combined_counter(cm_##n, mdm->counter_if_index);			\
+	vlib_zero_combined_counter(cm_##n, mdm->counter_if_index);
 
 	foreach_detunnel_counter
 #undef _
 
-	clib_memset(edm->cache_counters, 0, sizeof(edm->cache_counters));
+	clib_memset(mdm->cache_counters, 0, sizeof(mdm->cache_counters));
 
 	return CLIB_MARCH_FN_SELECT(mpls_detunnel_init) (vm);
 }
