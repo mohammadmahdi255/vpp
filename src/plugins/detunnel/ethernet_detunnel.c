@@ -189,8 +189,8 @@ VLIB_NODE_FN (ethernet_detunnel) (vlib_main_t *vm, vlib_node_runtime_t *node, vl
 {
 	if (PREDICT_FALSE(node->flags & VLIB_NODE_FLAG_TRACE))
 		return ethernet_detunnel_inline(vm, node, frame, 1);
-
-	return ethernet_detunnel_inline(vm, node, frame, 0);
+	else
+		return ethernet_detunnel_inline(vm, node, frame, 0);
 }
 
 #ifndef CLIB_MARCH_VARIANT
