@@ -1,17 +1,17 @@
 #include <stdbool.h>
+
 #include <vlib/vlib.h>
 
 #include <vnet/ethernet/packet.h>
 #include <vnet/gre/packet.h>
 #include <vnet/vnet.h>
 
+#include <vppinfra/byte_order.h>
 #include <vppinfra/clib.h>
+#include <vppinfra/error.h>
+#include <vppinfra/string.h>
 
 #include "detunnel.h"
-#include "gre/gre.h"
-#include "vlib/buffer.h"
-#include "vppinfra/byte_order.h"
-#include "vppinfra/error.h"
 
 #define foreach_gre_detunnel_next								\
 	_(drop_next, DROP, "drop")									\
@@ -102,7 +102,7 @@ static_always_inline void
 add_trace(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b,
 		const gre_header_t *gre)
 {
-	if (PREDICT_FALSE((node->flags & VLIB_NODE_FLAG_TRACE) && (b->flags & VLIB_BUFFER_IS_TRACED)))
+	if (PREDICT_FALSE(b->flags & VLIB_BUFFER_IS_TRACED))
 	{
 		gre_trace_t *t = vlib_add_trace(vm, node, b, sizeof(*t));
 		t->gre = *gre;
@@ -110,9 +110,9 @@ add_trace(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b,
 }
 
 static_always_inline void
-process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, u16 *next)
+process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, u16 *next, u8 is_trace)
 {
-	gre_detunnel_main_t *vdm = &gre_detunnel_main;
+	gre_detunnel_main_t *gdm = &gre_detunnel_main;
 	const u32 sw_idx = vnet_buffer(b)->sw_if_index[VLIB_RX];
 
 	const void *data = vlib_buffer_get_current(b);
@@ -178,16 +178,17 @@ process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, 
 	}
 
 	vlib_buffer_advance(b, offset);
-	vdm->cache_counters[sw_idx].packets++;
-	vdm->cache_counters[sw_idx].bytes += offset;
+	gdm->cache_counters[sw_idx].packets++;
+	gdm->cache_counters[sw_idx].bytes += offset;
 	next[0] = gre->protocol;
 
 trace:
-	if (PREDICT_FALSE(node->flags & VLIB_NODE_FLAG_TRACE))
+	if (is_trace)
 		add_trace(vm, node, b, gre);
 }
 
-VLIB_NODE_FN (gre_detunnel) (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_frame_t *frame)
+static_always_inline u64
+gre_detunnel_inline(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_frame_t *frame, u8 is_trace)
 {
 	vlib_buffer_t *bufs[VLIB_FRAME_SIZE];
 	u16 nexts[VLIB_FRAME_SIZE];
@@ -199,27 +200,7 @@ VLIB_NODE_FN (gre_detunnel) (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_fr
 
 	vlib_get_buffers(vm, from, bufs, n_left_from);
 
-	vnet_main_t *vnm = vnet_get_main();
-	vnet_interface_main_t *im = &vnm->interface_main;
-	u32 max_sw_if_index = pool_elts(im->sw_interfaces);
-
-	gre_detunnel_main_t *vdm = &gre_detunnel_main;
-
-	if (PREDICT_FALSE(vdm->counter_if_index < max_sw_if_index))
-	{
-#define _(id, name) vlib_validate_combined_counter(&vdm->counters[GRE_##id], max_sw_if_index);
-	foreach_detunnel_counter
-#undef _
-
-		for (u32 i = vdm->counter_if_index + 1; i <= max_sw_if_index; i++)
-		{
-#define _(id, name) vlib_zero_combined_counter(&vdm->counters[GRE_##id], i);
-	foreach_detunnel_counter
-#undef _
-		}
-
-		vdm->counter_if_index = max_sw_if_index;
-	}
+	gre_detunnel_main_t *gdm = &gre_detunnel_main;
 
 	while (n_left_from >= 4)
 	{
@@ -236,10 +217,10 @@ VLIB_NODE_FN (gre_detunnel) (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_fr
 			vlib_prefetch_buffer_data(b[7], LOAD);
 		}
 
-		process_buffer_1x(vm, node, b[0], &next[0]);
-		process_buffer_1x(vm, node, b[1], &next[1]);
-		process_buffer_1x(vm, node, b[2], &next[2]);
-		process_buffer_1x(vm, node, b[3], &next[3]);
+		process_buffer_1x(vm, node, b[0], &next[0], is_trace);
+		process_buffer_1x(vm, node, b[1], &next[1], is_trace);
+		process_buffer_1x(vm, node, b[2], &next[2], is_trace);
+		process_buffer_1x(vm, node, b[3], &next[3], is_trace);
 
 		b += 4;
 		next += 4;
@@ -248,17 +229,17 @@ VLIB_NODE_FN (gre_detunnel) (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_fr
 
 	while (n_left_from > 0)
 	{
-		process_buffer_1x(vm, node, b[0], next);
+		process_buffer_1x(vm, node, b[0], next, is_trace);
 
 		b++;
 		next++;
 		n_left_from--;
 	}
 
-	for (u32 sw_idx = 0; sw_idx <= max_sw_if_index; sw_idx++)
+	for (u32 sw_idx = 0; sw_idx <= gdm->counter_if_index; sw_idx++)
 	{
-		vlib_counter_t *counter = &vdm->cache_counters[sw_idx];
-		vlib_increment_combined_counter(&vdm->counters[GRE_PROCESSED], vm->thread_index,
+		vlib_counter_t *counter = &gdm->cache_counters[sw_idx];
+		vlib_increment_combined_counter(&gdm->counters[GRE_PROCESSED], vm->thread_index,
 				sw_idx, counter->packets, counter->bytes);
 
 		counter->packets = 0;
@@ -269,6 +250,14 @@ VLIB_NODE_FN (gre_detunnel) (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_fr
 	vlib_buffer_enqueue_to_next(vm, node, from, nexts, frame->n_vectors);
 
 	return frame->n_vectors;
+}
+
+VLIB_NODE_FN (gre_detunnel) (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_frame_t *frame)
+{
+	if (PREDICT_FALSE(node->flags & VLIB_NODE_FLAG_TRACE))
+		return gre_detunnel_inline(vm, node, frame, 1);
+	else
+		return gre_detunnel_inline(vm, node, frame, 0);
 }
 
 #ifndef CLIB_MARCH_VARIANT
@@ -296,6 +285,30 @@ VLIB_REGISTER_NODE (gre_detunnel) = {
 #undef _
 	},
 };
+
+void gre_detunnel_counter_validate(u32 sw_if_index)
+{
+	gre_detunnel_main_t *gdm = &gre_detunnel_main;
+
+	clib_warning("interface max index %u", sw_if_index);
+
+	if (PREDICT_FALSE(gdm->counter_if_index < sw_if_index))
+	{
+#define _(id, name) vlib_validate_combined_counter(&gdm->counters[GRE_##id], sw_if_index);
+	foreach_detunnel_counter
+#undef _
+
+		for (u32 i = gdm->counter_if_index + 1; i <= sw_if_index; i++)
+		{
+#define _(id, name) vlib_zero_combined_counter(&gdm->counters[GRE_##id], i);
+	foreach_detunnel_counter
+#undef _
+		}
+
+		gdm->counter_if_index = sw_if_index;
+	}
+}
+
 #endif
 
 CLIB_MARCH_FN (gre_detunnel_init, clib_error_t *, vlib_main_t __clib_unused *vm)
@@ -317,22 +330,22 @@ CLIB_MARCH_FN (gre_detunnel_init, clib_error_t *, vlib_main_t __clib_unused *vm)
 
 static clib_error_t *gre_detunnel_init(vlib_main_t *vm)
 {
-	gre_detunnel_main_t *vdm = &gre_detunnel_main;
+	gre_detunnel_main_t *gdm = &gre_detunnel_main;
 	vnet_main_t *vnm = vnet_get_main();
 	vnet_interface_main_t *im = &vnm->interface_main;
-	vdm->counter_if_index = pool_elts(im->sw_interfaces);
+	gdm->counter_if_index = pool_elts(im->sw_interfaces);
 
 #define _(E, n)																\
-	vlib_combined_counter_main_t *cm_##n = &vdm->counters[GRE_##E];		\
+	vlib_combined_counter_main_t *cm_##n = &gdm->counters[GRE_##E];		\
 	cm_##n->name = "gre_" #n;												\
 	cm_##n->stat_segment_name = "/detunnel/gre/" #n;						\
-	vlib_validate_combined_counter(cm_##n, vdm->counter_if_index);			\
-	vlib_zero_combined_counter(cm_##n, vdm->counter_if_index);
+	vlib_validate_combined_counter(cm_##n, gdm->counter_if_index);			\
+	vlib_zero_combined_counter(cm_##n, gdm->counter_if_index);
 
 	foreach_detunnel_counter
 #undef _
 
-	clib_memset(vdm->cache_counters, 0, sizeof(vdm->cache_counters));
+	clib_memset(gdm->cache_counters, 0, sizeof(gdm->cache_counters));
 
 	return CLIB_MARCH_FN_SELECT(gre_detunnel_init) (vm);
 }
