@@ -8,7 +8,6 @@
 #include <ppp/ppp.h>
 
 #include "detunnel.h"
-#include "vppinfra/byte_order.h"
 
 #define foreach_ppp_detunnel_next						\
 	_(drop_next, DROP, "drop")							\

@@ -1,17 +1,17 @@
 #include <stdbool.h>
 
 #include <vlib/vlib.h>
+
+#include <vnet/ip/format.h>
+#include <vnet/ip/ip_packet.h>
+#include <vnet/ip/ip6_packet.h>
 #include <vnet/vnet.h>
+
 #include <vppinfra/byte_order.h>
 #include <vppinfra/clib.h>
 #include <vppinfra/error.h>
 
 #include "detunnel.h"
-#include "vlib/buffer.h"
-#include "vlib/buffer_funcs.h"
-#include "vnet/ip/format.h"
-#include "vnet/ip/ip6_packet.h"
-#include "vnet/ip/ip_packet.h"
 
 #define foreach_ipv6_detunnel_next							\
 	_(ipv6_etc_next, IPV6_ETC_DETUNNEL, "drop")				\

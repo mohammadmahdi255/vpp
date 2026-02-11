@@ -36,7 +36,7 @@ add_trace(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b)
 }
 
 static_always_inline void
-process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, u16 *next)
+process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, u16 *next, u8 is_trace)
 {
 	failed_detunnel_main_t *fdm = &failed_detunnel_main;
 	const u32 sw_idx = vnet_buffer(b)->sw_if_index[VLIB_RX];
@@ -44,11 +44,12 @@ process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, 
 	next[0] = FAILED_NEXT_DROP;
 	fdm->cache_counter[sw_idx]++;
 
-	if (PREDICT_FALSE(node->flags & VLIB_NODE_FLAG_TRACE))
+	if (is_trace)
 		add_trace(vm, node, b);
 }
 
-VLIB_NODE_FN (failed_detunnel) (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_frame_t *frame)
+static_always_inline u64
+failed_detunnel_inline(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_frame_t *frame, u8 is_trace)
 {
 	vlib_buffer_t *bufs[VLIB_FRAME_SIZE];
 	u16 nexts[VLIB_FRAME_SIZE];
@@ -60,23 +61,7 @@ VLIB_NODE_FN (failed_detunnel) (vlib_main_t *vm, vlib_node_runtime_t *node, vlib
 
 	vlib_get_buffers(vm, from, bufs, n_left_from);
 
-	vnet_main_t *vnm = vnet_get_main();
-	vnet_interface_main_t *im = &vnm->interface_main;
-	u32 max_sw_if_index = pool_elts(im->sw_interfaces);
-
 	failed_detunnel_main_t *fdm = &failed_detunnel_main;
-
-	if (PREDICT_FALSE(fdm->counter_if_index < max_sw_if_index))
-	{
-        vlib_validate_simple_counter(&fdm->counter, max_sw_if_index);
-
-		for (u32 i = fdm->counter_if_index + 1; i <= max_sw_if_index; i++)
-		{
-			vlib_zero_simple_counter(&fdm->counter, fdm->counter_if_index);
-		}
-
-		fdm->counter_if_index = max_sw_if_index;
-	}
 
 	while (n_left_from >= 4)
 	{
@@ -94,10 +79,10 @@ VLIB_NODE_FN (failed_detunnel) (vlib_main_t *vm, vlib_node_runtime_t *node, vlib
 			vlib_prefetch_buffer_data(b[7], LOAD);
 		}
 
-		process_buffer_1x(vm, node, b[0], &next[0]);
-		process_buffer_1x(vm, node, b[1], &next[1]);
-		process_buffer_1x(vm, node, b[2], &next[2]);
-		process_buffer_1x(vm, node, b[3], &next[3]);
+		process_buffer_1x(vm, node, b[0], &next[0], is_trace);
+		process_buffer_1x(vm, node, b[1], &next[1], is_trace);
+		process_buffer_1x(vm, node, b[2], &next[2], is_trace);
+		process_buffer_1x(vm, node, b[3], &next[3], is_trace);
 
 		b += 4;
 		next += 4;
@@ -106,14 +91,14 @@ VLIB_NODE_FN (failed_detunnel) (vlib_main_t *vm, vlib_node_runtime_t *node, vlib
 
 	while (n_left_from > 0)
 	{
-		process_buffer_1x(vm, node, b[0], next);
+		process_buffer_1x(vm, node, b[0], next, is_trace);
 
 		b++;
 		next++;
 		n_left_from--;
 	}
 
-	for (u32 sw_idx = 0; sw_idx <= max_sw_if_index; sw_idx++)
+	for (u32 sw_idx = 0; sw_idx <= fdm->counter_if_index; sw_idx++)
 	{
 		vlib_increment_simple_counter(&fdm->counter, vm->thread_index,
 				sw_idx, fdm->cache_counter[sw_idx]);
@@ -124,6 +109,11 @@ VLIB_NODE_FN (failed_detunnel) (vlib_main_t *vm, vlib_node_runtime_t *node, vlib
 	vlib_buffer_enqueue_to_next(vm, node, from, nexts, frame->n_vectors);
 
 	return frame->n_vectors;
+}
+
+VLIB_NODE_FN (failed_detunnel) (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_frame_t *frame)
+{
+	return failed_detunnel_inline(vm, node, frame, node->flags & VLIB_NODE_FLAG_TRACE);
 }
 
 #ifndef CLIB_MARCH_VARIANT
@@ -148,8 +138,27 @@ VLIB_REGISTER_NODE (failed_detunnel) = {
 #undef _
 	},
 };
-#endif
 
+void failed_detunnel_counter_validate(u32 sw_if_index)
+{
+	failed_detunnel_main_t *fdm = &failed_detunnel_main;
+
+	clib_warning("interface max index %u", sw_if_index);
+
+	if (PREDICT_FALSE(fdm->counter_if_index < sw_if_index))
+	{
+		vlib_validate_simple_counter(&fdm->counter, sw_if_index);
+
+		for (u32 i = fdm->counter_if_index + 1; i <= sw_if_index; i++)
+		{
+			vlib_zero_simple_counter(&fdm->counter, fdm->counter_if_index);
+		}
+
+		fdm->counter_if_index = sw_if_index;
+	}
+}
+
+#endif
 
 static clib_error_t *failed_detunnel_init(vlib_main_t __clib_unused *vm)
 {

@@ -1,15 +1,16 @@
 #include <stdbool.h>
 
 #include <vlib/vlib.h>
+
+#include <vnet/ip/format.h>
+#include <vnet/ip/ip4_packet.h>
 #include <vnet/vnet.h>
+
 #include <vppinfra/byte_order.h>
 #include <vppinfra/clib.h>
 #include <vppinfra/error.h>
 
 #include "detunnel.h"
-#include "vlib/buffer_funcs.h"
-#include "vnet/ip/format.h"
-#include "vnet/ip/ip4_packet.h"
 
 #define foreach_ipv4_detunnel_next						\
 	_(drop_next, DROP, "drop")							\

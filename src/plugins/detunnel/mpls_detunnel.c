@@ -1,6 +1,7 @@
 #include <stdbool.h>
 #include <vlib/vlib.h>
 
+#include <vnet/mpls/packet.h>
 #include <vnet/vnet.h>
 
 #include <vppinfra/byte_order.h>
@@ -8,8 +9,6 @@
 #include <vppinfra/error.h>
 
 #include "detunnel.h"
-#include "vnet/mpls/packet.h"
-#include "vppinfra/string.h"
 
 #define foreach_mpls_detunnel_next								\
 	_(ethernet_next, ETHERNET_DETUNNEL, "ethernet-detunnel")	\
