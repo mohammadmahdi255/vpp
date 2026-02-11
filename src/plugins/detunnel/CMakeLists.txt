@@ -11,6 +11,7 @@ link_directories(
 
 add_vpp_plugin(detunnel
 	SOURCES
+		cli.c
 		detunnel.c
 		ethernet_detunnel.c
 		failed_detunnel.c

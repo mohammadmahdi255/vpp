@@ -131,27 +131,7 @@ VLIB_NODE_FN (ethernet_detunnel) (vlib_main_t *vm, vlib_node_runtime_t *node, vl
 
 	vlib_get_buffers(vm, from, bufs, n_left_from);
 
-	vnet_main_t *vnm = vnet_get_main();
-	vnet_interface_main_t *im = &vnm->interface_main;
-	u32 max_sw_if_index = pool_elts(im->sw_interfaces);
-
 	ethernet_detunnel_main_t *edm = &ethernet_detunnel_main;
-
-	if (PREDICT_FALSE(edm->counter_if_index < max_sw_if_index))
-	{
-#define _(id, name) vlib_validate_combined_counter(&edm->counters[ETHERNET_##id], max_sw_if_index);
-	foreach_detunnel_counter
-#undef _
-
-		for (u32 i = edm->counter_if_index + 1; i <= max_sw_if_index; i++)
-		{
-#define _(id, name) vlib_zero_combined_counter(&edm->counters[ETHERNET_##id], i);
-	foreach_detunnel_counter
-#undef _
-		}
-
-		edm->counter_if_index = max_sw_if_index;
-	}
 
 	while (n_left_from >= 4)
 	{
@@ -188,7 +168,7 @@ VLIB_NODE_FN (ethernet_detunnel) (vlib_main_t *vm, vlib_node_runtime_t *node, vl
 		n_left_from--;
 	}
 
-	for (u32 sw_idx = 0; sw_idx <= max_sw_if_index; sw_idx++)
+	for (u32 sw_idx = 0; sw_idx <= edm->counter_if_index; sw_idx++)
 	{
 		vlib_counter_t *counter = &edm->cache_counters[sw_idx];
 		vlib_increment_combined_counter(&edm->counters[ETHERNET_PROCESSED], vm->thread_index,
@@ -232,6 +212,30 @@ VLIB_REGISTER_NODE (ethernet_detunnel) = {
 #undef _
 	},
 };
+
+void ethernet_detunnel_counter_validate(u32 sw_if_index)
+{
+	ethernet_detunnel_main_t *edm = &ethernet_detunnel_main;
+
+	clib_warning("interface max index %u", sw_if_index);
+
+	if (PREDICT_FALSE(edm->counter_if_index < sw_if_index))
+	{
+#define _(id, name) vlib_validate_combined_counter(&edm->counters[ETHERNET_##id], sw_if_index);
+	foreach_detunnel_counter
+#undef _
+
+		for (u32 i = edm->counter_if_index + 1; i <= sw_if_index; i++)
+		{
+#define _(id, name) vlib_zero_combined_counter(&edm->counters[ETHERNET_##id], i);
+	foreach_detunnel_counter
+#undef _
+		}
+
+		edm->counter_if_index = sw_if_index;
+	}
+}
+
 #endif
 
 CLIB_MARCH_FN (ethernet_detunnel_init, clib_error_t *, vlib_main_t __clib_unused *vm)

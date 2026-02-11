@@ -83,19 +83,10 @@ typedef struct {
     u16 dst_port;
 } transport_rule_t;
 
-enum {
-	TRANSPORT_FIELD_PROTO,
-	TRANSPORT_FIELD_SRC_PORT,
-	TRANSPORT_FIELD_DST_PORT,
-	TRANSPORT_NUM_FIELDS
-};
-
 typedef struct {
 	char *name;
 	u32 sw_if_index;
 	u16 next_protocol;
 } __clib_packed detunnel_trace_t;
-
-extern u8 *format_detunnel_trace(u8 *s, va_list *args);
 
 #endif
