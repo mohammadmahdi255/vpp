@@ -1,15 +1,15 @@
 #include <vlib/vlib.h>
 
 #include <vnet/ethernet/ethernet.h>
+#include <vnet/ethernet/packet.h>
 #include <vnet/vnet.h>
 
 #include <vppinfra/byte_order.h>
 #include <vppinfra/clib.h>
 #include <vppinfra/error.h>
+#include <vppinfra/string.h>
 
 #include "detunnel.h"
-#include "vnet/ethernet/packet.h"
-#include "vppinfra/string.h"
 
 #define foreach_ethernet_detunnel_next					\
 	_(drop_next, DROP, "drop")							\

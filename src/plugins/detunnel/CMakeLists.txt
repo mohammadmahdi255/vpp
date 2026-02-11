@@ -18,10 +18,11 @@ add_vpp_plugin(detunnel
 		gtpu_detunnel.c
 		ipv4_detunnel.c
 		ipv6_detunnel.c
+		l2tp_detunnel.c
 		mpls_detunnel.c
 		plugin.c
-		pppoe_detunnel.c
 		ppp_detunnel.c
+		pppoe_detunnel.c
 		udp_detunnel.c
 		vlan_detunnel.c
 
@@ -33,9 +34,10 @@ add_vpp_plugin(detunnel
 		gtpu_detunnel.c
 		ipv4_detunnel.c
 		ipv6_detunnel.c
+		l2tp_detunnel.c
 		mpls_detunnel.c
-		pppoe_detunnel.c
 		ppp_detunnel.c
+		pppoe_detunnel.c
 		udp_detunnel.c
 		vlan_detunnel.c
 
