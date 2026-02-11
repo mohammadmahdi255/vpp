@@ -92,7 +92,7 @@ static_always_inline void
 add_trace(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b,
         const udp_header_t *udp)
 {
-	if (PREDICT_FALSE((node->flags & VLIB_NODE_FLAG_TRACE) && (b->flags & VLIB_BUFFER_IS_TRACED)))
+	if (PREDICT_FALSE(b->flags & VLIB_BUFFER_IS_TRACED))
 	{
 		udp_trace_t *t = vlib_add_trace(vm, node, b, sizeof(udp_trace_t));
 		t->udp = *udp;
@@ -100,7 +100,8 @@ add_trace(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b,
 }
 
 static_always_inline void
-process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, u16 *src_port, u16 *dst_port)
+process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b,
+	u16 *src_port, u16 *dst_port, u8 is_trace)
 {
 	udp_detunnel_main_t *udm = &udp_detunnel_main;
 	const u32 sw_idx = vnet_buffer(b)->sw_if_index[VLIB_RX];
@@ -121,11 +122,12 @@ process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, 
 	dst_port[0] = udp->dst_port;
 
 trace:
-	if (PREDICT_FALSE(node->flags & VLIB_NODE_FLAG_TRACE))
+	if (is_trace)
 		add_trace(vm, node, b, udp);
 }
 
-VLIB_NODE_FN (udp_detunnel) (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_frame_t *frame)
+static_always_inline u64
+udp_detunnel_inline(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_frame_t *frame, u8 is_trace)
 {
 	vlib_buffer_t *bufs[VLIB_FRAME_SIZE];
 	u16 nexts[VLIB_FRAME_SIZE];
@@ -140,27 +142,7 @@ VLIB_NODE_FN (udp_detunnel) (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_fr
 
 	vlib_get_buffers(vm, from, bufs, n_left_from);
 
-	vnet_main_t *vnm = vnet_get_main();
-	vnet_interface_main_t *im = &vnm->interface_main;
-	u32 max_sw_if_index = pool_elts(im->sw_interfaces);
-
 	udp_detunnel_main_t *udm = &udp_detunnel_main;
-
-	if (PREDICT_FALSE(udm->counter_if_index < max_sw_if_index))
-	{
-#define _(id, name) vlib_validate_combined_counter(&udm->counters[UDP_##id], max_sw_if_index);
-	foreach_detunnel_counter
-#undef _
-
-		for (u32 i = udm->counter_if_index + 1; i <= max_sw_if_index; i++)
-		{
-#define _(id, name) vlib_zero_combined_counter(&udm->counters[UDP_##id], i);
-	foreach_detunnel_counter
-#undef _
-		}
-
-		udm->counter_if_index = max_sw_if_index;
-	}
 
 	while (n_left_from >= 4)
 	{
@@ -178,10 +160,10 @@ VLIB_NODE_FN (udp_detunnel) (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_fr
 			vlib_prefetch_buffer_data(b[7], LOAD);
 		}
 
-		process_buffer_1x(vm, node, b[0], &src_port[0], &dst_port[0]);
-		process_buffer_1x(vm, node, b[1], &src_port[1], &dst_port[1]);
-		process_buffer_1x(vm, node, b[2], &src_port[2], &dst_port[2]);
-		process_buffer_1x(vm, node, b[3], &src_port[3], &dst_port[3]);
+		process_buffer_1x(vm, node, b[0], &src_port[0], &dst_port[0], is_trace);
+		process_buffer_1x(vm, node, b[1], &src_port[1], &dst_port[1], is_trace);
+		process_buffer_1x(vm, node, b[2], &src_port[2], &dst_port[2], is_trace);
+		process_buffer_1x(vm, node, b[3], &src_port[3], &dst_port[3], is_trace);
 
 		b += 4;
 		src_port += 4;
@@ -191,7 +173,7 @@ VLIB_NODE_FN (udp_detunnel) (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_fr
 
 	while (n_left_from > 0)
 	{
-		process_buffer_1x(vm, node, b[0], src_port, dst_port);
+		process_buffer_1x(vm, node, b[0], src_port, dst_port, is_trace);
 
 		b++;
 		src_port++;
@@ -199,7 +181,7 @@ VLIB_NODE_FN (udp_detunnel) (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_fr
 		n_left_from--;
 	}
 
-	for (u32 sw_idx = 0; sw_idx <= max_sw_if_index; sw_idx++)
+	for (u32 sw_idx = 0; sw_idx <= udm->counter_if_index; sw_idx++)
 	{
 		vlib_counter_t *counter = &udm->cache_counters[sw_idx];
 		vlib_increment_combined_counter(&udm->counters[UDP_PROCESSED], vm->thread_index,
@@ -213,6 +195,14 @@ VLIB_NODE_FN (udp_detunnel) (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_fr
 	vlib_buffer_enqueue_to_next(vm, node, from, nexts, frame->n_vectors);
 
 	return frame->n_vectors;
+}
+
+VLIB_NODE_FN (udp_detunnel) (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_frame_t *frame)
+{
+	if (PREDICT_FALSE(node->flags & VLIB_NODE_FLAG_TRACE))
+		return udp_detunnel_inline(vm, node, frame, 1);
+	else
+		return udp_detunnel_inline(vm, node, frame, 0);
 }
 
 #ifndef CLIB_MARCH_VARIANT
@@ -238,6 +228,30 @@ VLIB_REGISTER_NODE (udp_detunnel) = {
 #undef _
 	},
 };
+
+void udp_detunnel_counter_validate(u32 sw_if_index)
+{
+	udp_detunnel_main_t *udm = &udp_detunnel_main;
+
+	clib_warning("interface max index %u", sw_if_index);
+
+	if (PREDICT_FALSE(udm->counter_if_index < sw_if_index))
+	{
+#define _(id, name) vlib_validate_combined_counter(&udm->counters[UDP_##id], sw_if_index);
+	foreach_detunnel_counter
+#undef _
+
+		for (u32 i = udm->counter_if_index + 1; i <= sw_if_index; i++)
+		{
+#define _(id, name) vlib_zero_combined_counter(&udm->counters[UDP_##id], i);
+	foreach_detunnel_counter
+#undef _
+		}
+
+		udm->counter_if_index = sw_if_index;
+	}
+}
+
 #endif
 
 CLIB_MARCH_FN (udp_detunnel_init, clib_error_t *, vlib_main_t __clib_unused *vm)
