@@ -11,6 +11,21 @@
 
 #include "detunnel/detunnel.h"
 
+#include "ipv4_session.h"
+#include "vlib/threads.h"
+#include "vppinfra/format.h"
+#include "vppinfra/vec.h"
+
+#undef always_inline
+#include <rte_hash.h>
+#include <rte_jhash.h>
+
+#if CLIB_DEBUG > 0
+#define always_inline static inline
+#else
+#define always_inline static inline __attribute__ ((__always_inline__))
+#endif
+
 #define foreach_ipv4_session_lookup_next	\
 	_(drop_next, DROP, "drop")				\
 
@@ -40,6 +55,20 @@ typedef struct
 	u16 next;
 } ipv4_session_lookup_trace_t;
 
+typedef struct
+{
+} ipv4_session_lookup_main_t;
+
+typedef struct
+{
+	struct rte_hash *session_hash;
+	ipv4_session_t *session_pool;
+	u32 session_count;
+	u32 max_sessions;
+} ipv4_session_lookup_worker_t;
+
+static __thread ipv4_session_lookup_worker_t ipv4_session_lookup_worker;
+extern ipv4_session_lookup_main_t ipv4_session_lookup_main;
 extern vlib_node_registration_t ipv4_session_lookup;
 
 static_always_inline void
@@ -132,6 +161,8 @@ VLIB_NODE_FN (ipv4_session_lookup) (vlib_main_t *vm, vlib_node_runtime_t *node, 
 }
 
 #ifndef CLIB_MARCH_VARIANT
+ipv4_session_lookup_main_t ipv4_session_lookup_main;
+
 static u8 *format_ipv4_session_lookup_trace(u8 *s, va_list *args)
 {
 	vlib_main_t __clib_unused *vm = va_arg(*args, vlib_main_t *);
@@ -168,6 +199,32 @@ CLIB_MARCH_FN (ipv4_session_lookup_init, clib_error_t *, vlib_main_t __clib_unus
 static clib_error_t *
 ipv4_session_lookup_worker_init(vlib_main_t __clib_unused *vm)
 {
+	ipv4_session_lookup_worker_t *sw = &ipv4_session_lookup_worker;
+	struct rte_hash_parameters hash_params = {0};
+
+	void *name = format(NULL, "ipv4_session_hash_%u", vlib_get_thread_index());
+
+	hash_params.name = name;
+	hash_params.entries = 1024 * 1024;  // 1M sessions
+	hash_params.key_len = sizeof(ipv4_5tuple_key_t);
+	hash_params.hash_func = rte_jhash;
+	hash_params.hash_func_init_val = 0;
+	hash_params.socket_id = (i32) rte_socket_id();
+	hash_params.extra_flag = RTE_HASH_EXTRA_FLAGS_RW_CONCURRENCY;  // Multi-thread safe
+
+	sw->session_hash = rte_hash_create(&hash_params);
+
+	if (sw->session_hash == NULL)
+	{
+		vec_free(name);
+		return clib_error_return(0, "Failed to create rte_hash for IPv4 sessions");
+	}
+
+	sw->max_sessions = 1024 * 1024;
+	sw->session_count = 0;
+	sw->session_pool = NULL;
+
+	vec_free(name);
 	return 0;
 }
 
