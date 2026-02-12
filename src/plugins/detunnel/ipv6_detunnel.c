@@ -50,10 +50,15 @@ typedef struct
 
 typedef struct {
 	u32 counter_if_index;
-	vlib_counter_t cache_counters[MAX_IF_SIZE];
 	vlib_combined_counter_main_t counters[IPV6_COUNTER_N];
 } ipv6_detunnel_main_t;
 
+typedef struct
+{
+	vlib_counter_t counters[MAX_IF_SIZE];
+} ipv6_detunnel_worker_t;
+
+static __thread ipv6_detunnel_worker_t ipv6_detunnel_worker;
 extern ipv6_detunnel_main_t ipv6_detunnel_main;
 extern vlib_node_registration_t ipv6_detunnel;
 
@@ -96,7 +101,7 @@ add_trace(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b,
 static_always_inline void
 process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, u16 *next, u8 is_trace)
 {
-	ipv6_detunnel_main_t *idm = &ipv6_detunnel_main;
+	ipv6_detunnel_worker_t *idw = &ipv6_detunnel_worker;
 	u32 sw_idx = vnet_buffer(b)->sw_if_index[VLIB_RX];
 
 	const ip6_header_t *ip6 = vlib_buffer_get_current(b);
@@ -132,8 +137,8 @@ process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, 
 
 	if (PREDICT_TRUE(protocol != IP_PROTOCOL_IPV6_FRAGMENTATION))
 	{
-		idm->cache_counters[sw_idx].packets++;
-		idm->cache_counters[sw_idx].bytes += offset;
+		idw->counters[sw_idx].packets++;
+		idw->counters[sw_idx].bytes += offset;
 		vlib_buffer_advance(b, offset);
 	}
 
@@ -157,6 +162,7 @@ ipv6_detunnel_inline(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_frame_t *f
 	vlib_get_buffers(vm, from, bufs, n_left_from);
 
 	ipv6_detunnel_main_t *idm = &ipv6_detunnel_main;
+	ipv6_detunnel_worker_t *idw = &ipv6_detunnel_worker;
 
 	while (n_left_from >= 4)
 	{
@@ -195,7 +201,7 @@ ipv6_detunnel_inline(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_frame_t *f
 
 	for (u32 sw_idx = 0; sw_idx <= idm->counter_if_index; sw_idx++)
 	{
-		vlib_counter_t *counter = &idm->cache_counters[sw_idx];
+		vlib_counter_t *counter = &idw->counters[sw_idx];
 		vlib_increment_combined_counter(&idm->counters[IPV6_PROCESSED], vm->thread_index,
 				sw_idx, counter->packets, counter->bytes);
 
@@ -276,6 +282,14 @@ CLIB_MARCH_FN (ipv6_detunnel_init, clib_error_t *, vlib_main_t __clib_unused *vm
 	return 0;
 }
 
+static clib_error_t *
+ipv6_detunnel_worker_init(vlib_main_t __clib_unused *vm)
+{
+	ipv6_detunnel_worker_t *idw = &ipv6_detunnel_worker;
+	clib_memset(idw->counters, 0, sizeof(idw->counters));
+	return 0;
+}
+
 static clib_error_t *ipv6_detunnel_init(vlib_main_t *vm)
 {
 	ipv6_detunnel_main_t *idm = &ipv6_detunnel_main;
@@ -293,9 +307,8 @@ static clib_error_t *ipv6_detunnel_init(vlib_main_t *vm)
 	foreach_detunnel_counter
 #undef _
 
-	clib_memset(idm->cache_counters, 0, sizeof(idm->cache_counters));
-
 	return CLIB_MARCH_FN_SELECT(ipv6_detunnel_init) (vm);
 }
 
+VLIB_WORKER_INIT_FUNCTION (ipv6_detunnel_worker_init);
 VLIB_INIT_FUNCTION (ipv6_detunnel_init);

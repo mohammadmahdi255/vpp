@@ -21,10 +21,15 @@ enum
 typedef struct
 {
 	u32 counter_if_index;
-	counter_t cache_counter[MAX_IF_SIZE];
 	vlib_simple_counter_main_t counter;
 } failed_detunnel_main_t;
 
+typedef struct
+{
+	counter_t counters[MAX_IF_SIZE];
+} failed_detunnel_worker_t;
+
+static __thread failed_detunnel_worker_t failed_detunnel_worker;
 extern failed_detunnel_main_t failed_detunnel_main;
 extern vlib_node_registration_t failed_detunnel;
 
@@ -38,11 +43,11 @@ add_trace(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b)
 static_always_inline void
 process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, u16 *next, u8 is_trace)
 {
-	failed_detunnel_main_t *fdm = &failed_detunnel_main;
+	failed_detunnel_worker_t *fdw = &failed_detunnel_worker;
 	const u32 sw_idx = vnet_buffer(b)->sw_if_index[VLIB_RX];
 
 	next[0] = FAILED_NEXT_DROP;
-	fdm->cache_counter[sw_idx]++;
+	fdw->counters[sw_idx]++;
 
 	if (is_trace)
 		add_trace(vm, node, b);
@@ -62,6 +67,7 @@ failed_detunnel_inline(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_frame_t 
 	vlib_get_buffers(vm, from, bufs, n_left_from);
 
 	failed_detunnel_main_t *fdm = &failed_detunnel_main;
+	failed_detunnel_worker_t *fdw = &failed_detunnel_worker;
 
 	while (n_left_from >= 4)
 	{
@@ -101,9 +107,9 @@ failed_detunnel_inline(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_frame_t 
 	for (u32 sw_idx = 0; sw_idx <= fdm->counter_if_index; sw_idx++)
 	{
 		vlib_increment_simple_counter(&fdm->counter, vm->thread_index,
-				sw_idx, fdm->cache_counter[sw_idx]);
+				sw_idx, fdw->counters[sw_idx]);
 
-		fdm->cache_counter[sw_idx] = 0;
+		fdw->counters[sw_idx] = 0;
 	}
 
 	vlib_buffer_enqueue_to_next(vm, node, from, nexts, frame->n_vectors);
@@ -160,6 +166,14 @@ void failed_detunnel_counter_validate(u32 sw_if_index)
 
 #endif
 
+static clib_error_t *
+failed_detunnel_worker_init(vlib_main_t __clib_unused *vm)
+{
+	failed_detunnel_worker_t *fdw = &failed_detunnel_worker;
+	clib_memset(fdw->counters, 0, sizeof(fdw->counters));
+	return 0;
+}
+
 static clib_error_t *failed_detunnel_init(vlib_main_t __clib_unused *vm)
 {
 	failed_detunnel_main_t *fdm = &failed_detunnel_main;
@@ -173,9 +187,8 @@ static clib_error_t *failed_detunnel_init(vlib_main_t __clib_unused *vm)
 	vlib_validate_simple_counter(sc, fdm->counter_if_index);
 	vlib_zero_simple_counter(sc, fdm->counter_if_index);
 
-	clib_memset(fdm->cache_counter, 0, sizeof(fdm->cache_counter));
-
 	return 0;
 }
 
+VLIB_WORKER_INIT_FUNCTION (failed_detunnel_worker_init);
 VLIB_INIT_FUNCTION (failed_detunnel_init);

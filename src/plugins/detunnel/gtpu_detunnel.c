@@ -59,10 +59,15 @@ typedef struct
 
 typedef struct {
 	u32 counter_if_index;
-	vlib_counter_t cache_counters[MAX_IF_SIZE];
 	vlib_combined_counter_main_t counters[GTPU_COUNTER_N];
 } gtpu_detunnel_main_t;
 
+typedef struct
+{
+	vlib_counter_t counters[MAX_IF_SIZE];
+} gtpu_detunnel_worker_t;
+
+static __thread gtpu_detunnel_worker_t gtpu_detunnel_worker;
 extern gtpu_detunnel_main_t gtpu_detunnel_main;
 extern vlib_node_registration_t gtpu_detunnel;
 
@@ -99,7 +104,7 @@ add_trace(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b,
 static_always_inline void
 process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, u16 *next, u8 is_trace)
 {
-	gtpu_detunnel_main_t *gdm = &gtpu_detunnel_main;
+	gtpu_detunnel_worker_t *gdw = &gtpu_detunnel_worker;
 	u32 sw_idx = vnet_buffer(b)->sw_if_index[VLIB_RX];
 
 	const gtpu_header_t *gtpu = vlib_buffer_get_current(b);
@@ -132,8 +137,8 @@ process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, 
 	}
 
 	vlib_buffer_advance(b, gtpu_hdr_len);
-	gdm->cache_counters[sw_idx].packets++;
-	gdm->cache_counters[sw_idx].bytes += gtpu_hdr_len;
+	gdw->counters[sw_idx].packets++;
+	gdw->counters[sw_idx].bytes += gtpu_hdr_len;
 	next[0] = (*(u8 *) vlib_buffer_get_current(b) & 0xF0);
 
 trace:
@@ -156,6 +161,7 @@ gtpu_detunnel_inline(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_frame_t *f
 	vlib_get_buffers(vm, from, bufs, n_left_from);
 
 	gtpu_detunnel_main_t *gdm = &gtpu_detunnel_main;
+	gtpu_detunnel_worker_t *gdw = &gtpu_detunnel_worker;
 
 	while (n_left_from >= 4)
 	{
@@ -194,7 +200,7 @@ gtpu_detunnel_inline(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_frame_t *f
 
 	for (u32 sw_idx = 0; sw_idx <= gdm->counter_if_index; sw_idx++)
 	{
-		vlib_counter_t *counter = &gdm->cache_counters[sw_idx];
+		vlib_counter_t *counter = &gdw->counters[sw_idx];
 		vlib_increment_combined_counter(&gdm->counters[GTPU_PROCESSED], vm->thread_index,
 				sw_idx, counter->packets, counter->bytes);
 
@@ -280,6 +286,14 @@ CLIB_MARCH_FN (gtpu_detunnel_init, clib_error_t *, vlib_main_t __clib_unused *vm
 	return 0;
 }
 
+static clib_error_t *
+gtpu_detunnel_worker_init(vlib_main_t __clib_unused *vm)
+{
+	gtpu_detunnel_worker_t *gdw = &gtpu_detunnel_worker;
+	clib_memset(gdw->counters, 0, sizeof(gdw->counters));
+	return 0;
+}
+
 static clib_error_t *gtpu_detunnel_init(vlib_main_t *vm)
 {
 	gtpu_detunnel_main_t *gdm = &gtpu_detunnel_main;
@@ -297,9 +311,8 @@ static clib_error_t *gtpu_detunnel_init(vlib_main_t *vm)
 	foreach_detunnel_counter
 #undef _
 
-	clib_memset(gdm->cache_counters, 0, sizeof(gdm->cache_counters));
-
 	return CLIB_MARCH_FN_SELECT(gtpu_detunnel_init) (vm);
 }
 
+VLIB_WORKER_INIT_FUNCTION (gtpu_detunnel_worker_init);
 VLIB_INIT_FUNCTION (gtpu_detunnel_init);

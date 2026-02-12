@@ -62,10 +62,15 @@ typedef struct
 typedef struct
 {
 	u32 counter_if_index;
-	vlib_counter_t cache_counters[MAX_IF_SIZE];
 	vlib_combined_counter_main_t counters[GRE_COUNTER_N];
 } gre_detunnel_main_t;
 
+typedef struct
+{
+	vlib_counter_t counters[MAX_IF_SIZE];
+} gre_detunnel_worker_t;
+
+static __thread gre_detunnel_worker_t gre_detunnel_worker;
 extern gre_detunnel_main_t gre_detunnel_main;
 
 static_always_inline void
@@ -112,7 +117,7 @@ add_trace(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b,
 static_always_inline void
 process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, u16 *next, u8 is_trace)
 {
-	gre_detunnel_main_t *gdm = &gre_detunnel_main;
+	gre_detunnel_worker_t *gdw = &gre_detunnel_worker;
 	const u32 sw_idx = vnet_buffer(b)->sw_if_index[VLIB_RX];
 
 	const void *data = vlib_buffer_get_current(b);
@@ -178,8 +183,8 @@ process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, 
 	}
 
 	vlib_buffer_advance(b, offset);
-	gdm->cache_counters[sw_idx].packets++;
-	gdm->cache_counters[sw_idx].bytes += offset;
+	gdw->counters[sw_idx].packets++;
+	gdw->counters[sw_idx].bytes += offset;
 	next[0] = gre->protocol;
 
 trace:
@@ -201,6 +206,7 @@ gre_detunnel_inline(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_frame_t *fr
 	vlib_get_buffers(vm, from, bufs, n_left_from);
 
 	gre_detunnel_main_t *gdm = &gre_detunnel_main;
+	gre_detunnel_worker_t *gdw = &gre_detunnel_worker;
 
 	while (n_left_from >= 4)
 	{
@@ -238,7 +244,7 @@ gre_detunnel_inline(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_frame_t *fr
 
 	for (u32 sw_idx = 0; sw_idx <= gdm->counter_if_index; sw_idx++)
 	{
-		vlib_counter_t *counter = &gdm->cache_counters[sw_idx];
+		vlib_counter_t *counter = &gdw->counters[sw_idx];
 		vlib_increment_combined_counter(&gdm->counters[GRE_PROCESSED], vm->thread_index,
 				sw_idx, counter->packets, counter->bytes);
 
@@ -325,6 +331,14 @@ CLIB_MARCH_FN (gre_detunnel_init, clib_error_t *, vlib_main_t __clib_unused *vm)
 	return 0;
 }
 
+static clib_error_t *
+gre_detunnel_worker_init(vlib_main_t __clib_unused *vm)
+{
+	gre_detunnel_worker_t *gdw = &gre_detunnel_worker;
+	clib_memset(gdw->counters, 0, sizeof(gdw->counters));
+	return 0;
+}
+
 static clib_error_t *gre_detunnel_init(vlib_main_t *vm)
 {
 	gre_detunnel_main_t *gdm = &gre_detunnel_main;
@@ -342,9 +356,8 @@ static clib_error_t *gre_detunnel_init(vlib_main_t *vm)
 	foreach_detunnel_counter
 #undef _
 
-	clib_memset(gdm->cache_counters, 0, sizeof(gdm->cache_counters));
-
 	return CLIB_MARCH_FN_SELECT(gre_detunnel_init) (vm);
 }
 
+VLIB_WORKER_INIT_FUNCTION (gre_detunnel_worker_init);
 VLIB_INIT_FUNCTION (gre_detunnel_init);

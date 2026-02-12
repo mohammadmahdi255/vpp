@@ -57,10 +57,15 @@ typedef struct
 typedef struct
 {
 	u32 counter_if_index;
-	vlib_counter_t cache_counters[MAX_IF_SIZE];
 	vlib_combined_counter_main_t counters[L2TP_COUNTER_N];
 } l2tp_detunnel_main_t;
 
+typedef struct
+{
+	vlib_counter_t counters[MAX_IF_SIZE];
+} l2tp_detunnel_worker_t;
+
+static __thread l2tp_detunnel_worker_t l2tp_detunnel_worker;
 extern l2tp_detunnel_main_t l2tp_detunnel_main;
 extern vlib_node_registration_t l2tp_detunnel;
 
@@ -78,7 +83,7 @@ add_trace(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b,
 static_always_inline void
 process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, u16 *next, u8 is_trace)
 {
-	l2tp_detunnel_main_t *ldm = &l2tp_detunnel_main;
+	l2tp_detunnel_worker_t *ldw = &l2tp_detunnel_worker;
 	const u32 sw_idx = vnet_buffer(b)->sw_if_index[VLIB_RX];
 	const void *data = vlib_buffer_get_current(b);
 	const l2tp_header_t *l2tp = data;
@@ -104,8 +109,8 @@ process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, 
 	hdr_size += (l2tp->offset_bit_present) * (sizeof(offset) + offset);
 
 	vlib_buffer_advance(b, hdr_size);
-	ldm->cache_counters[sw_idx].packets++;
-	ldm->cache_counters[sw_idx].bytes += hdr_size;
+	ldw->counters[sw_idx].packets++;
+	ldw->counters[sw_idx].bytes += hdr_size;
 	next[0] = L2TP_NEXT_PPP_DETUNNEL;
 
 trace:
@@ -127,6 +132,7 @@ l2tp_detunnel_inline(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_frame_t *f
 	vlib_get_buffers(vm, from, bufs, n_left_from);
 
 	l2tp_detunnel_main_t *ldm = &l2tp_detunnel_main;
+	l2tp_detunnel_worker_t *ldw = &l2tp_detunnel_worker;
 
 	while (n_left_from >= 4)
 	{
@@ -165,7 +171,7 @@ l2tp_detunnel_inline(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_frame_t *f
 
 	for (u32 sw_idx = 0; sw_idx <= ldm->counter_if_index; sw_idx++)
 	{
-		vlib_counter_t *counter = &ldm->cache_counters[sw_idx];
+		vlib_counter_t *counter = &ldw->counters[sw_idx];
 		vlib_increment_combined_counter(&ldm->counters[L2TP_PROCESSED], vm->thread_index,
 				sw_idx, counter->packets, counter->bytes);
 
@@ -233,6 +239,14 @@ void l2tp_detunnel_counter_validate(u32 sw_if_index)
 
 #endif
 
+static clib_error_t *
+l2tp_detunnel_worker_init(vlib_main_t __clib_unused *vm)
+{
+	l2tp_detunnel_worker_t *ldw = &l2tp_detunnel_worker;
+	clib_memset(ldw->counters, 0, sizeof(ldw->counters));
+	return 0;
+}
+
 static clib_error_t *l2tp_detunnel_init(vlib_main_t __clib_unused *vm)
 {
 	l2tp_detunnel_main_t *ldm = &l2tp_detunnel_main;
@@ -250,9 +264,8 @@ static clib_error_t *l2tp_detunnel_init(vlib_main_t __clib_unused *vm)
 	foreach_detunnel_counter
 #undef _
 
-	clib_memset(ldm->cache_counters, 0, sizeof(ldm->cache_counters));
-
 	return 0;
 }
 
+VLIB_WORKER_INIT_FUNCTION (l2tp_detunnel_worker_init);
 VLIB_INIT_FUNCTION (l2tp_detunnel_init);

@@ -50,10 +50,15 @@ typedef struct
 typedef struct
 {
 	u32 counter_if_index;
-	vlib_counter_t cache_counters[MAX_IF_SIZE];
 	vlib_combined_counter_main_t counters[ETHERNET_COUNTER_N];
 } ethernet_detunnel_main_t;
 
+typedef struct
+{
+	vlib_counter_t counters[MAX_IF_SIZE];
+} ethernet_detunnel_worker_t;
+
+static __thread ethernet_detunnel_worker_t ethernet_detunnel_worker;
 extern ethernet_detunnel_main_t ethernet_detunnel_main;
 extern vlib_node_registration_t ethernet_detunnel;
 
@@ -99,7 +104,7 @@ add_trace(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b,
 static_always_inline void
 process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, u16 *next, u8 is_trace)
 {
-	ethernet_detunnel_main_t *edm = &ethernet_detunnel_main;
+	ethernet_detunnel_worker_t *edw = &ethernet_detunnel_worker;
 	const u32 sw_idx = vnet_buffer(b)->sw_if_index[VLIB_RX];
 	const ethernet_header_t *eth = vlib_buffer_get_current(b);
 
@@ -110,8 +115,8 @@ process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, 
 	}
 
 	vlib_buffer_advance(b, sizeof(ethernet_header_t));
-	edm->cache_counters[sw_idx].packets++;
-	edm->cache_counters[sw_idx].bytes += sizeof(ethernet_header_t);
+	edw->counters[sw_idx].packets++;
+	edw->counters[sw_idx].bytes += sizeof(ethernet_header_t);
 	next[0] = eth->type;
 
 trace:
@@ -131,8 +136,6 @@ ethernet_detunnel_inline(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_frame_
 	u32 n_left_from = frame->n_vectors;
 
 	vlib_get_buffers(vm, from, bufs, n_left_from);
-
-	ethernet_detunnel_main_t *edm = &ethernet_detunnel_main;
 
 	while (n_left_from >= 4)
 	{
@@ -169,9 +172,12 @@ ethernet_detunnel_inline(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_frame_
 		n_left_from--;
 	}
 
+	ethernet_detunnel_main_t *edm = &ethernet_detunnel_main;
+	ethernet_detunnel_worker_t *edw = &ethernet_detunnel_worker;
+
 	for (u32 sw_idx = 0; sw_idx <= edm->counter_if_index; sw_idx++)
 	{
-		vlib_counter_t *counter = &edm->cache_counters[sw_idx];
+		vlib_counter_t *counter = &edw->counters[sw_idx];
 		vlib_increment_combined_counter(&edm->counters[ETHERNET_PROCESSED], vm->thread_index,
 				sw_idx, counter->packets, counter->bytes);
 
@@ -244,6 +250,14 @@ void ethernet_detunnel_counter_validate(u32 sw_if_index)
 
 #endif
 
+static clib_error_t *
+ethernet_detunnel_worker_init(vlib_main_t __clib_unused *vm)
+{
+	ethernet_detunnel_worker_t *edw = &ethernet_detunnel_worker;
+	clib_memset(edw->counters, 0, sizeof(edw->counters));
+	return 0;
+}
+
 CLIB_MARCH_FN (ethernet_detunnel_init, clib_error_t *, vlib_main_t __clib_unused *vm)
 {
 	clib_warning("size: %lu %s", SIMD_SIZE, CLIB_STRING_MACRO(SIMD_TYPE));
@@ -260,7 +274,8 @@ CLIB_MARCH_FN (ethernet_detunnel_init, clib_error_t *, vlib_main_t __clib_unused
 	return 0;
 }
 
-static clib_error_t *ethernet_detunnel_init(vlib_main_t *vm)
+static clib_error_t *
+ethernet_detunnel_init(vlib_main_t *vm)
 {
 	ethernet_detunnel_main_t *edm = &ethernet_detunnel_main;
 	vnet_main_t *vnm = vnet_get_main();
@@ -277,10 +292,10 @@ static clib_error_t *ethernet_detunnel_init(vlib_main_t *vm)
 	foreach_detunnel_counter
 #undef _
 
-	clib_memset(edm->cache_counters, 0, sizeof(edm->cache_counters));
-
 	return CLIB_MARCH_FN_SELECT(ethernet_detunnel_init) (vm);
 }
+
+VLIB_WORKER_INIT_FUNCTION (ethernet_detunnel_worker_init);
 
 VLIB_INIT_FUNCTION (ethernet_detunnel_init);
 

@@ -46,10 +46,15 @@ typedef struct
 typedef struct
 {
 	u32 counter_if_index;
-	vlib_counter_t cache_counters[MAX_IF_SIZE];
 	vlib_combined_counter_main_t counters[PPP_COUNTER_N];
 } ppp_detunnel_main_t;
 
+typedef struct
+{
+	vlib_counter_t counters[MAX_IF_SIZE];
+} ppp_detunnel_worker_t;
+
+static __thread ppp_detunnel_worker_t ppp_detunnel_worker;
 extern ppp_detunnel_main_t ppp_detunnel_main;
 
 static_always_inline void
@@ -85,7 +90,7 @@ add_trace(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b,
 static_always_inline void
 process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, u16 *next, u8 is_trace)
 {
-	ppp_detunnel_main_t *pdm = &ppp_detunnel_main;
+	ppp_detunnel_worker_t *pdw = &ppp_detunnel_worker;
 	const u32 sw_idx = vnet_buffer(b)->sw_if_index[VLIB_RX];
 
 	const u8 *data = vlib_buffer_get_current(b);
@@ -114,8 +119,8 @@ process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, 
 	}
 
 	vlib_buffer_advance(b, offset);
-	pdm->cache_counters[sw_idx].packets++;
-	pdm->cache_counters[sw_idx].bytes += offset;
+	pdw->counters[sw_idx].packets++;
+	pdw->counters[sw_idx].bytes += offset;
 
 trace:
 	if (is_trace)
@@ -136,6 +141,7 @@ ppp_detunnel_inline(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_frame_t *fr
 	vlib_get_buffers(vm, from, bufs, n_left_from);
 
 	ppp_detunnel_main_t *pdm = &ppp_detunnel_main;
+	ppp_detunnel_worker_t *pdw = &ppp_detunnel_worker;
 
 	while (n_left_from >= 4)
 	{
@@ -173,7 +179,7 @@ ppp_detunnel_inline(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_frame_t *fr
 
 	for (u32 sw_idx = 0; sw_idx <= pdm->counter_if_index; sw_idx++)
 	{
-		vlib_counter_t *counter = &pdm->cache_counters[sw_idx];
+		vlib_counter_t *counter = &pdw->counters[sw_idx];
 		vlib_increment_combined_counter(&pdm->counters[PPP_PROCESSED], vm->thread_index,
 				sw_idx, counter->packets, counter->bytes);
 
@@ -259,6 +265,14 @@ CLIB_MARCH_FN (ppp_detunnel_init, clib_error_t *, vlib_main_t __clib_unused *vm)
 	return 0;
 }
 
+static clib_error_t *
+ppp_detunnel_worker_init(vlib_main_t __clib_unused *vm)
+{
+	ppp_detunnel_worker_t *pdw = &ppp_detunnel_worker;
+	clib_memset(pdw->counters, 0, sizeof(pdw->counters));
+	return 0;
+}
+
 static clib_error_t *ppp_detunnel_init(vlib_main_t *vm)
 {
 	ppp_detunnel_main_t *pdm = &ppp_detunnel_main;
@@ -276,9 +290,8 @@ static clib_error_t *ppp_detunnel_init(vlib_main_t *vm)
 	foreach_detunnel_counter
 #undef _
 
-	clib_memset(pdm->cache_counters, 0, sizeof(pdm->cache_counters));
-
 	return CLIB_MARCH_FN_SELECT(ppp_detunnel_init) (vm);
 }
 
+VLIB_WORKER_INIT_FUNCTION (ppp_detunnel_worker_init);
 VLIB_INIT_FUNCTION (ppp_detunnel_init);

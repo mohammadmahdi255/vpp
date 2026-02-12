@@ -57,10 +57,15 @@ typedef struct
 typedef struct
 {
 	u32 counter_if_index;
-	vlib_counter_t cache_counters[MAX_IF_SIZE];
 	vlib_combined_counter_main_t counters[MPLS_COUNTER_N];
 } mpls_detunnel_main_t;
 
+typedef struct
+{
+	vlib_counter_t counters[MAX_IF_SIZE];
+} mpls_detunnel_worker_t;
+
+static __thread mpls_detunnel_worker_t mpls_detunnel_worker;
 extern mpls_detunnel_main_t mpls_detunnel_main;
 extern vlib_node_registration_t mpls_detunnel;
 
@@ -97,7 +102,7 @@ add_trace(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b,
 static_always_inline void
 process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, u16 *next, u8 is_trace)
 {
-	mpls_detunnel_main_t *mdm = &mpls_detunnel_main;
+	mpls_detunnel_worker_t *mdw = &mpls_detunnel_worker;
     const u32 sw_idx = vnet_buffer(b)->sw_if_index[VLIB_RX];
     u32 offset = 0;
 	u32 is_eos;
@@ -119,8 +124,8 @@ process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, 
 	} while (!is_eos);
 
 	vlib_buffer_advance(b, offset);
-	mdm->cache_counters[sw_idx].packets++;
-	mdm->cache_counters[sw_idx].bytes += offset;
+	mdw->counters[sw_idx].packets++;
+	mdw->counters[sw_idx].bytes += offset;
 	next[0] = *(u8 *)vlib_buffer_get_current(b) & 0xF0;
 
 trace:
@@ -142,6 +147,7 @@ mpls_detunnel_inline(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_frame_t *f
 	vlib_get_buffers(vm, from, bufs, n_left_from);
 
 	mpls_detunnel_main_t *mdm = &mpls_detunnel_main;
+	mpls_detunnel_worker_t *mdw = &mpls_detunnel_worker;
 
 	while (n_left_from >= 4)
 	{
@@ -180,7 +186,7 @@ mpls_detunnel_inline(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_frame_t *f
 
 	for (u32 sw_idx = 0; sw_idx <= mdm->counter_if_index; sw_idx++)
 	{
-		vlib_counter_t *counter = &mdm->cache_counters[sw_idx];
+		vlib_counter_t *counter = &mdw->counters[sw_idx];
 		vlib_increment_combined_counter(&mdm->counters[MPLS_PROCESSED], vm->thread_index,
 				sw_idx, counter->packets, counter->bytes);
 
@@ -263,6 +269,14 @@ CLIB_MARCH_FN (mpls_detunnel_init, clib_error_t *, vlib_main_t __clib_unused *vm
 	return 0;
 }
 
+static clib_error_t *
+mpls_detunnel_worker_init(vlib_main_t __clib_unused *vm)
+{
+	mpls_detunnel_worker_t *mdw = &mpls_detunnel_worker;
+	clib_memset(mdw->counters, 0, sizeof(mdw->counters));
+	return 0;
+}
+
 static clib_error_t *mpls_detunnel_init(vlib_main_t *vm)
 {
 	mpls_detunnel_main_t *mdm = &mpls_detunnel_main;
@@ -280,9 +294,8 @@ static clib_error_t *mpls_detunnel_init(vlib_main_t *vm)
 	foreach_detunnel_counter
 #undef _
 
-	clib_memset(mdm->cache_counters, 0, sizeof(mdm->cache_counters));
-
 	return CLIB_MARCH_FN_SELECT(mpls_detunnel_init) (vm);
 }
 
+VLIB_WORKER_INIT_FUNCTION (mpls_detunnel_worker_init);
 VLIB_INIT_FUNCTION (mpls_detunnel_init);
