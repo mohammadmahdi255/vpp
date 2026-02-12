@@ -110,6 +110,7 @@ process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b,
 {
 	udp_detunnel_worker_t *udw = &udp_detunnel_worker;
 	const u32 sw_idx = vnet_buffer(b)->sw_if_index[VLIB_RX];
+	vnet_buffer(b)->l4_hdr_offset = b->current_data;
 
 	const udp_header_t *udp = vlib_buffer_get_current(b);
 

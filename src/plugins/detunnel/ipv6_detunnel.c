@@ -103,6 +103,7 @@ process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, 
 {
 	ipv6_detunnel_worker_t *idw = &ipv6_detunnel_worker;
 	u32 sw_idx = vnet_buffer(b)->sw_if_index[VLIB_RX];
+	vnet_buffer(b)->l3_hdr_offset = b->current_data;
 
 	const ip6_header_t *ip6 = vlib_buffer_get_current(b);
 	const u16 payload_len = clib_net_to_host_u16(ip6->payload_length);
@@ -137,9 +138,9 @@ process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, 
 
 	if (PREDICT_TRUE(protocol != IP_PROTOCOL_IPV6_FRAGMENTATION))
 	{
+		vlib_buffer_advance(b, offset);
 		idw->counters[sw_idx].packets++;
 		idw->counters[sw_idx].bytes += offset;
-		vlib_buffer_advance(b, offset);
 	}
 
 trace:

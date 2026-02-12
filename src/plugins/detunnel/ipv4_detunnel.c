@@ -99,6 +99,7 @@ process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, 
 {
 	ipv4_detunnel_worker_t *idw = &ipv4_detunnel_worker;
 	u32 sw_idx = vnet_buffer(b)->sw_if_index[VLIB_RX];
+	vnet_buffer(b)->l3_hdr_offset = b->current_data;
 
 	const ip4_header_t *ip4 = vlib_buffer_get_current(b);
 	const u16 ip4_hdr_len = clib_max(ip4_header_bytes(ip4), sizeof(ip4_header_t));
