@@ -147,9 +147,6 @@ udp_detunnel_inline(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_frame_t *fr
 
 	vlib_get_buffers(vm, from, bufs, n_left_from);
 
-	udp_detunnel_main_t *udm = &udp_detunnel_main;
-	udp_detunnel_worker_t *udw = &udp_detunnel_worker;
-
 	while (n_left_from >= 4)
 	{
 
@@ -186,6 +183,9 @@ udp_detunnel_inline(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_frame_t *fr
 		dst_port++;
 		n_left_from--;
 	}
+
+	udp_detunnel_main_t *udm = &udp_detunnel_main;
+	udp_detunnel_worker_t *udw = &udp_detunnel_worker;
 
 	for (u32 sw_idx = 0; sw_idx <= udm->counter_if_index; sw_idx++)
 	{
@@ -281,7 +281,8 @@ udp_detunnel_worker_init(vlib_main_t __clib_unused *vm)
 	return 0;
 }
 
-static clib_error_t *udp_detunnel_init(vlib_main_t *vm)
+static clib_error_t *
+udp_detunnel_init(vlib_main_t *vm)
 {
 	udp_detunnel_main_t *udm = &udp_detunnel_main;
 	vnet_main_t *vnm = vnet_get_main();

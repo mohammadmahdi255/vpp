@@ -54,6 +54,7 @@ typedef struct
 
 static __thread pppoe_detunnel_worker_t pppoe_detunnel_worker;
 extern pppoe_detunnel_main_t pppoe_detunnel_main;
+extern vlib_node_registration_t pppoe_detunnel;
 
 static_always_inline void
 pppoe_to_next(u16 *next, u16 len)
@@ -122,9 +123,6 @@ pppoe_detunnel_inline(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_frame_t *
 
 	vlib_get_buffers(vm, from, bufs, n_left_from);
 
-	pppoe_detunnel_main_t *pdm = &pppoe_detunnel_main;
-	pppoe_detunnel_worker_t *pdw = &pppoe_detunnel_worker;
-
 	while (n_left_from >= 4)
 	{
 		if (n_left_from >= 8)
@@ -158,6 +156,9 @@ pppoe_detunnel_inline(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_frame_t *
 		next++;
 		n_left_from--;
 	}
+
+	pppoe_detunnel_main_t *pdm = &pppoe_detunnel_main;
+	pppoe_detunnel_worker_t *pdw = &pppoe_detunnel_worker;
 
 	for (u32 sw_idx = 0; sw_idx <= pdm->counter_if_index; sw_idx++)
 	{
@@ -258,7 +259,8 @@ pppoe_detunnel_worker_init(vlib_main_t __clib_unused *vm)
 	return 0;
 }
 
-static clib_error_t *pppoe_detunnel_init(vlib_main_t *vm)
+static clib_error_t *
+pppoe_detunnel_init(vlib_main_t *vm)
 {
 	pppoe_detunnel_main_t *pdm = &pppoe_detunnel_main;
 	vnet_main_t *vnm = vnet_get_main();

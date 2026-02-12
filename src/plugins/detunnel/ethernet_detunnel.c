@@ -250,14 +250,6 @@ void ethernet_detunnel_counter_validate(u32 sw_if_index)
 
 #endif
 
-static clib_error_t *
-ethernet_detunnel_worker_init(vlib_main_t __clib_unused *vm)
-{
-	ethernet_detunnel_worker_t *edw = &ethernet_detunnel_worker;
-	clib_memset(edw->counters, 0, sizeof(edw->counters));
-	return 0;
-}
-
 CLIB_MARCH_FN (ethernet_detunnel_init, clib_error_t *, vlib_main_t __clib_unused *vm)
 {
 	clib_warning("size: %lu %s", SIMD_SIZE, CLIB_STRING_MACRO(SIMD_TYPE));
@@ -271,6 +263,14 @@ CLIB_MARCH_FN (ethernet_detunnel_init, clib_error_t *, vlib_main_t __clib_unused
 	SIMD_VEC(ppp_next) = SIMD_SPLAT(ETHERNET_NEXT_PPP_DETUNNEL);
 	SIMD_VEC(failed_next) = SIMD_SPLAT(ETHERNET_NEXT_FAILED_DETUNNEL);
 
+	return 0;
+}
+
+static clib_error_t *
+ethernet_detunnel_worker_init(vlib_main_t __clib_unused *vm)
+{
+	ethernet_detunnel_worker_t *edw = &ethernet_detunnel_worker;
+	clib_memset(edw->counters, 0, sizeof(edw->counters));
 	return 0;
 }
 

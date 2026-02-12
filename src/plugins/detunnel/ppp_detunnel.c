@@ -56,6 +56,7 @@ typedef struct
 
 static __thread ppp_detunnel_worker_t ppp_detunnel_worker;
 extern ppp_detunnel_main_t ppp_detunnel_main;
+extern vlib_node_registration_t ppp_detunnel;
 
 static_always_inline void
 ppp_to_next(u16 *next, u16 len)
@@ -140,9 +141,6 @@ ppp_detunnel_inline(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_frame_t *fr
 
 	vlib_get_buffers(vm, from, bufs, n_left_from);
 
-	ppp_detunnel_main_t *pdm = &ppp_detunnel_main;
-	ppp_detunnel_worker_t *pdw = &ppp_detunnel_worker;
-
 	while (n_left_from >= 4)
 	{
 		if (n_left_from >= 8)
@@ -176,6 +174,9 @@ ppp_detunnel_inline(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_frame_t *fr
 		next++;
 		n_left_from--;
 	}
+
+	ppp_detunnel_main_t *pdm = &ppp_detunnel_main;
+	ppp_detunnel_worker_t *pdw = &ppp_detunnel_worker;
 
 	for (u32 sw_idx = 0; sw_idx <= pdm->counter_if_index; sw_idx++)
 	{
@@ -273,7 +274,8 @@ ppp_detunnel_worker_init(vlib_main_t __clib_unused *vm)
 	return 0;
 }
 
-static clib_error_t *ppp_detunnel_init(vlib_main_t *vm)
+static clib_error_t *
+ppp_detunnel_init(vlib_main_t *vm)
 {
 	ppp_detunnel_main_t *pdm = &ppp_detunnel_main;
 	vnet_main_t *vnm = vnet_get_main();

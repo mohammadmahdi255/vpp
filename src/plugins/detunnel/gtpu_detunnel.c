@@ -160,9 +160,6 @@ gtpu_detunnel_inline(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_frame_t *f
 
 	vlib_get_buffers(vm, from, bufs, n_left_from);
 
-	gtpu_detunnel_main_t *gdm = &gtpu_detunnel_main;
-	gtpu_detunnel_worker_t *gdw = &gtpu_detunnel_worker;
-
 	while (n_left_from >= 4)
 	{
 
@@ -197,6 +194,9 @@ gtpu_detunnel_inline(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_frame_t *f
 		next++;
 		n_left_from--;
 	}
+
+	gtpu_detunnel_main_t *gdm = &gtpu_detunnel_main;
+	gtpu_detunnel_worker_t *gdw = &gtpu_detunnel_worker;
 
 	for (u32 sw_idx = 0; sw_idx <= gdm->counter_if_index; sw_idx++)
 	{
@@ -294,7 +294,8 @@ gtpu_detunnel_worker_init(vlib_main_t __clib_unused *vm)
 	return 0;
 }
 
-static clib_error_t *gtpu_detunnel_init(vlib_main_t *vm)
+static clib_error_t *
+gtpu_detunnel_init(vlib_main_t *vm)
 {
 	gtpu_detunnel_main_t *gdm = &gtpu_detunnel_main;
 	vnet_main_t *vnm = vnet_get_main();

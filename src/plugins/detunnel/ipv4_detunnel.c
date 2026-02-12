@@ -136,9 +136,6 @@ ipv4_detunnel_inline(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_frame_t *f
 
 	vlib_get_buffers(vm, from, bufs, n_left_from);
 
-	ipv4_detunnel_main_t *idm = &ipv4_detunnel_main;
-	ipv4_detunnel_worker_t *idw = &ipv4_detunnel_worker;
-
 	while (n_left_from >= 4)
 	{
 
@@ -173,6 +170,9 @@ ipv4_detunnel_inline(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_frame_t *f
 		next++;
 		n_left_from--;
 	}
+
+	ipv4_detunnel_main_t *idm = &ipv4_detunnel_main;
+	ipv4_detunnel_worker_t *idw = &ipv4_detunnel_worker;
 
 	for (u32 sw_idx = 0; sw_idx <= idm->counter_if_index; sw_idx++)
 	{
@@ -264,7 +264,8 @@ ipv4_detunnel_worker_init(vlib_main_t __clib_unused *vm)
 	return 0;
 }
 
-static clib_error_t *ipv4_detunnel_init(vlib_main_t *vm)
+static clib_error_t *
+ipv4_detunnel_init(vlib_main_t *vm)
 {
 	ipv4_detunnel_main_t *idm = &ipv4_detunnel_main;
 	vnet_main_t *vnm = vnet_get_main();
