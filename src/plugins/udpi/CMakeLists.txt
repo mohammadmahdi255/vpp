@@ -11,9 +11,15 @@ link_directories(
 
 add_vpp_plugin(udpi
 	SOURCES
+		ipv4_session_lookup.c
+		ipv6_session_lookup.c
 		plugin.c
+		udpi_classifier.c
 
 	MULTIARCH_SOURCES
+		ipv4_session_lookup.c
+		ipv6_session_lookup.c
+		udpi_classifier.c
 
 	LINK_FLAGS
 		${DPDK_LDFLAGS}
