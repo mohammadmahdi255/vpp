@@ -4,5 +4,5 @@
 
 VLIB_PLUGIN_REGISTER () = {
 	.version = VPP_BUILD_VER,
-	.description = "Detunnel plugin",
+	.description = "User Data Plane Inspection (UDPI) Plugin",
 };
