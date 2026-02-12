@@ -13,7 +13,7 @@
 #include "detunnel.h"
 
 #define foreach_udp_detunnel_next						\
-	_(drop_next, DROP, "drop")							\
+	_(drop_next, DROP, "udpi-classifier")				\
 	_(l2tp_next, L2TP_DETUNNEL, "l2tp-detunnel")		\
 	_(gtpu_next, GTPU_DETUNNEL, "gtpu-detunnel")		\
 	_(failed_next, FAILED_DETUNNEL, "failed-detunnel")

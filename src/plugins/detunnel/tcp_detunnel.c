@@ -13,7 +13,7 @@
 #include "detunnel.h"
 
 #define foreach_tcp_detunnel_next						\
-	_(drop_next, DROP, "drop")							\
+	_(drop_next, DROP, "udpi-classifier")				\
 	_(failed_next, FAILED_DETUNNEL, "failed-detunnel")
 
 #define foreach_tcp_port	\
