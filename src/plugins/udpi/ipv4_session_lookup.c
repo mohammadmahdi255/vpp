@@ -1,3 +1,4 @@
+#include <asm-generic/errno.h>
 #include <stdbool.h>
 
 #include <vlib/vlib.h>
@@ -12,13 +13,16 @@
 #include "detunnel/detunnel.h"
 
 #include "ipv4_session.h"
+#include "rte_eal.h"
 #include "vlib/threads.h"
 #include "vppinfra/format.h"
+#include "vppinfra/pool.h"
 #include "vppinfra/vec.h"
 
 #undef always_inline
 #include <rte_hash.h>
 #include <rte_jhash.h>
+#include <rte_errno.h>
 
 #if CLIB_DEBUG > 0
 #define always_inline static inline
@@ -64,10 +68,9 @@ typedef struct
 	struct rte_hash *session_hash;
 	ipv4_session_t *session_pool;
 	u32 session_count;
-	u32 max_sessions;
 } ipv4_session_lookup_worker_t;
 
-static __thread ipv4_session_lookup_worker_t ipv4_session_lookup_worker;
+static __thread ipv4_session_lookup_worker_t __clib_unused ipv4_session_lookup_worker;
 extern ipv4_session_lookup_main_t ipv4_session_lookup_main;
 extern vlib_node_registration_t ipv4_session_lookup;
 
@@ -185,8 +188,6 @@ VLIB_REGISTER_NODE (ipv4_session_lookup) = {
 	},
 };
 
-#endif
-
 CLIB_MARCH_FN (ipv4_session_lookup_init, clib_error_t *, vlib_main_t __clib_unused *vm)
 {
 	clib_warning("size: %lu %s", SIMD_SIZE, CLIB_STRING_MACRO(SIMD_TYPE));
@@ -202,29 +203,35 @@ ipv4_session_lookup_worker_init(vlib_main_t __clib_unused *vm)
 	ipv4_session_lookup_worker_t *sw = &ipv4_session_lookup_worker;
 	struct rte_hash_parameters hash_params = {0};
 
+	rte_eal_init(0, 0);
+
+	if (rte_errno != EALREADY)
+		return clib_error_return(0, "rte eal is not initialize");
+
 	void *name = format(NULL, "ipv4_session_hash_%u", vlib_get_thread_index());
 
-	hash_params.name = name;
-	hash_params.entries = 1024 * 1024;  // 1M sessions
-	hash_params.key_len = sizeof(ipv4_5tuple_key_t);
-	hash_params.hash_func = rte_jhash;
-	hash_params.hash_func_init_val = 0;
-	hash_params.socket_id = (i32) rte_socket_id();
-	hash_params.extra_flag = RTE_HASH_EXTRA_FLAGS_RW_CONCURRENCY;  // Multi-thread safe
-
-	sw->session_hash = rte_hash_create(&hash_params);
-
-	if (sw->session_hash == NULL)
-	{
-		vec_free(name);
-		return clib_error_return(0, "Failed to create rte_hash for IPv4 sessions");
-	}
-
-	sw->max_sessions = 1024 * 1024;
 	sw->session_count = 0;
 	sw->session_pool = NULL;
 
+	hash_params.name = name;
+	hash_params.entries = 1024;
+	hash_params.key_len = sizeof(ipv4_flow_key_t);
+	hash_params.hash_func = rte_jhash;
+	hash_params.hash_func_init_val = 0;
+	hash_params.socket_id = (i32) rte_socket_id();
+	hash_params.extra_flag = 0;
+
+	sw->session_hash = rte_hash_create(&hash_params);
 	vec_free(name);
+
+	if (!sw->session_hash)
+		return clib_error_return(0, "%s", rte_strerror(rte_errno));
+
+	pool_init_fixed(sw->session_pool, hash_params.entries);
+
+	if (!sw->session_pool)
+		return clib_error_return(0, "failed to create session pool");
+
 	return 0;
 }
 
@@ -234,5 +241,10 @@ ipv4_session_lookup_init(vlib_main_t *vm)
 	return CLIB_MARCH_FN_SELECT(ipv4_session_lookup_init) (vm);
 }
 
-VLIB_WORKER_INIT_FUNCTION (ipv4_session_lookup_worker_init);
+VLIB_WORKER_INIT_FUNCTION (ipv4_session_lookup_worker_init) = {
+	.runs_after = VLIB_INITS("dpdk_worker_thread_init"),
+};
+
 VLIB_INIT_FUNCTION (ipv4_session_lookup_init);
+
+#endif
