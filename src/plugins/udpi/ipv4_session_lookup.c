@@ -10,6 +10,8 @@
 #include <vppinfra/clib.h>
 #include <vppinfra/error.h>
 
+#include <vppinfra/bihash_16_8.h>
+
 #include "detunnel/detunnel.h"
 
 #include "ipv4_session.h"
@@ -65,7 +67,7 @@ typedef struct
 
 typedef struct
 {
-	struct rte_hash *session_hash;
+	clib_bihash_16_8_t session_hash;
 	ipv4_session_t *session_pool;
 	u32 session_count;
 } ipv4_session_lookup_worker_t;
@@ -74,26 +76,26 @@ extern __thread ipv4_session_lookup_worker_t ipv4_session_lookup_worker;
 extern ipv4_session_lookup_main_t ipv4_session_lookup_main;
 extern vlib_node_registration_t ipv4_session_lookup;
 
-static_always_inline void
-ipv4_session_lookup_to_next(vlib_buffer_t **b, const void **key_ptr, i32 *position, u16 *next, u16 len)
-{
-	ipv4_session_lookup_worker_t *sw = &ipv4_session_lookup_worker;
-	for (u16 i = 0; i < len; i++)
-	{
-		if (position[i] < 0)
-		{
-			vnet_buffer(b[i])->udp.session_index = position[i];
-			next[i] = IPV4_SESSION_LOOKUP_NEXT_DROP;
-		}
-		else
-		{
-			u32 session_index = 1000;
-			rte_hash_add_key_data(sw->session_hash, key_ptr[i], &session_index);
-			vnet_buffer(b[i])->udp.session_index = session_index;
-			next[i] = IPV4_SESSION_LOOKUP_NEXT_DROP;
-		}
-	}
-}
+// static_always_inline void
+// ipv4_session_lookup_to_next(vlib_buffer_t **b, const void **key_ptr, i32 *position, u16 *next, u16 len)
+// {
+// 	// ipv4_session_lookup_worker_t *sw = &ipv4_session_lookup_worker;
+// 	// for (u16 i = 0; i < len; i++)
+// 	// {
+// 	// 	if (position[i] < 0)
+// 	// 	{
+// 	// 		vnet_buffer(b[i])->udp.session_index = position[i];
+// 	// 		next[i] = IPV4_SESSION_LOOKUP_NEXT_DROP;
+// 	// 	}
+// 	// 	else
+// 	// 	{
+// 	// 		u32 session_index = 1000;
+// 	// 		rte_hash_add_key_data(sw->session_hash, key_ptr[i], &session_index);
+// 	// 		vnet_buffer(b[i])->udp.session_index = session_index;
+// 	// 		next[i] = IPV4_SESSION_LOOKUP_NEXT_DROP;
+// 	// 	}
+// 	// }
+// }
 
 static_always_inline void
 add_trace(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b,
@@ -107,16 +109,36 @@ add_trace(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b,
 }
 
 static_always_inline void
-process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, ipv4_flow_key_t *key, u8 is_trace)
+process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, u16 *next, u8 is_trace)
 {
 	const ip4_header_t *ip4 = (void *) b->data + vnet_buffer(b)->l3_hdr_offset;
 	const udp_header_t *udp = (void *) b->data + vnet_buffer(b)->l4_hdr_offset;
+
+	clib_bihash_kv_16_8_t kv;
+
+	ipv4_flow_key_t *key = (void *) &kv.key;
 
 	key->src_ip = ip4->src_address;
 	key->dst_ip = ip4->dst_address;
 	key->src_port = udp->src_port;
 	key->dst_port = udp->dst_port;
 	key->protocol = ip4->protocol;
+	next[0] = 0;
+
+	ipv4_session_lookup_worker_t *sw = &ipv4_session_lookup_worker;
+
+	if (clib_bihash_search_16_8(&sw->session_hash, &kv, &kv) == 0)
+	{
+		vnet_buffer(b)->udp.session_index = (i32) kv.value;
+		// clib_warning("found");
+	}
+	else
+	{
+		clib_warning("insert");
+		pool_get(sw->session_pool, kv.value);
+		clib_bihash_add_del_16_8(&sw->session_hash, &kv, 1);
+		vnet_buffer(b)->udp.session_index = kv.value;
+	}
 
 	if (is_trace)
 		add_trace(vm, node, b, key);
@@ -127,11 +149,7 @@ ipv4_session_lookup_inline(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_fram
 {
 	vlib_buffer_t *bufs[VLIB_FRAME_SIZE];
 	u16 nexts[VLIB_FRAME_SIZE];
-	ipv4_flow_key_t keys[VLIB_FRAME_SIZE];
-	const void *key_ptrs[VLIB_FRAME_SIZE];
-	i32 positions[VLIB_FRAME_SIZE];
-	ipv4_flow_key_t *key = keys;
-	const void **key_ptr = key_ptrs;
+	u16 *next = nexts;
 
 	vlib_buffer_t **b = bufs;
 
@@ -156,45 +174,36 @@ ipv4_session_lookup_inline(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_fram
 			vlib_prefetch_buffer_data(b[7], LOAD);
 		}
 
-		process_buffer_1x(vm, node, b[0], &key[0], is_trace);
-		process_buffer_1x(vm, node, b[1], &key[1], is_trace);
-		process_buffer_1x(vm, node, b[2], &key[2], is_trace);
-		process_buffer_1x(vm, node, b[3], &key[3], is_trace);
-
-		key_ptr[0] = &key[0];
-		key_ptr[1] = &key[1];
-		key_ptr[2] = &key[2];
-		key_ptr[3] = &key[3];
+		process_buffer_1x(vm, node, b[0], &next[0], is_trace);
+		process_buffer_1x(vm, node, b[1], &next[1], is_trace);
+		process_buffer_1x(vm, node, b[2], &next[2], is_trace);
+		process_buffer_1x(vm, node, b[3], &next[3], is_trace);
 
 		b += 4;
-		key += 4;
-		key_ptr += 4;
+		next += 4;
 		n_left_from -= 4;
 	}
 
 	while (n_left_from > 0)
 	{
-		process_buffer_1x(vm, node, b[0], key, is_trace);
-
-		key_ptr[0] = key;
+		process_buffer_1x(vm, node, b[0], next, is_trace);
 
 		b++;
-		key++;
-		key_ptr++;
+		next++;
 		n_left_from--;
 	}
 
-	ipv4_session_lookup_worker_t *sw = &ipv4_session_lookup_worker;
+	// ipv4_session_lookup_worker_t *sw = &ipv4_session_lookup_worker;
 
-	u32 offset = 0;
-	while (offset < frame->n_vectors)
-	{
-		u32 batch_size = clib_min(frame->n_vectors - offset, RTE_HASH_LOOKUP_BULK_MAX);
-		rte_hash_lookup_bulk(sw->session_hash, &key_ptrs[offset], batch_size, &positions[offset]);
-		offset += batch_size;
-	}
+	// u32 offset = 0;
+	// while (offset < frame->n_vectors)
+	// {
+	// 	u32 batch_size = clib_min(frame->n_vectors - offset, RTE_HASH_LOOKUP_BULK_MAX);
+	// 	rte_hash_lookup_bulk(sw->session_hash, &key_ptrs[offset], batch_size, &positions[offset]);
+	// 	offset += batch_size;
+	// }
 
-	ipv4_session_lookup_to_next(bufs, key_ptrs, positions, nexts, frame->n_vectors);
+	// ipv4_session_lookup_to_next(bufs, key_ptrs, positions, nexts, frame->n_vectors);
 	vlib_buffer_enqueue_to_next(vm, node, from, nexts, frame->n_vectors);
 
 	return frame->n_vectors;
@@ -250,35 +259,15 @@ static clib_error_t *
 ipv4_session_lookup_worker_init(vlib_main_t __clib_unused *vm)
 {
 	ipv4_session_lookup_worker_t *sw = &ipv4_session_lookup_worker;
-	struct rte_hash_parameters hash_params = {0};
-
-	clib_warning("rte hash %p", sw);
-
-	rte_eal_init(0, 0);
-
-	if (rte_errno != EALREADY)
-		return clib_error_return(0, "rte eal is not initialize");
-
-	void *name = format(NULL, "ipv4_session_hash_%u", vlib_get_thread_index());
 
 	sw->session_count = 0;
 	sw->session_pool = NULL;
 
-	hash_params.name = name;
-	hash_params.entries = 1024;
-	hash_params.key_len = sizeof(ipv4_flow_key_t);
-	hash_params.hash_func = rte_jhash;
-	hash_params.hash_func_init_val = 0;
-	hash_params.socket_id = (i32) rte_socket_id();
-	hash_params.extra_flag = 0;
-
-	sw->session_hash = rte_hash_create(&hash_params);
+	void *name = format(NULL, "ipv4-session-hash-%u", vlib_get_thread_index());
+	clib_bihash_init_16_8(&sw->session_hash, name, 1024, 1 << 20);
 	vec_free(name);
 
-	if (sw->session_hash == NULL)
-		return clib_error_return(0, "%s", rte_strerror(rte_errno));
-
-	pool_init_fixed(sw->session_pool, hash_params.entries);
+	pool_init_fixed(sw->session_pool, 1024);
 
 	if (!sw->session_pool)
 		return clib_error_return(0, "failed to create session pool");
