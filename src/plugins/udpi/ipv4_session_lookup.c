@@ -15,6 +15,8 @@
 #include "ipv4_session.h"
 #include "rte_eal.h"
 #include "vat/vat.h"
+#include "vlib/buffer.h"
+#include "vlib/node.h"
 #include "vlib/threads.h"
 #include "vnet/buffer.h"
 #include "vnet/udp/udp_packet.h"
@@ -44,10 +46,10 @@ enum
 	IPV4_SESSION_LOOKUP_NEXT_N,
 };
 
-#define _(var, id, name) static SIMD_TYPE DETUNNEL_CONCAT(var, SIMD_TYPE);
+// #define _(var, id, name) static SIMD_TYPE DETUNNEL_CONCAT(var, SIMD_TYPE);
 
-foreach_ipv4_session_lookup_next
-#undef _
+// foreach_ipv4_session_lookup_next
+// #undef _
 
 enum
 {
@@ -73,18 +75,25 @@ typedef struct
 	u32 session_count;
 } ipv4_session_lookup_worker_t;
 
-static __thread ipv4_session_lookup_worker_t __clib_unused ipv4_session_lookup_worker;
+extern __thread ipv4_session_lookup_worker_t ipv4_session_lookup_worker;
 extern ipv4_session_lookup_main_t ipv4_session_lookup_main;
 extern vlib_node_registration_t ipv4_session_lookup;
 
 static_always_inline void
-ipv4_session_lookup_to_next(u16 *next, u16 len)
+ipv4_session_lookup_to_next(vlib_buffer_t **b, i32 *position, u16 *next, u16 len)
 {
-	for (u16 i = 0; i < len; i += SIMD_SIZE)
+	for (u16 i = 0; i < len; i++)
 	{
-		SIMD_TYPE result = SIMD_VEC(drop_next);
-
-		SIMD_STORE(result, next + i);
+		if (position[i] < 0)
+		{
+			vnet_buffer(b[i])->udp.session_index = position[i];
+			next[i] = IPV4_SESSION_LOOKUP_NEXT_DROP;
+		}
+		else
+		{
+			vnet_buffer(b[i])->udp.session_index = ~0;
+			next[i] = IPV4_SESSION_LOOKUP_NEXT_DROP;
+		}
 	}
 }
 
@@ -121,8 +130,10 @@ ipv4_session_lookup_inline(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_fram
 	vlib_buffer_t *bufs[VLIB_FRAME_SIZE];
 	u16 nexts[VLIB_FRAME_SIZE];
 	ipv4_flow_key_t keys[VLIB_FRAME_SIZE];
-	// u16 *next = nexts;
+	const void *key_ptrs[VLIB_FRAME_SIZE];
+	i32 positions[VLIB_FRAME_SIZE];
 	ipv4_flow_key_t *key = keys;
+	const void **key_ptr = key_ptrs;
 
 	vlib_buffer_t **b = bufs;
 
@@ -152,8 +163,14 @@ ipv4_session_lookup_inline(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_fram
 		process_buffer_1x(vm, node, b[2], &key[2], is_trace);
 		process_buffer_1x(vm, node, b[3], &key[3], is_trace);
 
+		key_ptr[0] = &key[0];
+		key_ptr[1] = &key[1];
+		key_ptr[2] = &key[2];
+		key_ptr[3] = &key[3];
+
 		b += 4;
 		key += 4;
+		key_ptr += 4;
 		n_left_from -= 4;
 	}
 
@@ -161,12 +178,25 @@ ipv4_session_lookup_inline(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_fram
 	{
 		process_buffer_1x(vm, node, b[0], key, is_trace);
 
+		key_ptr[0] = key;
+
 		b++;
 		key++;
+		key_ptr++;
 		n_left_from--;
 	}
 
-	ipv4_session_lookup_to_next(nexts, frame->n_vectors);
+	ipv4_session_lookup_worker_t *sw = &ipv4_session_lookup_worker;
+
+	u32 offset = 0;
+	while (offset < frame->n_vectors)
+	{
+		u32 batch_size = clib_min(frame->n_vectors - offset, RTE_HASH_LOOKUP_BULK_MAX);
+		rte_hash_lookup_bulk(sw->session_hash, &key_ptrs[offset], batch_size, &positions[offset]);
+		offset += batch_size;
+	}
+
+	ipv4_session_lookup_to_next(bufs, positions, nexts, frame->n_vectors);
 	vlib_buffer_enqueue_to_next(vm, node, from, nexts, frame->n_vectors);
 
 	return frame->n_vectors;
@@ -178,6 +208,7 @@ VLIB_NODE_FN (ipv4_session_lookup) (vlib_main_t *vm, vlib_node_runtime_t *node, 
 }
 
 #ifndef CLIB_MARCH_VARIANT
+__thread ipv4_session_lookup_worker_t ipv4_session_lookup_worker;
 ipv4_session_lookup_main_t ipv4_session_lookup_main;
 
 static u8 *format_ipv4_session_lookup_trace(u8 *s, va_list *args)
@@ -212,7 +243,7 @@ CLIB_MARCH_FN (ipv4_session_lookup_init, clib_error_t *, vlib_main_t __clib_unus
 {
 	clib_warning("size: %lu %s", SIMD_SIZE, CLIB_STRING_MACRO(SIMD_TYPE));
 
-	SIMD_VEC(drop_next) = SIMD_SPLAT(IPV4_SESSION_LOOKUP_NEXT_DROP);
+	// SIMD_VEC(drop_next) = SIMD_SPLAT(IPV4_SESSION_LOOKUP_NEXT_DROP);
 
 	return 0;
 }
@@ -222,6 +253,8 @@ ipv4_session_lookup_worker_init(vlib_main_t __clib_unused *vm)
 {
 	ipv4_session_lookup_worker_t *sw = &ipv4_session_lookup_worker;
 	struct rte_hash_parameters hash_params = {0};
+
+	clib_warning("rte hash %p", sw);
 
 	rte_eal_init(0, 0);
 
@@ -244,7 +277,7 @@ ipv4_session_lookup_worker_init(vlib_main_t __clib_unused *vm)
 	sw->session_hash = rte_hash_create(&hash_params);
 	vec_free(name);
 
-	if (!sw->session_hash)
+	if (sw->session_hash == NULL)
 		return clib_error_return(0, "%s", rte_strerror(rte_errno));
 
 	pool_init_fixed(sw->session_pool, hash_params.entries);
