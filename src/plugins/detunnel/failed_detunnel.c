@@ -29,7 +29,7 @@ typedef struct
 	counter_t counters[MAX_IF_SIZE];
 } failed_detunnel_worker_t;
 
-static __thread failed_detunnel_worker_t failed_detunnel_worker;
+extern __thread failed_detunnel_worker_t failed_detunnel_worker;
 extern failed_detunnel_main_t failed_detunnel_main;
 extern vlib_node_registration_t failed_detunnel;
 
@@ -123,6 +123,7 @@ VLIB_NODE_FN (failed_detunnel) (vlib_main_t *vm, vlib_node_runtime_t *node, vlib
 }
 
 #ifndef CLIB_MARCH_VARIANT
+__thread failed_detunnel_worker_t failed_detunnel_worker;
 failed_detunnel_main_t failed_detunnel_main;
 
 static u8 *format_failed_detunnel_trace(u8 *s, va_list *args)

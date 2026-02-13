@@ -59,7 +59,7 @@ typedef struct
 	vlib_counter_t counters[MAX_IF_SIZE];
 } ipv6_detunnel_worker_t;
 
-static __thread ipv6_detunnel_worker_t ipv6_detunnel_worker;
+extern __thread ipv6_detunnel_worker_t ipv6_detunnel_worker;
 extern ipv6_detunnel_main_t ipv6_detunnel_main;
 extern vlib_node_registration_t ipv6_detunnel;
 
@@ -225,6 +225,7 @@ VLIB_NODE_FN (ipv6_detunnel) (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_f
 }
 
 #ifndef CLIB_MARCH_VARIANT
+__thread ipv6_detunnel_worker_t ipv6_detunnel_worker;
 ipv6_detunnel_main_t ipv6_detunnel_main;
 
 static u8 *format_ipv6_trace(u8 *s, va_list *args)

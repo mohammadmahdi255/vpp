@@ -63,7 +63,7 @@ typedef struct
 	vlib_counter_t counters[MAX_IF_SIZE];
 } tcp_detunnel_worker_t;
 
-static __thread tcp_detunnel_worker_t tcp_detunnel_worker;
+extern __thread tcp_detunnel_worker_t tcp_detunnel_worker;
 extern tcp_detunnel_main_t tcp_detunnel_main;
 extern vlib_node_registration_t tcp_detunnel;
 
@@ -201,6 +201,7 @@ VLIB_NODE_FN (tcp_detunnel) (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_fr
 }
 
 #ifndef CLIB_MARCH_VARIANT
+__thread tcp_detunnel_worker_t tcp_detunnel_worker;
 tcp_detunnel_main_t tcp_detunnel_main;
 
 static u8 *format_tcp_detunnel_trace(u8 *s, va_list *args)
