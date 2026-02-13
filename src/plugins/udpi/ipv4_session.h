@@ -7,8 +7,8 @@
 
 typedef struct
 {
-	ip4_address_t src_addr;
-	ip4_address_t dst_addr;
+	ip4_address_t src_ip;
+	ip4_address_t dst_ip;
 	u16 src_port;
 	u16 dst_port;
 	u8 protocol;

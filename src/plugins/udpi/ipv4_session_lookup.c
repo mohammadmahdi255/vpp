@@ -14,7 +14,10 @@
 
 #include "ipv4_session.h"
 #include "rte_eal.h"
+#include "vat/vat.h"
 #include "vlib/threads.h"
+#include "vnet/buffer.h"
+#include "vnet/udp/udp_packet.h"
 #include "vppinfra/format.h"
 #include "vppinfra/pool.h"
 #include "vppinfra/vec.h"
@@ -56,7 +59,7 @@ enum
 
 typedef struct
 {
-	u16 next;
+	ipv4_flow_key_t key;
 } ipv4_session_lookup_trace_t;
 
 typedef struct
@@ -87,20 +90,29 @@ ipv4_session_lookup_to_next(u16 *next, u16 len)
 
 static_always_inline void
 add_trace(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b,
-		const u16 next)
+		const ipv4_flow_key_t *key)
 {
 	if (PREDICT_FALSE(b->flags & VLIB_BUFFER_IS_TRACED))
 	{
 		ipv4_session_lookup_trace_t *t = vlib_add_trace(vm, node, b, sizeof(*t));
-		t->next = next;
+		t->key = *key;
 	}
 }
 
 static_always_inline void
-process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, u16 *next, u8 is_trace)
+process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, ipv4_flow_key_t *key, u8 is_trace)
 {
+	const ip4_header_t *ip4 = (void *) b->data + vnet_buffer(b)->l3_hdr_offset;
+	const udp_header_t *udp = (void *) b->data + vnet_buffer(b)->l4_hdr_offset;
+
+	key->src_ip = ip4->src_address;
+	key->dst_ip = ip4->dst_address;
+	key->src_port = udp->src_port;
+	key->dst_port = udp->dst_port;
+	key->protocol = ip4->protocol;
+
 	if (is_trace)
-		add_trace(vm, node, b, next[0]);
+		add_trace(vm, node, b, key);
 }
 
 static_always_inline u64
@@ -108,7 +120,9 @@ ipv4_session_lookup_inline(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_fram
 {
 	vlib_buffer_t *bufs[VLIB_FRAME_SIZE];
 	u16 nexts[VLIB_FRAME_SIZE];
-	u16 *next = nexts;
+	ipv4_flow_key_t keys[VLIB_FRAME_SIZE];
+	// u16 *next = nexts;
+	ipv4_flow_key_t *key = keys;
 
 	vlib_buffer_t **b = bufs;
 
@@ -133,22 +147,22 @@ ipv4_session_lookup_inline(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_fram
 			vlib_prefetch_buffer_data(b[7], LOAD);
 		}
 
-		process_buffer_1x(vm, node, b[0], &next[0], is_trace);
-		process_buffer_1x(vm, node, b[1], &next[1], is_trace);
-		process_buffer_1x(vm, node, b[2], &next[2], is_trace);
-		process_buffer_1x(vm, node, b[3], &next[3], is_trace);
+		process_buffer_1x(vm, node, b[0], &key[0], is_trace);
+		process_buffer_1x(vm, node, b[1], &key[1], is_trace);
+		process_buffer_1x(vm, node, b[2], &key[2], is_trace);
+		process_buffer_1x(vm, node, b[3], &key[3], is_trace);
 
 		b += 4;
-		next += 4;
+		key += 4;
 		n_left_from -= 4;
 	}
 
 	while (n_left_from > 0)
 	{
-		process_buffer_1x(vm, node, b[0], next, is_trace);
+		process_buffer_1x(vm, node, b[0], key, is_trace);
 
 		b++;
-		next++;
+		key++;
 		n_left_from--;
 	}
 
@@ -171,8 +185,14 @@ static u8 *format_ipv4_session_lookup_trace(u8 *s, va_list *args)
 	vlib_main_t __clib_unused *vm = va_arg(*args, vlib_main_t *);
 	vlib_node_t __clib_unused *node = va_arg(*args, vlib_node_t *);
 	ipv4_session_lookup_trace_t *t = va_arg(*args, ipv4_session_lookup_trace_t *);
-	return format(s,"next node   %u",
-			t->next);
+	return format(s,"src ip   %U\n"
+			"  dst ip   %U\n"
+			"  src port %U\n"
+			"  dst port %U",
+			format_ip4_address, &t->key.src_ip,
+			format_ip4_address, &t->key.dst_ip,
+			format_network_port, t->key.protocol, t->key.src_port,
+			format_network_port, t->key.protocol, t->key.dst_port);
 }
 
 VLIB_REGISTER_NODE (ipv4_session_lookup) = {
