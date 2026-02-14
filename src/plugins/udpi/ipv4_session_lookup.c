@@ -1,44 +1,34 @@
-#include <asm-generic/errno.h>
 #include <stdbool.h>
 
-#include <vlib/vlib.h>
+#include <vat/vat.h>
 
+#include <vlib/vlib.h>
+#include <vlib/buffer.h>
+#include <vlib/node.h>
+#include <vlib/threads.h>
+
+#include <vnet/buffer.h>
 #include <vnet/ip/ip4_packet.h>
+#include <vnet/udp/udp_packet.h>
 #include <vnet/vnet.h>
 
+#include <vppinfra/bihash_16_8.h>
 #include <vppinfra/byte_order.h>
 #include <vppinfra/clib.h>
 #include <vppinfra/error.h>
-
-#include <vppinfra/bihash_16_8.h>
+#include <vppinfra/format.h>
+#include <vppinfra/pool.h>
+#include <vppinfra/vec.h>
 
 #include "detunnel/detunnel.h"
 
 #include "ipv4_session.h"
-#include "rte_eal.h"
-#include "vat/vat.h"
-#include "vlib/buffer.h"
-#include "vlib/node.h"
-#include "vlib/threads.h"
-#include "vnet/buffer.h"
-#include "vnet/udp/udp_packet.h"
-#include "vppinfra/format.h"
-#include "vppinfra/pool.h"
-#include "vppinfra/vec.h"
-
-#undef always_inline
-#include <rte_hash.h>
-#include <rte_jhash.h>
-#include <rte_errno.h>
-
-#if CLIB_DEBUG > 0
-#define always_inline static inline
-#else
-#define always_inline static inline __attribute__ ((__always_inline__))
-#endif
+#include "vppinfra/cache.h"
 
 #define foreach_ipv4_session_lookup_next	\
 	_(drop_next, DROP, "drop")				\
+	_(tcp_next, TCP_SESSION, "ip4-drop")	\
+	_(udp_next, UDP_SESSION, "ip6-drop")	\
 
 enum
 {
@@ -47,6 +37,11 @@ enum
 #undef _
 	IPV4_SESSION_LOOKUP_NEXT_N,
 };
+
+#define _(var, id, name) static SIMD_TYPE DETUNNEL_CONCAT(var, SIMD_TYPE);
+
+foreach_ipv4_session_lookup_next
+#undef _
 
 enum
 {
@@ -76,26 +71,29 @@ extern __thread ipv4_session_lookup_worker_t ipv4_session_lookup_worker;
 extern ipv4_session_lookup_main_t ipv4_session_lookup_main;
 extern vlib_node_registration_t ipv4_session_lookup;
 
-// static_always_inline void
-// ipv4_session_lookup_to_next(vlib_buffer_t **b, const void **key_ptr, i32 *position, u16 *next, u16 len)
-// {
-// 	// ipv4_session_lookup_worker_t *sw = &ipv4_session_lookup_worker;
-// 	// for (u16 i = 0; i < len; i++)
-// 	// {
-// 	// 	if (position[i] < 0)
-// 	// 	{
-// 	// 		vnet_buffer(b[i])->udp.session_index = position[i];
-// 	// 		next[i] = IPV4_SESSION_LOOKUP_NEXT_DROP;
-// 	// 	}
-// 	// 	else
-// 	// 	{
-// 	// 		u32 session_index = 1000;
-// 	// 		rte_hash_add_key_data(sw->session_hash, key_ptr[i], &session_index);
-// 	// 		vnet_buffer(b[i])->udp.session_index = session_index;
-// 	// 		next[i] = IPV4_SESSION_LOOKUP_NEXT_DROP;
-// 	// 	}
-// 	// }
-// }
+#define _(var)	extern SIMD_TYPE DETUNNEL_CONCAT(var, SIMD_TYPE);
+
+_(tcp_protocol2)
+_(udp_protocol2)
+#undef _
+
+static_always_inline void
+ipv4_session_lookup_to_next(u16 *next, u16 len)
+{
+	for (u16 i = 0; i < len; i += SIMD_SIZE)
+	{
+		SIMD_TYPE next_vec = SIMD_LOAD(next + i);
+		SIMD_TYPE tcp_mask_vec = (next_vec == SIMD_VEC(tcp_protocol2));
+		SIMD_TYPE udp_mask_vec = (next_vec == SIMD_VEC(udp_protocol2));
+
+		SIMD_TYPE result = SIMD_VEC(drop_next) |
+				(tcp_mask_vec & SIMD_VEC(tcp_next)) |
+				(udp_mask_vec & SIMD_VEC(udp_next));
+
+		SIMD_STORE(result, next + i);
+	}
+}
+
 
 static_always_inline void
 add_trace(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b,
@@ -122,23 +120,23 @@ process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, 
 	key->dst_ip = ip4->dst_address;
 	key->src_port = udp->src_port;
 	key->dst_port = udp->dst_port;
-	key->protocol = ip4->protocol;
-	next[0] = 0;
+	key->l4_protocol = ip4->protocol;
+	next[0] = ip4->protocol;
 
 	ipv4_session_lookup_worker_t *sw = &ipv4_session_lookup_worker;
 
-	if (clib_bihash_search_16_8(&sw->session_hash, &kv, &kv) == 0)
+	if (clib_bihash_search_16_8(&sw->session_hash, &kv, &kv))
 	{
-		vnet_buffer(b)->udp.session_index = (i32) kv.value;
-		// clib_warning("found");
-	}
-	else
-	{
-		clib_warning("insert");
-		pool_get(sw->session_pool, kv.value);
+		ipv4_session_t *session;
+		pool_get_aligned(sw->session_pool, session, CLIB_CACHE_LINE_BYTES);
+		kv.value = session - sw->session_pool;
 		clib_bihash_add_del_16_8(&sw->session_hash, &kv, 1);
-		vnet_buffer(b)->udp.session_index = kv.value;
+
+		session->start_time = (struct timeval) {0};
+		session->end_time = (struct timeval) {0};
 	}
+
+	vnet_buffer(b)->udp.session_index = kv.value;
 
 	if (is_trace)
 		add_trace(vm, node, b, key);
@@ -203,7 +201,12 @@ ipv4_session_lookup_inline(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_fram
 	// 	offset += batch_size;
 	// }
 
-	// ipv4_session_lookup_to_next(bufs, key_ptrs, positions, nexts, frame->n_vectors);
+	// clib_warning("before %u", nexts[0]);
+
+	ipv4_session_lookup_to_next(nexts, frame->n_vectors);
+
+	// clib_warning("after %u", nexts[0]);
+
 	vlib_buffer_enqueue_to_next(vm, node, from, nexts, frame->n_vectors);
 
 	return frame->n_vectors;
@@ -215,6 +218,16 @@ VLIB_NODE_FN (ipv4_session_lookup) (vlib_main_t *vm, vlib_node_runtime_t *node, 
 }
 
 #ifndef CLIB_MARCH_VARIANT
+
+#define _(var)						\
+		u16x32 var##_u16x32;		\
+		u16x16 var##_u16x16;		\
+		u16x8 var##_u16x8;
+
+_(tcp_protocol2)
+_(udp_protocol2)
+#undef _
+
 __thread ipv4_session_lookup_worker_t ipv4_session_lookup_worker;
 ipv4_session_lookup_main_t ipv4_session_lookup_main;
 
@@ -229,8 +242,8 @@ static u8 *format_ipv4_session_lookup_trace(u8 *s, va_list *args)
 			"  dst port %U",
 			format_ip4_address, &t->key.src_ip,
 			format_ip4_address, &t->key.dst_ip,
-			format_network_port, t->key.protocol, t->key.src_port,
-			format_network_port, t->key.protocol, t->key.dst_port);
+			format_network_port, t->key.l4_protocol, t->key.src_port,
+			format_network_port, t->key.l4_protocol, t->key.dst_port);
 }
 
 VLIB_REGISTER_NODE (ipv4_session_lookup) = {
@@ -246,11 +259,18 @@ VLIB_REGISTER_NODE (ipv4_session_lookup) = {
 	},
 };
 
+#endif
+
 CLIB_MARCH_FN (ipv4_session_lookup_init, clib_error_t *, vlib_main_t __clib_unused *vm)
 {
 	clib_warning("size: %lu %s", SIMD_SIZE, CLIB_STRING_MACRO(SIMD_TYPE));
 
-	// SIMD_VEC(drop_next) = SIMD_SPLAT(IPV4_SESSION_LOOKUP_NEXT_DROP);
+	SIMD_VEC(tcp_protocol2) = SIMD_SPLAT(IP_PROTOCOL_TCP);
+	SIMD_VEC(udp_protocol2) = SIMD_SPLAT(IP_PROTOCOL_UDP);
+
+	SIMD_VEC(drop_next) = SIMD_SPLAT(IPV4_SESSION_LOOKUP_NEXT_DROP);
+	SIMD_VEC(tcp_next) = SIMD_SPLAT(IPV4_SESSION_LOOKUP_NEXT_TCP_SESSION);
+	SIMD_VEC(udp_next) = SIMD_SPLAT(IPV4_SESSION_LOOKUP_NEXT_UDP_SESSION);
 
 	return 0;
 }
@@ -281,10 +301,5 @@ ipv4_session_lookup_init(vlib_main_t *vm)
 	return CLIB_MARCH_FN_SELECT(ipv4_session_lookup_init) (vm);
 }
 
-VLIB_WORKER_INIT_FUNCTION (ipv4_session_lookup_worker_init) = {
-	.runs_after = VLIB_INITS("dpdk_worker_thread_init"),
-};
-
+VLIB_WORKER_INIT_FUNCTION (ipv4_session_lookup_worker_init);
 VLIB_INIT_FUNCTION (ipv4_session_lookup_init);
-
-#endif
