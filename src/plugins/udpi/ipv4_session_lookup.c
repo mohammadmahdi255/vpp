@@ -132,6 +132,7 @@ process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, 
 		kv.value = session - sw->session_pool;
 		clib_bihash_add_del_16_8(&sw->session_hash, &kv, 1);
 
+		session->key = *key;
 		session->start_time = (struct timeval) {0};
 		session->end_time = (struct timeval) {0};
 	}
