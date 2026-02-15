@@ -72,20 +72,14 @@ extern __thread ipv4_session_lookup_worker_t ipv4_session_lookup_worker;
 extern ipv4_session_lookup_main_t ipv4_session_lookup_main;
 extern vlib_node_registration_t ipv4_session_lookup;
 
-#define _(var)	extern SIMD_TYPE DETUNNEL_CONCAT(var, SIMD_TYPE);
-
-_(tcp_protocol2)
-_(udp_protocol2)
-#undef _
-
 static_always_inline void
 ipv4_session_lookup_to_next(u16 *next, u16 len)
 {
 	for (u16 i = 0; i < len; i += SIMD_SIZE)
 	{
 		SIMD_TYPE next_vec = SIMD_LOAD(next + i);
-		SIMD_TYPE tcp_mask_vec = (next_vec == SIMD_VEC(tcp_protocol2));
-		SIMD_TYPE udp_mask_vec = (next_vec == SIMD_VEC(udp_protocol2));
+		SIMD_TYPE tcp_mask_vec = (next_vec == SIMD_VEC(tcp_protocol));
+		SIMD_TYPE udp_mask_vec = (next_vec == SIMD_VEC(udp_protocol));
 
 		SIMD_TYPE result = SIMD_VEC(drop_next) |
 				(tcp_mask_vec & SIMD_VEC(tcp_next)) |
@@ -223,15 +217,6 @@ VLIB_NODE_FN (ipv4_session_lookup) (vlib_main_t *vm, vlib_node_runtime_t *node, 
 
 #ifndef CLIB_MARCH_VARIANT
 
-#define _(var)						\
-		u16x32 var##_u16x32;		\
-		u16x16 var##_u16x16;		\
-		u16x8 var##_u16x8;
-
-_(tcp_protocol2)
-_(udp_protocol2)
-#undef _
-
 __thread ipv4_session_lookup_worker_t ipv4_session_lookup_worker;
 ipv4_session_lookup_main_t ipv4_session_lookup_main;
 
@@ -268,9 +253,6 @@ VLIB_REGISTER_NODE (ipv4_session_lookup) = {
 CLIB_MARCH_FN (ipv4_session_lookup_init, clib_error_t *, vlib_main_t __clib_unused *vm)
 {
 	clib_warning("size: %lu %s", SIMD_SIZE, CLIB_STRING_MACRO(SIMD_TYPE));
-
-	SIMD_VEC(tcp_protocol2) = SIMD_SPLAT(IP_PROTOCOL_TCP);
-	SIMD_VEC(udp_protocol2) = SIMD_SPLAT(IP_PROTOCOL_UDP);
 
 	SIMD_VEC(drop_next) = SIMD_SPLAT(IPV4_SESSION_LOOKUP_NEXT_DROP);
 	SIMD_VEC(tcp_next) = SIMD_SPLAT(IPV4_SESSION_LOOKUP_NEXT_TCP_SESSION);

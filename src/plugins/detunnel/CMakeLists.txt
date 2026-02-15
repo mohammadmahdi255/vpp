@@ -1,10 +1,19 @@
 find_package(PkgConfig REQUIRED)
 
+add_vpp_library(detunnel_commons
+	SOURCES
+		detunnel.c
+
+	MULTIARCH_SOURCES
+		detunnel.c
+
+	INSTALL_HEADERS
+		detunnel.h
+)
 
 add_vpp_plugin(detunnel
 	SOURCES
 		cli.c
-		detunnel.c
 		ethernet_detunnel.c
 		failed_detunnel.c
 		gre_detunnel.c
@@ -21,7 +30,6 @@ add_vpp_plugin(detunnel
 		vlan_detunnel.c
 
 	MULTIARCH_SOURCES
-		detunnel.c
 		ethernet_detunnel.c
 		failed_detunnel.c
 		gre_detunnel.c
@@ -36,6 +44,6 @@ add_vpp_plugin(detunnel
 		udp_detunnel.c
 		vlan_detunnel.c
 
-	INSTALL_HEADERS
-        detunnel.h
+	LINK_LIBRARIES
+		detunnel_commons
 )

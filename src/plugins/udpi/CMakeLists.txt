@@ -24,9 +24,7 @@ add_vpp_plugin(udpi
 	LINK_FLAGS
 		${DPDK_LDFLAGS}
 
-	INSTALL_HEADERS
-        detunnel.h
-
 	LINK_LIBRARIES
 		${DPDK_LIBRARIES}
+		detunnel_commons
 )
