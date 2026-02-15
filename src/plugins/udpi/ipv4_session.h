@@ -26,8 +26,8 @@ typedef struct
 {
     CLIB_CACHE_LINE_ALIGN_MARK (cacheline0);
 	ipv4_flow_key_t key;
-	struct timeval start_time;
-	struct timeval end_time;
+	f64 start_time;
+	f64 end_time;
 	vlib_counter_t counter[FLOW_DIRECTION_CLIENT_TO_SERVER];
 	u64 l7_protocol;
     u64 application_id;
