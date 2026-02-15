@@ -280,20 +280,26 @@ CLIB_MARCH_FN (ipv4_session_lookup_init, clib_error_t *, vlib_main_t __clib_unus
 }
 
 static void
-expired_timer_callback(u32 *session_index) {
-	ipv4_session_lookup_worker_t *sw = &ipv4_session_lookup_worker;
-	printf("Timer expired! %u\n", *session_index);
+expired_timer_callback(u32 *session_indexes)
+{
+	for (u32 i = 0; i < vec_len(session_indexes); i++)
+	{
+		u32 session_index = session_indexes[i];
 
-	ipv4_session_t *session =  pool_elt_at_index(sw->session_pool, *session_index);
-	clib_bihash_kv_16_8_t *kv = (void *) &session->key;
+		ipv4_session_lookup_worker_t *sw = &ipv4_session_lookup_worker;
+		printf("Timer expired! %u\n", session_index);
 
-	clib_bihash_add_del_16_8(&sw->session_hash, kv, 0);
+		ipv4_session_t *session =  pool_elt_at_index(sw->session_pool, session_index);
+		clib_bihash_kv_16_8_t *kv = (void *) &session->key;
 
-	pool_put_index(sw->session_pool, *session_index);
+		clib_bihash_add_del_16_8(&sw->session_hash, kv, 0);
+
+		pool_put_index(sw->session_pool, session_index);
+	}
 }
 
 static clib_error_t *
-ipv4_session_lookup_worker_init(vlib_main_t __clib_unused *vm)
+ipv4_session_lookup_worker_init(vlib_main_t *vm)
 {
 	ipv4_session_lookup_worker_t *sw = &ipv4_session_lookup_worker;
 
@@ -308,7 +314,7 @@ ipv4_session_lookup_worker_init(vlib_main_t __clib_unused *vm)
 	if (!sw->session_pool)
 		return clib_error_return(0, "failed to create session pool");
 
-  	tw_timer_wheel_init_1t_3w_1024sl_ov(&sw->time_wheel, expired_timer_callback, 1.0, 100);
+  	tw_timer_wheel_init_1t_3w_1024sl_ov(&sw->time_wheel, expired_timer_callback, 1.0, ~0);
 
 	return 0;
 }
