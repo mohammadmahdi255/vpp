@@ -13,6 +13,16 @@ typedef enum
 	FLOW_DIRECTION_COUNT
 } flow_direction_t;
 
+typedef union
+{
+	struct
+	{
+		u32 index;
+		flow_direction_t direction;
+	};
+	u64 as_u64;
+} session_flow_t;
+
 typedef struct
 {
 	ip4_address_t src_ip;

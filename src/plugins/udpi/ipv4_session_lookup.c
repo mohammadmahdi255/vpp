@@ -25,6 +25,8 @@
 
 #include "ipv4_session.h"
 #include "vppinfra/cache.h"
+#include "vppinfra/string.h"
+#include "vppinfra/vector/compress.h"
 
 #define foreach_ipv4_session_lookup_next	\
 	_(drop_next, DROP, "drop")				\
@@ -112,6 +114,11 @@ process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, 
 
 	ipv4_flow_key_t *key = (void *) &kv.key;
 
+	// key->src_ip = ip4->dst_address;
+	// key->dst_ip = ip4->src_address;
+	// key->src_port = udp->dst_port;
+	// key->dst_port = udp->src_port;
+
 	key->src_ip = ip4->src_address;
 	key->dst_ip = ip4->dst_address;
 	key->src_port = udp->src_port;
@@ -120,27 +127,44 @@ process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, 
 	next[0] = ip4->protocol;
 
 	ipv4_session_lookup_worker_t *sw = &ipv4_session_lookup_worker;
+	session_flow_t *session_flow = vnet_buffer_get_opaque(b);
 	ipv4_session_t *session;
 
 	if (clib_bihash_search_16_8(&sw->session_hash, &kv, &kv))
 	{
 		pool_get_aligned(sw->session_pool, session, CLIB_CACHE_LINE_BYTES);
-		kv.value = session - sw->session_pool;
-		clib_bihash_add_del_16_8(&sw->session_hash, &kv, 1);
+		session_flow->direction = FLOW_DIRECTION_CLIENT_TO_SERVER;
+		session_flow->index = session - sw->session_pool;
 
 		session->key = *key;
 		session->start_time = sw->now;
+		kv.value = session_flow->as_u64;
 
-		// clib_warning("Timer added! %u\n", kv.value);
+		clib_bihash_add_del_16_8(&sw->session_hash, &kv, 1);
+
+		clib_warning("Timer added! %lu %lu\n", session_flow->index, kv.value);
 		tw_timer_start_1t_3w_1024sl_ov(&sw->time_wheel, kv.value, 0, 3);
+
+		key->src_ip = ip4->dst_address;
+		key->dst_ip = ip4->src_address;
+		key->src_port = udp->dst_port;
+		key->dst_port = udp->src_port;
+
+		session_flow_t *reverse_session_flow = (void *)&kv.value;
+		reverse_session_flow->direction = FLOW_DIRECTION_SERVER_TO_CLIENT;
+
+		clib_bihash_add_del_16_8(&sw->session_hash, &kv, 1);
 	}
 	else
 	{
-		session = pool_elt_at_index(sw->session_pool, kv.value);
+		session_flow->as_u64 = kv.value;
+		session = pool_elt_at_index(sw->session_pool, session_flow->index);
 	}
 
-	vnet_buffer(b)->udp.session_index = kv.value;
+	session_flow->index = kv.value;
 	session->end_time = sw->now + 3;
+
+	// session->counter[]->bytes
 
 	if (is_trace)
 		add_trace(vm, node, b, key);
@@ -265,13 +289,13 @@ expired_timer_callback(u32 *session_indexes)
 		u32 session_index = session_indexes[i];
 
 		ipv4_session_lookup_worker_t *sw = &ipv4_session_lookup_worker;
-		// clib_warning("Timer expired! %u\n", session_index);
+		clib_warning("Timer expired! %u\n", session_index);
 
 		ipv4_session_t *session =  pool_elt_at_index(sw->session_pool, session_index);
 
 		if (session->end_time > sw->now)
 		{
-			// clib_warning("Timer update! %u\n", session_index);
+			clib_warning("Timer update! %u\n", session_index);
 			tw_timer_start_1t_3w_1024sl_ov(&sw->time_wheel, session_index, 0, 3);
 		}
 		else
