@@ -1,3 +1,4 @@
+#include <math.h>
 #include <stdbool.h>
 
 #include <vat/vat.h>
@@ -24,9 +25,6 @@
 #include "detunnel/detunnel.h"
 
 #include "ipv4_session.h"
-#include "vppinfra/cache.h"
-#include "vppinfra/string.h"
-#include "vppinfra/vector/compress.h"
 
 #define foreach_ipv4_session_lookup_next	\
 	_(drop_next, DROP, "drop")				\
@@ -45,6 +43,8 @@ enum
 
 foreach_ipv4_session_lookup_next
 #undef _
+
+#define SESSION_TIMEOUT	3
 
 enum
 {
@@ -114,11 +114,6 @@ process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, 
 
 	ipv4_flow_key_t *key = (void *) &kv.key;
 
-	// key->src_ip = ip4->dst_address;
-	// key->dst_ip = ip4->src_address;
-	// key->src_port = udp->dst_port;
-	// key->dst_port = udp->src_port;
-
 	key->src_ip = ip4->src_address;
 	key->dst_ip = ip4->dst_address;
 	key->src_port = udp->src_port;
@@ -142,8 +137,8 @@ process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, 
 
 		clib_bihash_add_del_16_8(&sw->session_hash, &kv, 1);
 
-		clib_warning("Timer added! %lu %lu\n", session_flow->index, kv.value);
-		tw_timer_start_1t_3w_1024sl_ov(&sw->time_wheel, kv.value, 0, 3);
+		clib_warning("Timer added! %u %lu\n", session_flow->index, kv.value);
+		tw_timer_start_1t_3w_1024sl_ov(&sw->time_wheel, kv.value, 0, SESSION_TIMEOUT);
 
 		key->src_ip = ip4->dst_address;
 		key->dst_ip = ip4->src_address;
@@ -161,10 +156,10 @@ process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, 
 		session = pool_elt_at_index(sw->session_pool, session_flow->index);
 	}
 
-	session_flow->index = kv.value;
-	session->end_time = sw->now + 3;
+	session->end_time = sw->now + SESSION_TIMEOUT;
 
-	// session->counter[]->bytes
+	session->counter[session_flow->direction].packets++;
+	session->counter[session_flow->direction].bytes += vlib_buffer_length_in_chain(vm, b);
 
 	if (is_trace)
 		add_trace(vm, node, b, key);
@@ -296,7 +291,8 @@ expired_timer_callback(u32 *session_indexes)
 		if (session->end_time > sw->now)
 		{
 			clib_warning("Timer update! %u\n", session_index);
-			tw_timer_start_1t_3w_1024sl_ov(&sw->time_wheel, session_index, 0, 3);
+			const u64 timeout = floor(session->end_time - sw->now);
+			tw_timer_start_1t_3w_1024sl_ov(&sw->time_wheel, session_index, 0, timeout);
 		}
 		else
 		{
@@ -314,16 +310,26 @@ ipv4_session_lookup_worker_init(vlib_main_t *vm)
 
 	sw->session_pool = NULL;
 
+	const u32 max_sessions = 1024;
+
+	u32 nbuckets = 1;
+	while (nbuckets < (max_sessions / 4))
+		nbuckets <<= 1;
+
+	nbuckets = clib_max(nbuckets, 64);
+
+	u64 memory_size = max_sessions * sizeof(clib_bihash_kv_16_8_t);
+
 	void *name = format(NULL, "ipv4-session-hash-%u", vlib_get_thread_index());
-	clib_bihash_init_16_8(&sw->session_hash, name, 1024, 1 << 20);
+	clib_bihash_init_16_8(&sw->session_hash, name,  nbuckets, memory_size);
 	vec_free(name);
 
-	pool_init_fixed(sw->session_pool, 1024);
+	pool_init_fixed(sw->session_pool, max_sessions);
 
 	if (!sw->session_pool)
 		return clib_error_return(0, "failed to create session pool");
 
-  	tw_timer_wheel_init_1t_3w_1024sl_ov(&sw->time_wheel, expired_timer_callback, 1.0, 1);
+  	tw_timer_wheel_init_1t_3w_1024sl_ov(&sw->time_wheel, expired_timer_callback, 1.0, VLIB_FRAME_SIZE);
 
 	return 0;
 }
