@@ -92,7 +92,6 @@ ipv4_session_lookup_to_next(u16 *next, u16 len)
 	}
 }
 
-
 static_always_inline void
 add_trace(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b,
 		const ipv4_flow_key_t *key)
@@ -137,7 +136,7 @@ process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, 
 
 		clib_bihash_add_del_16_8(&sw->session_hash, &kv, 1);
 
-		clib_warning("Timer added! %u %lu\n", session_flow->index, kv.value);
+		// clib_warning("Timer added! %u %lu\n", session_flow->index, kv.value);
 		tw_timer_start_1t_3w_1024sl_ov(&sw->time_wheel, kv.value, 0, SESSION_TIMEOUT);
 
 		key->src_ip = ip4->dst_address;
@@ -284,13 +283,13 @@ expired_timer_callback(u32 *session_indexes)
 		u32 session_index = session_indexes[i];
 
 		ipv4_session_lookup_worker_t *sw = &ipv4_session_lookup_worker;
-		clib_warning("Timer expired! %u\n", session_index);
+		// clib_warning("Timer expired! %u\n", session_index);
 
 		ipv4_session_t *session =  pool_elt_at_index(sw->session_pool, session_index);
 
 		if (session->end_time > sw->now)
 		{
-			clib_warning("Timer update! %u\n", session_index);
+			// clib_warning("Timer update! %u\n", session_index);
 			const u64 timeout = floor(session->end_time - sw->now);
 			tw_timer_start_1t_3w_1024sl_ov(&sw->time_wheel, session_index, 0, timeout);
 		}
@@ -311,14 +310,8 @@ ipv4_session_lookup_worker_init(vlib_main_t *vm)
 	sw->session_pool = NULL;
 
 	const u32 max_sessions = 1024;
-
-	u32 nbuckets = 1;
-	while (nbuckets < (max_sessions / 4))
-		nbuckets <<= 1;
-
-	nbuckets = clib_max(nbuckets, 64);
-
-	u64 memory_size = max_sessions * sizeof(clib_bihash_kv_16_8_t);
+	const u32 nbuckets = clib_max(max_pow2(max_sessions / 4), 64);
+	const u64 memory_size = max_sessions * sizeof(clib_bihash_kv_16_8_t);
 
 	void *name = format(NULL, "ipv4-session-hash-%u", vlib_get_thread_index());
 	clib_bihash_init_16_8(&sw->session_hash, name,  nbuckets, memory_size);
