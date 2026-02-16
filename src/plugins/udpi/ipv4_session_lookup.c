@@ -25,6 +25,7 @@
 #include "detunnel/detunnel.h"
 
 #include "ip_session.h"
+#include "vlib/node_funcs.h"
 
 #define foreach_ipv4_session_lookup_next	\
 	_(drop_next, DROP, "drop")				\
@@ -74,6 +75,8 @@ typedef struct
 extern __thread ipv4_session_lookup_worker_t ipv4_session_lookup_worker;
 extern ipv4_session_lookup_main_t ipv4_session_lookup_main;
 extern vlib_node_registration_t ipv4_session_lookup;
+extern vlib_node_registration_t ipv4_timer_expiration;
+extern vlib_node_registration_t ipv4_timer_expiration_process;
 
 static_always_inline void
 ipv4_session_lookup_to_next(u16 *next, u16 len)
@@ -136,7 +139,7 @@ process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, 
 
 		clib_bihash_add_del_16_8(&sw->session_hash, &kv, 1);
 
-		// clib_warning("Timer added! %u %lu\n", session_flow->index, kv.value);
+		clib_warning("Timer added! %u %lu\n", session_flow->index, kv.value);
 		tw_timer_start_1t_3w_1024sl_ov(&sw->time_wheel, kv.value, 0, SESSION_TIMEOUT);
 
 		key->src_ip = ip4->dst_address;
@@ -219,14 +222,56 @@ ipv4_session_lookup_inline(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_fram
 	ipv4_session_lookup_to_next(nexts, frame->n_vectors);
 	vlib_buffer_enqueue_to_next(vm, node, from, nexts, frame->n_vectors);
 
-	tw_timer_expire_timers_1t_3w_1024sl_ov(&sw->time_wheel, sw->now);
-
 	return frame->n_vectors;
 }
 
 VLIB_NODE_FN (ipv4_session_lookup) (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_frame_t *frame)
 {
 	return ipv4_session_lookup_inline(vm, node, frame, node->flags & VLIB_NODE_FLAG_TRACE);
+}
+
+VLIB_NODE_FN (ipv4_timer_expiration) (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_frame_t *frame)
+{
+	// clib_warning("here");
+	ipv4_session_lookup_worker_t *sw = &ipv4_session_lookup_worker;
+	sw->now = vlib_time_now(vm);
+	tw_timer_expire_timers_1t_3w_1024sl_ov(&sw->time_wheel, sw->now);
+	return 0;
+}
+
+VLIB_NODE_FN (ipv4_timer_expiration_process) (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_frame_t *frame)
+{
+
+	vlib_thread_main_t *tm = vlib_get_thread_main();
+	u64 *p = hash_get_mem(tm->thread_registrations_by_name, "workers");
+	const f64 interval = 1.0;
+
+	if (p == NULL)
+	{
+		while (true)
+		{
+			(void) vlib_process_wait_for_event_or_clock(vm, interval);
+
+			ipv4_session_lookup_worker_t *sw = &ipv4_session_lookup_worker;
+			sw->now = vlib_time_now(vm);
+			tw_timer_expire_timers_1t_3w_1024sl_ov(&sw->time_wheel, sw->now);
+		}
+	}
+
+	const vlib_thread_registration_t *tr = (vlib_thread_registration_t *) p[0];
+
+	u32 start_thread_id = tr->first_index;
+	u32 end_thread_id = start_thread_id + tr->count;
+
+	while (true)
+	{
+		(void) vlib_process_wait_for_event_or_clock(vm, interval);
+
+		for (u32 thread_id = start_thread_id; thread_id < end_thread_id; thread_id++)
+			vlib_node_set_interrupt_pending(vlib_get_main_by_index(thread_id), ipv4_timer_expiration.index);
+	}
+
+	return 0;
 }
 
 #ifndef CLIB_MARCH_VARIANT
@@ -262,6 +307,17 @@ VLIB_REGISTER_NODE (ipv4_session_lookup) = {
 	},
 };
 
+VLIB_REGISTER_NODE (ipv4_timer_expiration) = {
+	.name = "ipv4-timer-expiration",
+	.type = VLIB_NODE_TYPE_SCHED,
+	.state = VLIB_NODE_STATE_INTERRUPT
+};
+
+VLIB_REGISTER_NODE (ipv4_timer_expiration_process) = {
+	.name = "ipv4-timer-expiration-process",
+	.type = VLIB_NODE_TYPE_PROCESS,
+};
+
 #endif
 
 CLIB_MARCH_FN (ipv4_session_lookup_init, clib_error_t *, vlib_main_t __clib_unused *vm)
@@ -276,7 +332,7 @@ CLIB_MARCH_FN (ipv4_session_lookup_init, clib_error_t *, vlib_main_t __clib_unus
 }
 
 static void
-expired_timer_callback(u32 *session_indexes)
+ipv4_session_expired_timer_callback(u32 *session_indexes)
 {
 	for (u32 i = 0; i < vec_len(session_indexes); i++)
 	{
@@ -287,13 +343,13 @@ expired_timer_callback(u32 *session_indexes)
 
 		if (session->end_time > sw->now)
 		{
-			// clib_warning("Timer update! %u\n", session_index);
+			clib_warning("Timer update! %u\n", session_index);
 			const u64 timeout = floor(session->end_time - sw->now);
 			tw_timer_start_1t_3w_1024sl_ov(&sw->time_wheel, session_index, 0, timeout);
 		}
 		else
 		{
-			// clib_warning("Timer expired! %u\n", session_index);
+			clib_warning("Timer expired! %u\n", session_index);
 			clib_bihash_kv_16_8_t *kv = (void *) &session->key;
 			clib_bihash_add_del_16_8(&sw->session_hash, kv, 0);
 			pool_put_index(sw->session_pool, session_index);
@@ -302,7 +358,7 @@ expired_timer_callback(u32 *session_indexes)
 }
 
 static clib_error_t *
-ipv4_session_lookup_worker_init(vlib_main_t *vm)
+ipv4_session_lookup_worker_init(vlib_main_t __clib_unused *vm)
 {
 	ipv4_session_lookup_worker_t *sw = &ipv4_session_lookup_worker;
 
@@ -321,7 +377,7 @@ ipv4_session_lookup_worker_init(vlib_main_t *vm)
 	if (!sw->session_pool)
 		return clib_error_return(0, "failed to create session pool");
 
-  	tw_timer_wheel_init_1t_3w_1024sl_ov(&sw->time_wheel, expired_timer_callback, 1.0, VLIB_FRAME_SIZE);
+	tw_timer_wheel_init_1t_3w_1024sl_ov(&sw->time_wheel, ipv4_session_expired_timer_callback, 1.0, ~0);
 
 	return 0;
 }
