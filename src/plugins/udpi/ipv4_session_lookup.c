@@ -24,7 +24,7 @@
 
 #include "detunnel/detunnel.h"
 
-#include "ipv4_session.h"
+#include "ip_session.h"
 
 #define foreach_ipv4_session_lookup_next	\
 	_(drop_next, DROP, "drop")				\
