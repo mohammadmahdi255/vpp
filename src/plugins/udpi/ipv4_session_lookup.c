@@ -283,8 +283,6 @@ expired_timer_callback(u32 *session_indexes)
 		u32 session_index = session_indexes[i];
 
 		ipv4_session_lookup_worker_t *sw = &ipv4_session_lookup_worker;
-		// clib_warning("Timer expired! %u\n", session_index);
-
 		ipv4_session_t *session =  pool_elt_at_index(sw->session_pool, session_index);
 
 		if (session->end_time > sw->now)
@@ -295,6 +293,7 @@ expired_timer_callback(u32 *session_indexes)
 		}
 		else
 		{
+			// clib_warning("Timer expired! %u\n", session_index);
 			clib_bihash_kv_16_8_t *kv = (void *) &session->key;
 			clib_bihash_add_del_16_8(&sw->session_hash, kv, 0);
 			pool_put_index(sw->session_pool, session_index);
