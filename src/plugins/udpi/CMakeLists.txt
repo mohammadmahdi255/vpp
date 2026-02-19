@@ -11,18 +11,14 @@ link_directories(
 
 add_vpp_plugin(udpi
 	SOURCES
-		ipv4_tcp_session_lookup.c
-		ipv4_udp_session_lookup.c
-		ipv6_tcp_session_lookup.c
-		ipv6_udp_session_lookup.c
+		session_v4_lookup.c
+		session_v6_lookup.c
 		plugin.c
 		session_classifier.c
 
 	MULTIARCH_SOURCES
-		ipv4_tcp_session_lookup.c
-		ipv4_udp_session_lookup.c
-		ipv6_tcp_session_lookup.c
-		ipv6_udp_session_lookup.c
+		session_v4_lookup.c
+		session_v6_lookup.c
 		session_classifier.c
 
 	LINK_FLAGS

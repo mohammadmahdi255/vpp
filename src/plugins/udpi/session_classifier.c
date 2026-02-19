@@ -11,23 +11,17 @@
 
 #include "detunnel/detunnel.h"
 
-#define foreach_session_classifier_next										\
-	_(drop_next, DROP, "drop")												\
-	_(ipv4_tcp_next, IPV4_TCP_SESSION_LOOKUP, "ipv4-tcp-session-lookup")	\
-	_(ipv4_udp_next, IPV4_UDP_SESSION_LOOKUP, "ipv4-udp-session-lookup")	\
-	_(ipv6_tcp_next, IPV6_TCP_SESSION_LOOKUP, "ipv6-tcp-session-lookup")	\
-	_(ipv6_udp_next, IPV6_UDP_SESSION_LOOKUP, "ipv6-udp-session-lookup")
+#define foreach_session_classifier_next									\
+	_(drop_next, DROP, "drop")											\
+	_(session_v4_next, SESSION_V4_LOOKUP, "session-v4-lookup")			\
+	_(session_v6_next, SESSION_V6_LOOKUP, "session-v6-lookup")
 
 #define foreach_session_classifier	\
-	_(ipv4_tcp)						\
-	_(ipv4_udp)						\
-	_(ipv6_tcp)						\
-	_(ipv6_udp)
+	_(ipv4_version)					\
+	_(ipv6_version)					\
 
-#define IPV4_TCP		0x4006
-#define IPV4_UDP		0x4011
-#define IPV6_TCP		0x6006
-#define IPV6_UDP		0x6011
+#define IPV4_VERSION	0x0040
+#define IPV6_VERSION	0x0060
 
 enum
 {
@@ -68,16 +62,12 @@ session_to_next(u16 *next, u16 len)
 	for (u16 i = 0; i < len; i += SIMD_SIZE)
 	{
 		SIMD_TYPE next_vec = SIMD_LOAD(next + i);
-		SIMD_TYPE ipv4_tcp_mask_vec = (next_vec == SIMD_VEC(ipv4_tcp));
-		SIMD_TYPE ipv4_udp_mask_vec = (next_vec == SIMD_VEC(ipv4_udp));
-		SIMD_TYPE ipv6_tcp_mask_vec = (next_vec == SIMD_VEC(ipv6_tcp));
-		SIMD_TYPE ipv6_udp_mask_vec = (next_vec == SIMD_VEC(ipv6_udp));
+		SIMD_TYPE ipv4_mask_vec = (next_vec == SIMD_VEC(ipv4_version));
+		SIMD_TYPE ipv6_mask_vec = (next_vec == SIMD_VEC(ipv6_version));
 
 		SIMD_TYPE result = SIMD_VEC(drop_next) |
-				(ipv4_tcp_mask_vec & SIMD_VEC(ipv4_tcp_next)) |
-				(ipv4_udp_mask_vec & SIMD_VEC(ipv4_udp_next)) |
-				(ipv6_tcp_mask_vec & SIMD_VEC(ipv6_tcp_next)) |
-				(ipv6_udp_mask_vec & SIMD_VEC(ipv6_udp_next));
+				(ipv4_mask_vec & SIMD_VEC(session_v4_next)) |
+				(ipv6_mask_vec & SIMD_VEC(session_v6_next));
 
 		SIMD_STORE(result, next + i);
 	}
@@ -98,7 +88,7 @@ static_always_inline void
 process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, u16 *next, u8 is_trace)
 {
 	const u8 *l3_data = b->data + vnet_buffer(b)->l3_hdr_offset;
-	next[0] = (*l3_data & 0x00F0) << 8 | (vnet_buffer(b)->ip.save_protocol & 0x00FF);
+	next[0] = *l3_data & 0x00F0;
 
 	if (is_trace)
 		add_trace(vm, node, b, next[0]);
@@ -193,16 +183,12 @@ CLIB_MARCH_FN (session_init, clib_error_t *, vlib_main_t __clib_unused *vm)
 {
 	clib_warning("size: %lu %s", SIMD_SIZE, CLIB_STRING_MACRO(SIMD_TYPE));
 
-	SIMD_VEC(ipv4_tcp) = SIMD_SPLAT(IPV4_TCP);
-	SIMD_VEC(ipv4_udp) = SIMD_SPLAT(IPV4_UDP);
-	SIMD_VEC(ipv6_tcp) = SIMD_SPLAT(IPV6_TCP);
-	SIMD_VEC(ipv6_udp) = SIMD_SPLAT(IPV6_UDP);
+	SIMD_VEC(ipv4_version) = SIMD_SPLAT(IPV4_VERSION);
+	SIMD_VEC(ipv6_version) = SIMD_SPLAT(IPV6_VERSION);
 
 	SIMD_VEC(drop_next) = SIMD_SPLAT(SESSION_CLASSIFIER_NEXT_DROP);
-	SIMD_VEC(ipv4_tcp_next) = SIMD_SPLAT(SESSION_CLASSIFIER_NEXT_IPV4_TCP_SESSION_LOOKUP);
-	SIMD_VEC(ipv4_udp_next) = SIMD_SPLAT(SESSION_CLASSIFIER_NEXT_IPV4_UDP_SESSION_LOOKUP);
-	SIMD_VEC(ipv6_tcp_next) = SIMD_SPLAT(SESSION_CLASSIFIER_NEXT_IPV6_TCP_SESSION_LOOKUP);
-	SIMD_VEC(ipv6_udp_next) = SIMD_SPLAT(SESSION_CLASSIFIER_NEXT_IPV6_UDP_SESSION_LOOKUP);
+	SIMD_VEC(session_v4_next) = SIMD_SPLAT(SESSION_CLASSIFIER_NEXT_SESSION_V4_LOOKUP);
+	SIMD_VEC(session_v6_next) = SIMD_SPLAT(SESSION_CLASSIFIER_NEXT_SESSION_V6_LOOKUP);
 
 	return 0;
 }
