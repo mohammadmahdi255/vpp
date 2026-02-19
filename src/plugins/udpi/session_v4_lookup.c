@@ -1,16 +1,17 @@
 #include <math.h>
 #include <stdbool.h>
 
-#include <vat/vat.h>
+#include <nat/lib/lib.h>
 
+#include <stdint.h>
 #include <vlib/vlib.h>
 #include <vlib/buffer.h>
 #include <vlib/node.h>
 #include <vlib/threads.h>
 
+#include <vat/vat.h>
 #include <vnet/buffer.h>
 #include <vnet/ip/ip4_packet.h>
-#include <vnet/udp/udp_packet.h>
 #include <vnet/vnet.h>
 
 #include <vppinfra/bihash_16_8.h>
@@ -25,8 +26,8 @@
 #include "detunnel/detunnel.h"
 
 #include "ip_session.h"
-#include <nat/lib/lib.h>
-#include "vppinfra/mem.h"
+#include "producer.h"
+#include "vlib/counter_types.h"
 
 #define foreach_session_v4_lookup_next	\
 	_(drop_next, DROP, "drop")			\
@@ -105,6 +106,7 @@ add_trace(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b,
 static_always_inline void
 process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, u16 *next, u8 is_trace)
 {
+	const producer_worker_t *pw = producer_worker;
 	const ip4_header_t *ip4 = (void *) b->data + vnet_buffer(b)->l3_hdr_offset;
 	const nat_tcp_udp_header_t *nat_tcp_udp = (void *) b->data + vnet_buffer(b)->l4_hdr_offset;
 
@@ -116,7 +118,7 @@ process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, 
 	key->dst_ip = ip4->dst_address;
 	key->src_port = nat_tcp_udp->src_port;
 	key->dst_port = nat_tcp_udp->dst_port;
-	key->l4_protocol = IP_PROTOCOL_UDP;
+	key->l4_protocol = ip4->protocol;
 	next[0] = SESSION_V4_LOOKUP_NEXT_DROP;
 
 	session_v4_lookup_worker_t *sw = session_v4_lookup_worker;
@@ -125,26 +127,33 @@ process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, 
 
 	if (clib_bihash_search_16_8(&sw->session_hash, &kv, &kv))
 	{
-		pool_get_aligned(sw->session_pool, session, CLIB_CACHE_LINE_BYTES);
+		const i32 rv = rte_ring_sc_dequeue(pw->release_session_v4_ring, (void **) &kv.value);
+		if (rv)
+			pool_get_aligned(sw->session_pool, session, CLIB_CACHE_LINE_BYTES);
+		else
+			session = pool_elt_at_index(sw->session_pool, kv.value);
+
 		session_flow->direction = FLOW_DIRECTION_CLIENT_TO_SERVER;
 		session_flow->index = session - sw->session_pool;
 
 		session->key = *key;
 		session->start_time = sw->now;
+		session->counter[FLOW_DIRECTION_SERVER_TO_CLIENT] = (vlib_counter_t) {0};
+		session->counter[FLOW_DIRECTION_CLIENT_TO_SERVER] = (vlib_counter_t) {0};
 		kv.value = session_flow->as_u64;
 
 		clib_bihash_add_del_16_8(&sw->session_hash, &kv, 1);
 
-		clib_warning("Timer added! %u %lu\n", session_flow->index, kv.value);
-		tw_timer_start_1t_3w_1024sl_ov(&sw->time_wheel, kv.value, 0, SESSION_TIMEOUT);
+		clib_warning("Timer added! rv %d %u %u\n" , rv, session_flow->index, session_flow->direction );
+		tw_timer_start_1t_3w_1024sl_ov(&sw->time_wheel, session_flow->index, 0, SESSION_TIMEOUT);
 
 		key->src_ip = ip4->dst_address;
 		key->dst_ip = ip4->src_address;
 		key->src_port = nat_tcp_udp->dst_port;
 		key->dst_port = nat_tcp_udp->src_port;
 
-		session_flow_t *reverse_session_flow = (void *)&kv.value;
-		reverse_session_flow->direction = FLOW_DIRECTION_SERVER_TO_CLIENT;
+		session_flow_t *reverse_flow = (void *)&kv.value;
+		reverse_flow->direction = FLOW_DIRECTION_SERVER_TO_CLIENT;
 
 		clib_bihash_add_del_16_8(&sw->session_hash, &kv, 1);
 	}
@@ -324,11 +333,17 @@ CLIB_MARCH_FN (session_v4_lookup_init, clib_error_t *, vlib_main_t __clib_unused
 static void
 session_v4_expired_timer_callback(u32 *session_indexes)
 {
+	producer_worker_t *pw = producer_worker;
+	session_v4_lookup_worker_t *sw = session_v4_lookup_worker;
+	u64 session_index;
 	for (u32 i = 0; i < vec_len(session_indexes); i++)
 	{
-		u32 session_index = session_indexes[i];
+		const i32 rv = rte_ring_sc_dequeue(pw->release_session_v4_ring, (void **) &session_index);
+		if (!rv)
+			pool_put_index(sw->session_pool, session_index);
 
-		session_v4_lookup_worker_t *sw = session_v4_lookup_worker;
+		session_index = session_indexes[i];
+
 		ipv4_session_t *session =  pool_elt_at_index(sw->session_pool, session_index);
 
 		if (session->end_time > sw->now)
@@ -339,10 +354,24 @@ session_v4_expired_timer_callback(u32 *session_indexes)
 		}
 		else
 		{
-			// clib_warning("Timer expired! %u\n", session_index);
+			clib_warning("Timer expired! time %f now %f %u\n", session->end_time, sw->now, session_index);
 			clib_bihash_kv_16_8_t *kv = (void *) &session->key;
 			clib_bihash_add_del_16_8(&sw->session_hash, kv, 0);
-			pool_put_index(sw->session_pool, session_index);
+
+			clib_bihash_kv_16_8_t reverse_kv;
+			ipv4_flow_key_t *key = (ipv4_flow_key_t *) &reverse_kv.key;
+
+			key->src_ip = session->dst_ip;
+			key->dst_ip = session->src_ip;
+			key->src_port = session->dst_port;
+			key->dst_port = session->src_port;
+			key->l4_protocol = session->l4_protocol;
+
+			clib_bihash_add_del_16_8(&sw->session_hash, &reverse_kv, 0);
+
+			const i32 rv = rte_ring_sp_enqueue(pw->acquire_session_v4_ring, (void *) session_index);
+			if (!rv)
+				pool_put_index(sw->session_pool, session_index);
 		}
 	}
 }

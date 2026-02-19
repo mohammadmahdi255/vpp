@@ -20,15 +20,15 @@
 	};															\
 	f64 start_time;												\
 	f64 end_time;												\
-	vlib_counter_t counter[FLOW_DIRECTION_CLIENT_TO_SERVER];	\
+	vlib_counter_t counter[FLOW_DIRECTION_COUNT];				\
 	u64 l7_protocol;											\
 	u64 application_id;											\
 	u64 session_id;
 
 typedef enum
 {
-	FLOW_DIRECTION_CLIENT_TO_SERVER,
 	FLOW_DIRECTION_SERVER_TO_CLIENT,
+	FLOW_DIRECTION_CLIENT_TO_SERVER,
 	FLOW_DIRECTION_COUNT
 } flow_direction_t;
 
@@ -48,7 +48,7 @@ typedef struct
 	ip4_address_t dst_ip;
 	u16 src_port;
 	u16 dst_port;
-	u8 l4_protocol;
+	u32 l4_protocol;
 } ipv4_flow_key_t;
 
 typedef struct
