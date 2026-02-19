@@ -269,7 +269,6 @@ VLIB_NODE_FN (ipv4_tcp_timer_expiration_process) (vlib_main_t *vm, vlib_node_run
 }
 
 #ifndef CLIB_MARCH_VARIANT
-
 __thread ipv4_tcp_session_lookup_worker_t ipv4_tcp_session_lookup_worker;
 ipv4_tcp_session_lookup_main_t ipv4_tcp_session_lookup_main;
 

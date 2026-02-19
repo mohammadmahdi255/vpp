@@ -25,7 +25,6 @@
 #include "detunnel/detunnel.h"
 
 #include "ip_session.h"
-#include "vnet/ipsec/ipsec_sa.h"
 
 #define foreach_ipv4_udp_session_lookup_next	\
 	_(drop_next, DROP, "drop")					\
@@ -270,7 +269,6 @@ VLIB_NODE_FN (ipv4_udp_timer_expiration_process) (vlib_main_t *vm, vlib_node_run
 }
 
 #ifndef CLIB_MARCH_VARIANT
-
 __thread ipv4_udp_session_lookup_worker_t ipv4_udp_session_lookup_worker;
 ipv4_udp_session_lookup_main_t ipv4_udp_session_lookup_main;
 
