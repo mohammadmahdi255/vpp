@@ -25,6 +25,7 @@
 #include "detunnel/detunnel.h"
 
 #include "ip_session.h"
+#include "vnet/ipsec/ipsec_sa.h"
 
 #define foreach_ipv4_udp_session_lookup_next	\
 	_(drop_next, DROP, "drop")					\
@@ -113,8 +114,8 @@ process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, 
 	key->dst_ip = ip4->dst_address;
 	key->src_port = udp->src_port;
 	key->dst_port = udp->dst_port;
-	key->l4_protocol = ip4->protocol;
-	next[0] = ip4->protocol;
+	key->l4_protocol = IP_PROTOCOL_UDP;
+	next[0] = IPV4_UDP_SESSION_LOOKUP_NEXT_DROP;
 
 	ipv4_udp_session_lookup_worker_t *sw = &ipv4_udp_session_lookup_worker;
 	session_flow_t *session_flow = vnet_buffer_get_opaque(b);

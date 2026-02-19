@@ -67,6 +67,8 @@ add_trace(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b,
 static_always_inline void
 process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, u16 *next, u8 is_trace)
 {
+	next[0] = IPV6_UDP_SESSION_LOOKUP_NEXT_DROP;
+
 	if (is_trace)
 		add_trace(vm, node, b, next[0]);
 }

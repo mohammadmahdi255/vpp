@@ -113,8 +113,8 @@ process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, 
 	key->dst_ip = ip4->dst_address;
 	key->src_port = tcp->src_port;
 	key->dst_port = tcp->dst_port;
-	key->l4_protocol = ip4->protocol;
-	next[0] = ip4->protocol;
+	key->l4_protocol = IP_PROTOCOL_TCP;
+	next[0] = IPV4_TCP_SESSION_LOOKUP_NEXT_DROP;
 
 	ipv4_tcp_session_lookup_worker_t *sw = &ipv4_tcp_session_lookup_worker;
 	session_flow_t *session_flow = vnet_buffer_get_opaque(b);
