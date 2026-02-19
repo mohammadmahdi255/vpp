@@ -25,6 +25,7 @@
 #include "detunnel/detunnel.h"
 
 #include "ip_session.h"
+#include "vppinfra/mem.h"
 
 #define foreach_ipv4_udp_session_lookup_next	\
 	_(drop_next, DROP, "drop")					\
@@ -69,7 +70,7 @@ typedef struct
 	tw_timer_wheel_1t_3w_1024sl_ov_t time_wheel;
 } ipv4_udp_session_lookup_worker_t;
 
-extern __thread ipv4_udp_session_lookup_worker_t ipv4_udp_session_lookup_worker;
+extern __thread ipv4_udp_session_lookup_worker_t *ipv4_udp_session_lookup_worker;
 extern ipv4_udp_session_lookup_main_t ipv4_udp_session_lookup_main;
 extern vlib_node_registration_t ipv4_udp_session_lookup;
 extern vlib_node_registration_t ipv4_udp_timer_expiration;
@@ -116,7 +117,7 @@ process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, 
 	key->l4_protocol = IP_PROTOCOL_UDP;
 	next[0] = IPV4_UDP_SESSION_LOOKUP_NEXT_DROP;
 
-	ipv4_udp_session_lookup_worker_t *sw = &ipv4_udp_session_lookup_worker;
+	ipv4_udp_session_lookup_worker_t *sw = ipv4_udp_session_lookup_worker;
 	session_flow_t *session_flow = vnet_buffer_get_opaque(b);
 	ipv4_session_t *session;
 
@@ -169,7 +170,7 @@ ipv4_udp_session_lookup_inline(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_
 
 	vlib_buffer_t **b = bufs;
 
-	ipv4_udp_session_lookup_worker_t *sw = &ipv4_udp_session_lookup_worker;
+	ipv4_udp_session_lookup_worker_t *sw = ipv4_udp_session_lookup_worker;
 
 	u32 *from = vlib_frame_vector_args(frame);
 	u32 n_left_from = frame->n_vectors;
@@ -226,7 +227,7 @@ VLIB_NODE_FN (ipv4_udp_session_lookup) (vlib_main_t *vm, vlib_node_runtime_t *no
 VLIB_NODE_FN (ipv4_udp_timer_expiration) (vlib_main_t *vm, vlib_node_runtime_t __clib_unused *node,
 		vlib_frame_t __clib_unused *frame)
 {
-	ipv4_udp_session_lookup_worker_t *sw = &ipv4_udp_session_lookup_worker;
+	ipv4_udp_session_lookup_worker_t *sw = ipv4_udp_session_lookup_worker;
 	sw->now = vlib_time_now(vm);
 	tw_timer_expire_timers_1t_3w_1024sl_ov(&sw->time_wheel, sw->now);
 	return 0;
@@ -238,26 +239,22 @@ VLIB_NODE_FN (ipv4_udp_timer_expiration_process) (vlib_main_t *vm, vlib_node_run
 
 	vlib_thread_main_t *tm = vlib_get_thread_main();
 	u64 *p = hash_get_mem(tm->thread_registrations_by_name, "workers");
+	const vlib_thread_registration_t *tr = (vlib_thread_registration_t *) p[0];
 	const f64 interval = 1.0;
 
-	if (p == NULL)
+	while (tr->count == 0)
 	{
-		while (true)
-		{
-			(void) vlib_process_wait_for_event_or_clock(vm, interval);
+		(void) vlib_process_wait_for_event_or_clock(vm, interval);
 
-			ipv4_udp_session_lookup_worker_t *sw = &ipv4_udp_session_lookup_worker;
-			sw->now = vlib_time_now(vm);
-			tw_timer_expire_timers_1t_3w_1024sl_ov(&sw->time_wheel, sw->now);
-		}
+		ipv4_udp_session_lookup_worker_t *sw = ipv4_udp_session_lookup_worker;
+		sw->now = vlib_time_now(vm);
+		tw_timer_expire_timers_1t_3w_1024sl_ov(&sw->time_wheel, sw->now);
 	}
-
-	const vlib_thread_registration_t *tr = (vlib_thread_registration_t *) p[0];
 
 	u32 start_thread_id = tr->first_index;
 	u32 end_thread_id = start_thread_id + tr->count;
 
-	while (true)
+	while (tr->count > 0)
 	{
 		(void) vlib_process_wait_for_event_or_clock(vm, interval);
 
@@ -269,7 +266,7 @@ VLIB_NODE_FN (ipv4_udp_timer_expiration_process) (vlib_main_t *vm, vlib_node_run
 }
 
 #ifndef CLIB_MARCH_VARIANT
-__thread ipv4_udp_session_lookup_worker_t ipv4_udp_session_lookup_worker;
+__thread ipv4_udp_session_lookup_worker_t *ipv4_udp_session_lookup_worker;
 ipv4_udp_session_lookup_main_t ipv4_udp_session_lookup_main;
 
 static u8 *format_ipv4_udp_session_lookup_trace(u8 *s, va_list *args)
@@ -329,7 +326,7 @@ ipv4_udp_session_expired_timer_callback(u32 *session_indexes)
 	{
 		u32 session_index = session_indexes[i];
 
-		ipv4_udp_session_lookup_worker_t *sw = &ipv4_udp_session_lookup_worker;
+		ipv4_udp_session_lookup_worker_t *sw = ipv4_udp_session_lookup_worker;
 		ipv4_session_t *session =  pool_elt_at_index(sw->session_pool, session_index);
 
 		if (session->end_time > sw->now)
@@ -351,7 +348,8 @@ ipv4_udp_session_expired_timer_callback(u32 *session_indexes)
 static clib_error_t *
 ipv4_udp_session_lookup_worker_init(vlib_main_t __clib_unused *vm)
 {
-	ipv4_udp_session_lookup_worker_t *sw = &ipv4_udp_session_lookup_worker;
+	ipv4_udp_session_lookup_worker = clib_mem_alloc(sizeof(ipv4_udp_session_lookup_worker_t));
+	ipv4_udp_session_lookup_worker_t *sw = ipv4_udp_session_lookup_worker;
 
 	sw->session_pool = NULL;
 
@@ -376,6 +374,13 @@ ipv4_udp_session_lookup_worker_init(vlib_main_t __clib_unused *vm)
 static clib_error_t *
 ipv4_udp_session_lookup_init(vlib_main_t *vm)
 {
+	vlib_thread_main_t *tm = vlib_get_thread_main();
+	u64 *p = hash_get_mem(tm->thread_registrations_by_name, "workers");
+	const vlib_thread_registration_t *tr = (vlib_thread_registration_t *) p[0];
+
+	if (tr->count == 0)
+		ipv4_udp_session_lookup_worker_init(vm);
+
 	return CLIB_MARCH_FN_SELECT(ipv4_udp_session_lookup_init) (vm);
 }
 
