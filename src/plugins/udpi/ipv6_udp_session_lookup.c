@@ -11,63 +11,43 @@
 
 #include "detunnel/detunnel.h"
 
-#define foreach_udpi_classifier_next							\
-	_(drop_next, DROP, "drop")									\
-	_(ipv4_next, IPV4_SESSION_LOOKUP, "ipv4-session-lookup")	\
-	_(ipv6_next, IPV6_SESSION_LOOKUP, "ipv6-session-lookup")	\
-
-#define foreach_udpi_classifier	\
-	_(ipv4_version)				\
-	_(ipv6_version)
-
-#define IPV4_VERSION	0x0040
-#define IPV6_VERSION	0x0060
+#define foreach_ipv6_udp_session_lookup_next	\
+	_(drop_next, DROP, "drop")				\
 
 enum
 {
-#define _(var, id, name) UDPI_CLASSIFIER_NEXT_##id,
-	foreach_udpi_classifier_next
+#define _(var, id, name) IPV6_UDP_SESSION_LOOKUP_NEXT_##id,
+	foreach_ipv6_udp_session_lookup_next
 #undef _
-	UDPI_CLASSIFIER_NEXT_N,
+	IPV6_UDP_SESSION_LOOKUP_NEXT_N,
 };
 
 #define _(var, id, name) static SIMD_TYPE DETUNNEL_CONCAT(var, SIMD_TYPE);
 
-foreach_udpi_classifier_next
-#undef _
-
-#define _(var) static SIMD_TYPE DETUNNEL_CONCAT(var, SIMD_TYPE);
-
-foreach_udpi_classifier
+foreach_ipv6_udp_session_lookup_next
 #undef _
 
 enum
 {
-#define _(id, name) UDPI_CLASSIFIER_##id,
+#define _(id, name) IPV6_UDP_SESSION_LOOKUP_##id,
 	foreach_detunnel_counter
 #undef _
-	UDPI_CLASSIFIER_COUNTER_N,
+	IPV6_UDP_SESSION_LOOKUP_COUNTER_N,
 };
 
 typedef struct
 {
 	u16 next;
-} udpi_trace_t;
+} ipv6_udp_session_lookup_trace_t;
 
-extern vlib_node_registration_t udpi_classifier;
+extern vlib_node_registration_t ipv6_udp_session_lookup;
 
 static_always_inline void
-udpi_to_next(u16 *next, u16 len)
+ipv6_udp_session_lookup_to_next(u16 *next, u16 len)
 {
 	for (u16 i = 0; i < len; i += SIMD_SIZE)
 	{
-		SIMD_TYPE next_vec = SIMD_LOAD(next + i);
-		SIMD_TYPE ipv4_mask_vec = (next_vec == SIMD_VEC(ipv4_version));
-		SIMD_TYPE ipv6_mask_vec = (next_vec == SIMD_VEC(ipv6_version));
-
-		SIMD_TYPE result = SIMD_VEC(drop_next) |
-				(ipv4_mask_vec & SIMD_VEC(ipv4_next)) |
-				(ipv6_mask_vec & SIMD_VEC(ipv6_next));
+		SIMD_TYPE result = SIMD_VEC(drop_next);
 
 		SIMD_STORE(result, next + i);
 	}
@@ -79,7 +59,7 @@ add_trace(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b,
 {
 	if (PREDICT_FALSE(b->flags & VLIB_BUFFER_IS_TRACED))
 	{
-		udpi_trace_t *t = vlib_add_trace(vm, node, b, sizeof(*t));
+		ipv6_udp_session_lookup_trace_t *t = vlib_add_trace(vm, node, b, sizeof(*t));
 		t->next = next;
 	}
 }
@@ -87,15 +67,12 @@ add_trace(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b,
 static_always_inline void
 process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, u16 *next, u8 is_trace)
 {
-	const u8 *data = b->data + vnet_buffer(b)->l3_hdr_offset;
-	next[0] = (*data & 0xF0);
-
 	if (is_trace)
 		add_trace(vm, node, b, next[0]);
 }
 
 static_always_inline u64
-udpi_inline(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_frame_t *frame, u8 is_trace)
+ipv6_udp_session_lookup_inline(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_frame_t *frame, u8 is_trace)
 {
 	vlib_buffer_t *bufs[VLIB_FRAME_SIZE];
 	u16 nexts[VLIB_FRAME_SIZE];
@@ -143,67 +120,62 @@ udpi_inline(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_frame_t *frame, u8 
 		n_left_from--;
 	}
 
-	udpi_to_next(nexts, frame->n_vectors);
+	ipv6_udp_session_lookup_to_next(nexts, frame->n_vectors);
 	vlib_buffer_enqueue_to_next(vm, node, from, nexts, frame->n_vectors);
 
 	return frame->n_vectors;
 }
 
-VLIB_NODE_FN (udpi_classifier) (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_frame_t *frame)
+VLIB_NODE_FN (ipv6_udp_session_lookup) (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_frame_t *frame)
 {
-	return udpi_inline(vm, node, frame, node->flags & VLIB_NODE_FLAG_TRACE);
+	return ipv6_udp_session_lookup_inline(vm, node, frame, node->flags & VLIB_NODE_FLAG_TRACE);
 }
 
 #ifndef CLIB_MARCH_VARIANT
-static u8 *format_udpi_trace(u8 *s, va_list *args)
+static u8 *format_ipv6_udp_session_lookup_trace(u8 *s, va_list *args)
 {
 	vlib_main_t __clib_unused *vm = va_arg(*args, vlib_main_t *);
 	vlib_node_t __clib_unused *node = va_arg(*args, vlib_node_t *);
-	udpi_trace_t *t = va_arg(*args, udpi_trace_t *);
+	ipv6_udp_session_lookup_trace_t *t = va_arg(*args, ipv6_udp_session_lookup_trace_t *);
 	return format(s,"next node   %u",
 			t->next);
 }
 
-VLIB_REGISTER_NODE (udpi_classifier) = {
-	.name = "udpi-classifier",
+VLIB_REGISTER_NODE (ipv6_udp_session_lookup) = {
+	.name = "ipv6-udp-session-lookup",
 	.vector_size = sizeof(u32),
-	.format_trace = format_udpi_trace,
+	.format_trace = format_ipv6_udp_session_lookup_trace,
 	.type = VLIB_NODE_TYPE_INTERNAL,
-	.n_next_nodes = UDPI_CLASSIFIER_NEXT_N,
+	.n_next_nodes = IPV6_UDP_SESSION_LOOKUP_NEXT_N,
 	.next_nodes = {
-#define _(var, id, name) [UDPI_CLASSIFIER_NEXT_##id] = (name),
-	foreach_udpi_classifier_next
+#define _(var, id, name) [IPV6_UDP_SESSION_LOOKUP_NEXT_##id] = (name),
+	foreach_ipv6_udp_session_lookup_next
 #undef _
 	},
 };
 
 #endif
 
-CLIB_MARCH_FN (udpi_init, clib_error_t *, vlib_main_t __clib_unused *vm)
+CLIB_MARCH_FN (ipv6_udp_session_lookup_init, clib_error_t *, vlib_main_t __clib_unused *vm)
 {
 	clib_warning("size: %lu %s", SIMD_SIZE, CLIB_STRING_MACRO(SIMD_TYPE));
 
-	SIMD_VEC(ipv4_version) = SIMD_SPLAT(IPV4_VERSION);
-	SIMD_VEC(ipv6_version) = SIMD_SPLAT(IPV6_VERSION);
-
-	SIMD_VEC(drop_next) = SIMD_SPLAT(UDPI_CLASSIFIER_NEXT_DROP);
-	SIMD_VEC(ipv4_next) = SIMD_SPLAT(UDPI_CLASSIFIER_NEXT_IPV4_SESSION_LOOKUP);
-	SIMD_VEC(ipv6_next) = SIMD_SPLAT(UDPI_CLASSIFIER_NEXT_IPV6_SESSION_LOOKUP);
+	SIMD_VEC(drop_next) = SIMD_SPLAT(IPV6_UDP_SESSION_LOOKUP_NEXT_DROP);
 
 	return 0;
 }
 
 static clib_error_t *
-udpi_worker_init(vlib_main_t __clib_unused *vm)
+ipv6_udp_session_lookup_worker_init(vlib_main_t __clib_unused *vm)
 {
 	return 0;
 }
 
 static clib_error_t *
-udpi_init(vlib_main_t *vm)
+ipv6_udp_session_lookup_init(vlib_main_t *vm)
 {
-	return CLIB_MARCH_FN_SELECT(udpi_init) (vm);
+	return CLIB_MARCH_FN_SELECT(ipv6_udp_session_lookup_init) (vm);
 }
 
-VLIB_WORKER_INIT_FUNCTION (udpi_worker_init);
-VLIB_INIT_FUNCTION (udpi_init);
+VLIB_WORKER_INIT_FUNCTION (ipv6_udp_session_lookup_worker_init);
+VLIB_INIT_FUNCTION (ipv6_udp_session_lookup_init);

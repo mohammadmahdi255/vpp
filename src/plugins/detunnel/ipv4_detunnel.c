@@ -120,6 +120,7 @@ process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, 
 	idw->counters[sw_idx].packets++;
 	idw->counters[sw_idx].bytes += ip4_hdr_len;
 	next[0] = ip4->protocol;
+	vnet_buffer(b)->ip.save_protocol = ip4->protocol;
 
 trace:
 	if (is_trace)

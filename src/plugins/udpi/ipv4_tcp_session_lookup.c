@@ -26,42 +26,40 @@
 
 #include "ip_session.h"
 
-#define foreach_ipv4_session_lookup_next	\
-	_(drop_next, DROP, "drop")				\
-	_(tcp_next, TCP_SESSION, "ip4-drop")	\
-	_(udp_next, UDP_SESSION, "ip6-drop")	\
+#define foreach_ipv4_tcp_session_lookup_next	\
+	_(drop_next, DROP, "drop")					\
 
 enum
 {
-#define _(var, id, name) IPV4_SESSION_LOOKUP_NEXT_##id,
-	foreach_ipv4_session_lookup_next
+#define _(var, id, name) IPV4_TCP_SESSION_LOOKUP_NEXT_##id,
+	foreach_ipv4_tcp_session_lookup_next
 #undef _
-	IPV4_SESSION_LOOKUP_NEXT_N,
+	IPV4_TCP_SESSION_LOOKUP_NEXT_N,
 };
 
 #define _(var, id, name) static SIMD_TYPE DETUNNEL_CONCAT(var, SIMD_TYPE);
 
-foreach_ipv4_session_lookup_next
+foreach_ipv4_tcp_session_lookup_next
 #undef _
 
 #define SESSION_TIMEOUT	3
 
 enum
 {
-#define _(id, name) IPV4_SESSION_LOOKUP_##id,
+#define _(id, name) IPV4_TCP_SESSION_LOOKUP_##id,
 	foreach_detunnel_counter
 #undef _
-	IPV4_SESSION_LOOKUP_COUNTER_N,
+	IPV4_TCP_SESSION_LOOKUP_COUNTER_N,
 };
 
 typedef struct
 {
 	ipv4_flow_key_t key;
-} ipv4_session_lookup_trace_t;
+} ipv4_tcp_session_lookup_trace_t;
 
 typedef struct
 {
-} ipv4_session_lookup_main_t;
+} ipv4_tcp_session_lookup_main_t;
 
 typedef struct
 {
@@ -69,26 +67,22 @@ typedef struct
 	ipv4_session_t *session_pool;
 	clib_bihash_16_8_t session_hash;
 	tw_timer_wheel_1t_3w_1024sl_ov_t time_wheel;
-} ipv4_session_lookup_worker_t;
+} ipv4_tcp_session_lookup_worker_t;
 
-extern __thread ipv4_session_lookup_worker_t ipv4_session_lookup_worker;
-extern ipv4_session_lookup_main_t ipv4_session_lookup_main;
-extern vlib_node_registration_t ipv4_session_lookup;
-extern vlib_node_registration_t ipv4_timer_expiration;
-extern vlib_node_registration_t ipv4_timer_expiration_process;
+extern __thread ipv4_tcp_session_lookup_worker_t ipv4_tcp_session_lookup_worker;
+extern ipv4_tcp_session_lookup_main_t ipv4_tcp_session_lookup_main;
+extern vlib_node_registration_t ipv4_tcp_session_lookup;
+extern vlib_node_registration_t ipv4_tcp_timer_expiration;
+extern vlib_node_registration_t ipv4_tcp_timer_expiration_process;
 
 static_always_inline void
-ipv4_session_lookup_to_next(u16 *next, u16 len)
+ipv4_tcp_session_lookup_to_next(u16 *next, u16 len)
 {
 	for (u16 i = 0; i < len; i += SIMD_SIZE)
 	{
-		SIMD_TYPE next_vec = SIMD_LOAD(next + i);
-		SIMD_TYPE tcp_mask_vec = (next_vec == SIMD_VEC(tcp_protocol));
-		SIMD_TYPE udp_mask_vec = (next_vec == SIMD_VEC(udp_protocol));
+		SIMD_TYPE __clib_unused next_vec = SIMD_LOAD(next + i);
 
-		SIMD_TYPE result = SIMD_VEC(drop_next) |
-				(tcp_mask_vec & SIMD_VEC(tcp_next)) |
-				(udp_mask_vec & SIMD_VEC(udp_next));
+		SIMD_TYPE result = SIMD_VEC(drop_next);
 
 		SIMD_STORE(result, next + i);
 	}
@@ -100,7 +94,7 @@ add_trace(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b,
 {
 	if (PREDICT_FALSE(b->flags & VLIB_BUFFER_IS_TRACED))
 	{
-		ipv4_session_lookup_trace_t *t = vlib_add_trace(vm, node, b, sizeof(*t));
+		ipv4_tcp_session_lookup_trace_t *t = vlib_add_trace(vm, node, b, sizeof(*t));
 		t->key = *key;
 	}
 }
@@ -122,7 +116,7 @@ process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, 
 	key->l4_protocol = ip4->protocol;
 	next[0] = ip4->protocol;
 
-	ipv4_session_lookup_worker_t *sw = &ipv4_session_lookup_worker;
+	ipv4_tcp_session_lookup_worker_t *sw = &ipv4_tcp_session_lookup_worker;
 	session_flow_t *session_flow = vnet_buffer_get_opaque(b);
 	ipv4_session_t *session;
 
@@ -167,7 +161,7 @@ process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, 
 }
 
 static_always_inline u64
-ipv4_session_lookup_inline(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_frame_t *frame, u8 is_trace)
+ipv4_tcp_session_lookup_inline(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_frame_t *frame, u8 is_trace)
 {
 	vlib_buffer_t *bufs[VLIB_FRAME_SIZE];
 	u16 nexts[VLIB_FRAME_SIZE];
@@ -175,7 +169,7 @@ ipv4_session_lookup_inline(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_fram
 
 	vlib_buffer_t **b = bufs;
 
-	ipv4_session_lookup_worker_t *sw = &ipv4_session_lookup_worker;
+	ipv4_tcp_session_lookup_worker_t *sw = &ipv4_tcp_session_lookup_worker;
 
 	u32 *from = vlib_frame_vector_args(frame);
 	u32 n_left_from = frame->n_vectors;
@@ -218,27 +212,27 @@ ipv4_session_lookup_inline(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_fram
 		n_left_from--;
 	}
 
-	ipv4_session_lookup_to_next(nexts, frame->n_vectors);
+	ipv4_tcp_session_lookup_to_next(nexts, frame->n_vectors);
 	vlib_buffer_enqueue_to_next(vm, node, from, nexts, frame->n_vectors);
 
 	return frame->n_vectors;
 }
 
-VLIB_NODE_FN (ipv4_session_lookup) (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_frame_t *frame)
+VLIB_NODE_FN (ipv4_tcp_session_lookup) (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_frame_t *frame)
 {
-	return ipv4_session_lookup_inline(vm, node, frame, node->flags & VLIB_NODE_FLAG_TRACE);
+	return ipv4_tcp_session_lookup_inline(vm, node, frame, node->flags & VLIB_NODE_FLAG_TRACE);
 }
 
-VLIB_NODE_FN (ipv4_timer_expiration) (vlib_main_t *vm, vlib_node_runtime_t __clib_unused *node,
+VLIB_NODE_FN (ipv4_tcp_timer_expiration) (vlib_main_t *vm, vlib_node_runtime_t __clib_unused *node,
 		vlib_frame_t __clib_unused *frame)
 {
-	ipv4_session_lookup_worker_t *sw = &ipv4_session_lookup_worker;
+	ipv4_tcp_session_lookup_worker_t *sw = &ipv4_tcp_session_lookup_worker;
 	sw->now = vlib_time_now(vm);
 	tw_timer_expire_timers_1t_3w_1024sl_ov(&sw->time_wheel, sw->now);
 	return 0;
 }
 
-VLIB_NODE_FN (ipv4_timer_expiration_process) (vlib_main_t *vm, vlib_node_runtime_t __clib_unused *node,
+VLIB_NODE_FN (ipv4_tcp_timer_expiration_process) (vlib_main_t *vm, vlib_node_runtime_t __clib_unused *node,
 		vlib_frame_t __clib_unused *frame)
 {
 
@@ -252,7 +246,7 @@ VLIB_NODE_FN (ipv4_timer_expiration_process) (vlib_main_t *vm, vlib_node_runtime
 		{
 			(void) vlib_process_wait_for_event_or_clock(vm, interval);
 
-			ipv4_session_lookup_worker_t *sw = &ipv4_session_lookup_worker;
+			ipv4_tcp_session_lookup_worker_t *sw = &ipv4_tcp_session_lookup_worker;
 			sw->now = vlib_time_now(vm);
 			tw_timer_expire_timers_1t_3w_1024sl_ov(&sw->time_wheel, sw->now);
 		}
@@ -268,7 +262,7 @@ VLIB_NODE_FN (ipv4_timer_expiration_process) (vlib_main_t *vm, vlib_node_runtime
 		(void) vlib_process_wait_for_event_or_clock(vm, interval);
 
 		for (u32 thread_id = start_thread_id; thread_id < end_thread_id; thread_id++)
-			vlib_node_set_interrupt_pending(vlib_get_main_by_index(thread_id), ipv4_timer_expiration.index);
+			vlib_node_set_interrupt_pending(vlib_get_main_by_index(thread_id), ipv4_tcp_timer_expiration.index);
 	}
 
 	return 0;
@@ -276,14 +270,14 @@ VLIB_NODE_FN (ipv4_timer_expiration_process) (vlib_main_t *vm, vlib_node_runtime
 
 #ifndef CLIB_MARCH_VARIANT
 
-__thread ipv4_session_lookup_worker_t ipv4_session_lookup_worker;
-ipv4_session_lookup_main_t ipv4_session_lookup_main;
+__thread ipv4_tcp_session_lookup_worker_t ipv4_tcp_session_lookup_worker;
+ipv4_tcp_session_lookup_main_t ipv4_tcp_session_lookup_main;
 
-static u8 *format_ipv4_session_lookup_trace(u8 *s, va_list *args)
+static u8 *format_ipv4_tcp_session_lookup_trace(u8 *s, va_list *args)
 {
 	vlib_main_t __clib_unused *vm = va_arg(*args, vlib_main_t *);
 	vlib_node_t __clib_unused *node = va_arg(*args, vlib_node_t *);
-	ipv4_session_lookup_trace_t *t = va_arg(*args, ipv4_session_lookup_trace_t *);
+	ipv4_tcp_session_lookup_trace_t *t = va_arg(*args, ipv4_tcp_session_lookup_trace_t *);
 	return format(s,"src ip   %U\n"
 			"  dst ip   %U\n"
 			"  src port %U\n"
@@ -294,51 +288,49 @@ static u8 *format_ipv4_session_lookup_trace(u8 *s, va_list *args)
 			format_network_port, t->key.l4_protocol, t->key.dst_port);
 }
 
-VLIB_REGISTER_NODE (ipv4_session_lookup) = {
-	.name = "ipv4-session-lookup",
+VLIB_REGISTER_NODE (ipv4_tcp_session_lookup) = {
+	.name = "ipv4-tcp-session-lookup",
 	.vector_size = sizeof(u32),
-	.format_trace = format_ipv4_session_lookup_trace,
+	.format_trace = format_ipv4_tcp_session_lookup_trace,
 	.type = VLIB_NODE_TYPE_INTERNAL,
-	.n_next_nodes = IPV4_SESSION_LOOKUP_NEXT_N,
+	.n_next_nodes = IPV4_TCP_SESSION_LOOKUP_NEXT_N,
 	.next_nodes = {
-#define _(var, id, name) [IPV4_SESSION_LOOKUP_NEXT_##id] = (name),
-	foreach_ipv4_session_lookup_next
+#define _(var, id, name) [IPV4_TCP_SESSION_LOOKUP_NEXT_##id] = (name),
+	foreach_ipv4_tcp_session_lookup_next
 #undef _
 	},
 };
 
-VLIB_REGISTER_NODE (ipv4_timer_expiration) = {
-	.name = "ipv4-timer-expiration",
+VLIB_REGISTER_NODE (ipv4_tcp_timer_expiration) = {
+	.name = "ipv4-tcp-timer-expiration",
 	.type = VLIB_NODE_TYPE_SCHED,
 	.state = VLIB_NODE_STATE_INTERRUPT
 };
 
-VLIB_REGISTER_NODE (ipv4_timer_expiration_process) = {
-	.name = "ipv4-timer-expiration-process",
+VLIB_REGISTER_NODE (ipv4_tcp_timer_expiration_process) = {
+	.name = "ipv4-tcp-timer-expiration-process",
 	.type = VLIB_NODE_TYPE_PROCESS,
 };
 
 #endif
 
-CLIB_MARCH_FN (ipv4_session_lookup_init, clib_error_t *, vlib_main_t __clib_unused *vm)
+CLIB_MARCH_FN (ipv4_tcp_session_lookup_init, clib_error_t *, vlib_main_t __clib_unused *vm)
 {
 	clib_warning("size: %lu %s", SIMD_SIZE, CLIB_STRING_MACRO(SIMD_TYPE));
 
-	SIMD_VEC(drop_next) = SIMD_SPLAT(IPV4_SESSION_LOOKUP_NEXT_DROP);
-	SIMD_VEC(tcp_next) = SIMD_SPLAT(IPV4_SESSION_LOOKUP_NEXT_TCP_SESSION);
-	SIMD_VEC(udp_next) = SIMD_SPLAT(IPV4_SESSION_LOOKUP_NEXT_UDP_SESSION);
+	SIMD_VEC(drop_next) = SIMD_SPLAT(IPV4_TCP_SESSION_LOOKUP_NEXT_DROP);
 
 	return 0;
 }
 
 static void
-ipv4_session_expired_timer_callback(u32 *session_indexes)
+ipv4_tcp_session_expired_timer_callback(u32 *session_indexes)
 {
 	for (u32 i = 0; i < vec_len(session_indexes); i++)
 	{
 		u32 session_index = session_indexes[i];
 
-		ipv4_session_lookup_worker_t *sw = &ipv4_session_lookup_worker;
+		ipv4_tcp_session_lookup_worker_t *sw = &ipv4_tcp_session_lookup_worker;
 		ipv4_session_t *session =  pool_elt_at_index(sw->session_pool, session_index);
 
 		if (session->end_time > sw->now)
@@ -358,9 +350,9 @@ ipv4_session_expired_timer_callback(u32 *session_indexes)
 }
 
 static clib_error_t *
-ipv4_session_lookup_worker_init(vlib_main_t __clib_unused *vm)
+ipv4_tcp_session_lookup_worker_init(vlib_main_t __clib_unused *vm)
 {
-	ipv4_session_lookup_worker_t *sw = &ipv4_session_lookup_worker;
+	ipv4_tcp_session_lookup_worker_t *sw = &ipv4_tcp_session_lookup_worker;
 
 	sw->session_pool = NULL;
 
@@ -377,16 +369,16 @@ ipv4_session_lookup_worker_init(vlib_main_t __clib_unused *vm)
 	if (!sw->session_pool)
 		return clib_error_return(0, "failed to create session pool");
 
-	tw_timer_wheel_init_1t_3w_1024sl_ov(&sw->time_wheel, ipv4_session_expired_timer_callback, 1.0, ~0);
+	tw_timer_wheel_init_1t_3w_1024sl_ov(&sw->time_wheel, ipv4_tcp_session_expired_timer_callback, 1.0, ~0);
 
 	return 0;
 }
 
 static clib_error_t *
-ipv4_session_lookup_init(vlib_main_t *vm)
+ipv4_tcp_session_lookup_init(vlib_main_t *vm)
 {
-	return CLIB_MARCH_FN_SELECT(ipv4_session_lookup_init) (vm);
+	return CLIB_MARCH_FN_SELECT(ipv4_tcp_session_lookup_init) (vm);
 }
 
-VLIB_WORKER_INIT_FUNCTION (ipv4_session_lookup_worker_init);
-VLIB_INIT_FUNCTION (ipv4_session_lookup_init);
+VLIB_WORKER_INIT_FUNCTION (ipv4_tcp_session_lookup_worker_init);
+VLIB_INIT_FUNCTION (ipv4_tcp_session_lookup_init);

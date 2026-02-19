@@ -138,6 +138,7 @@ process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, 
 	}
 
 	next[0] = protocol;
+	vnet_buffer(b)->ip.save_protocol = protocol;
 
 	if (PREDICT_TRUE(protocol != IP_PROTOCOL_IPV6_FRAGMENTATION))
 	{
