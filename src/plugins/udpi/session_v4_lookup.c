@@ -65,6 +65,7 @@ typedef struct
 
 typedef struct
 {
+	CLIB_CACHE_LINE_ALIGN_MARK (cacheline);
 	f64 now;
 	ipv4_session_t *session_pool;
 	clib_bihash_16_8_t session_hash;
@@ -238,9 +239,9 @@ VLIB_NODE_FN (session_v4_timer_expiration_process) (vlib_main_t *vm, vlib_node_r
 		vlib_frame_t __clib_unused *frame)
 {
 
-	vlib_thread_main_t *tm = vlib_get_thread_main();
-	u64 *p = hash_get_mem(tm->thread_registrations_by_name, "workers");
-	const vlib_thread_registration_t *tr = (vlib_thread_registration_t *) p[0];
+	const vlib_thread_main_t *tm = vlib_get_thread_main();
+	const u64 *p = hash_get_mem(tm->thread_registrations_by_name, "workers");
+	const vlib_thread_registration_t *tr = (const vlib_thread_registration_t *) p[0];
 	const f64 interval = 1.0;
 
 	while (tr->count == 0)
@@ -358,7 +359,7 @@ session_v4_lookup_worker_init(vlib_main_t __clib_unused *vm)
 	const u32 nbuckets = clib_max(max_pow2(max_sessions / 4), 64);
 	const u64 memory_size = max_sessions * sizeof(clib_bihash_kv_16_8_t);
 
-	void *name = format(NULL, "ipv4-session-hash-%u", vlib_get_thread_index());
+	void *name = format(NULL, "session-v4-table-%u", vlib_get_thread_index());
 	clib_bihash_init_16_8(&sw->session_hash, name,  nbuckets, memory_size);
 	vec_free(name);
 
@@ -375,8 +376,8 @@ session_v4_lookup_worker_init(vlib_main_t __clib_unused *vm)
 static clib_error_t *
 session_v4_lookup_init(vlib_main_t *vm)
 {
-	vlib_thread_main_t *tm = vlib_get_thread_main();
-	u64 *p = hash_get_mem(tm->thread_registrations_by_name, "workers");
+	const vlib_thread_main_t *tm = vlib_get_thread_main();
+	const u64 *p = hash_get_mem(tm->thread_registrations_by_name, "workers");
 	const vlib_thread_registration_t *tr = (vlib_thread_registration_t *) p[0];
 
 	if (tr->count == 0)

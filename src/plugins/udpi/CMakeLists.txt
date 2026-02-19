@@ -11,15 +11,17 @@ link_directories(
 
 add_vpp_plugin(udpi
 	SOURCES
+		plugin.c
+		producer.c
+		session_classifier.c
 		session_v4_lookup.c
 		session_v6_lookup.c
-		plugin.c
-		session_classifier.c
 
 	MULTIARCH_SOURCES
+		producer.c
+		session_classifier.c
 		session_v4_lookup.c
 		session_v6_lookup.c
-		session_classifier.c
 
 	LINK_FLAGS
 		${DPDK_LDFLAGS}
