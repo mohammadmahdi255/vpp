@@ -10,7 +10,7 @@
 
 #include <vnet/buffer.h>
 #include <vnet/ip/ip4_packet.h>
-#include <vnet/udp/udp_packet.h>
+#include <vnet/tcp/tcp_packet.h>
 #include <vnet/vnet.h>
 
 #include <vppinfra/bihash_16_8.h>
@@ -103,7 +103,7 @@ static_always_inline void
 process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, u16 *next, u8 is_trace)
 {
 	const ip4_header_t *ip4 = (void *) b->data + vnet_buffer(b)->l3_hdr_offset;
-	const udp_header_t *udp = (void *) b->data + vnet_buffer(b)->l4_hdr_offset;
+	const tcp_header_t *tcp = (void *) b->data + vnet_buffer(b)->l4_hdr_offset;
 
 	clib_bihash_kv_16_8_t kv;
 
@@ -111,8 +111,8 @@ process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, 
 
 	key->src_ip = ip4->src_address;
 	key->dst_ip = ip4->dst_address;
-	key->src_port = udp->src_port;
-	key->dst_port = udp->dst_port;
+	key->src_port = tcp->src_port;
+	key->dst_port = tcp->dst_port;
 	key->l4_protocol = ip4->protocol;
 	next[0] = ip4->protocol;
 
@@ -137,8 +137,8 @@ process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, 
 
 		key->src_ip = ip4->dst_address;
 		key->dst_ip = ip4->src_address;
-		key->src_port = udp->dst_port;
-		key->dst_port = udp->src_port;
+		key->src_port = tcp->dst_port;
+		key->dst_port = tcp->src_port;
 
 		session_flow_t *reverse_session_flow = (void *)&kv.value;
 		reverse_session_flow->direction = FLOW_DIRECTION_SERVER_TO_CLIENT;
