@@ -11,7 +11,7 @@ typedef struct
 
 typedef struct
 {
-	void *brokers;
+	void *broker;
 	void *topic;
 	u32 linger_ms;
 	u32 batch_size;

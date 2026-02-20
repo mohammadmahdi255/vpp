@@ -13,7 +13,7 @@ produce_v4_csv_record(u8 *buffer, ipv4_session_t *session)
 	u64 start_ms = (u64)((session->start_time - (f64) start_s) * 1000);
 	u64 end_ms = (u64)((session->end_time - (f64) end_s) * 1000);
 
-	vec_reset_length (buffer);
+	vec_reset_length(buffer);
 
 	buffer = format(buffer,
 			"%u,"	/* probe_id */

@@ -1,3 +1,4 @@
+#include <sched.h>
 #include <vlib/vlib.h>
 #include <vlib/threads.h>
 
@@ -11,45 +12,21 @@
 #include "config.h"
 #include "metadata_generator.h"
 #include "producer.h"
-
-/* ── Constants ───────────────────────────────────────────────────── */
+#include "rte_ring.h"
+#include "vppinfra/error.h"
 
 #define PRODUCER_POLL_INTERVAL_NS   1000000 /* 1ms between loops            */
 
 typedef struct
 {
+	CLIB_CACHE_LINE_ALIGN_MARK (cacheline);
 	rd_kafka_t *rk;
 	rd_kafka_topic_t *rkt;
 
 	u8 *scratch;
-
-	/* stats */
-	u64   records_produced;
-	u64   records_dropped;
-	u64   kafka_errors;
-
-	CLIB_CACHE_LINE_ALIGN_MARK (pad);
 } producer_thread_t;
 
-typedef struct
-{
-	/* one ring per vpp worker — allocated at init */
-	struct rte_ring **worker_rings;     /* [n_workers] */
-
-	/* kafka state */
-	u8   kafka_ready;                   /* atomic — set by producer threads */
-
-	/* config */
-	u32  n_workers;
-	u32  n_producers;
-	u32  ring_size;
-
-} kafka_producer_main_t;
-
-static kafka_producer_main_t kafka_producer_main;
-
-/* ── Kafka setup ─────────────────────────────────────────────────── */
-
+#ifndef CLIB_MARCH_VARIANT
 static const char *kafka_perf_config[][2] = {
 	{ "acks",                           "1"         },
 	{ "retries",                        "0"         },
@@ -66,16 +43,19 @@ static const char *kafka_perf_config[][2] = {
 	{ NULL, NULL }
 };
 
-static u64
+#endif
+
+static_always_inline u64
 kafka_setup(producer_thread_t *pt)
 {
 	char errstr[512];
 
 	const udpi_kafka_config_t *kc = &udpi_config->producer.kafka;
 	rd_kafka_conf_t *conf = rd_kafka_conf_new();
+	rd_kafka_topic_conf_t *topic_conf = rd_kafka_topic_conf_new();
 
 	const rd_kafka_conf_res_t rv =
-			rd_kafka_conf_set(conf, "bootstrap.servers", kc->brokers, errstr, sizeof (errstr));
+			rd_kafka_conf_set(conf, "bootstrap.servers", kc->broker, errstr, sizeof (errstr));
 
 	/* broker */
 	if (rv != RD_KAFKA_CONF_OK)
@@ -94,26 +74,25 @@ kafka_setup(producer_thread_t *pt)
 	if (!pt->rk)
 		clib_error("kafka: failed to create producer: %s", errstr);
 
-	pt->rkt = rd_kafka_topic_new(pt->rk, kc->topic, NULL);
+	pt->rkt = rd_kafka_topic_new(pt->rk, kc->topic, topic_conf);
 	if (!pt->rkt)
 		clib_error("kafka: failed to create topic handle");
 
 	return 0;
 }
 
-/* ── Produce burst — non-blocking, returns vectors produced ──────── */
-
 static_always_inline u32
-produce_burst(producer_thread_t *pt, u32 worker_id)
+produce_process(producer_thread_t *pt, u32 worker_id)
 {
 	producer_main_t *pm   = &producer_main;
-	struct rte_ring *ring = pm->pw[worker_id].acquire_session_v4_ring;
+	struct rte_ring *acquire_session_v4_ring = pm->pw[worker_id].acquire_session_v4_ring;
+	struct rte_ring *release_session_v4_ring = pm->pw[worker_id].release_session_v4_ring;
 	void *objs[VLIB_FRAME_SIZE];
 	u32 n_vectors = 0;
 
-	u32 n = rte_ring_sc_dequeue_burst(ring, (void **) objs, VLIB_FRAME_SIZE, NULL);
+	const u32 n_dequeue = rte_ring_sc_dequeue_burst(acquire_session_v4_ring, objs, VLIB_FRAME_SIZE, NULL);
 
-	for (u32 i = 0; i < n; i++)
+	for (u32 i = 0; i < n_dequeue; i++)
 	{
 		produce_v4_csv_record(pt->scratch, objs[i]);
 
@@ -129,14 +108,16 @@ produce_burst(producer_thread_t *pt, u32 worker_id)
 		{
 			if (rd_kafka_last_error() == RD_KAFKA_RESP_ERR__QUEUE_FULL)
 				rd_kafka_poll(pt->rk, 0);
-
-			pt->kafka_errors++;
 			continue;
 		}
 
-		pt->records_produced++;
 		n_vectors++;
 	}
+
+	const u32 n_enqueue = rte_ring_sp_enqueue_burst(release_session_v4_ring, objs, n_dequeue, NULL);
+
+	if (n_enqueue != n_dequeue)
+		clib_warning("leak in session pool memory");
 
 	return n_vectors;
 }
@@ -144,23 +125,24 @@ produce_burst(producer_thread_t *pt, u32 worker_id)
 void
 producer_thread_fn (void *arg)
 {
-	// kafka_producer_main_t *pm = &kafka_producer_main;
-	vlib_worker_thread_t *w  = (vlib_worker_thread_t *) arg;
-	vlib_thread_main_t   *tm = vlib_get_thread_main();
+	vlib_worker_thread_t *wt = (vlib_worker_thread_t *) arg;
 	vlib_main_t *vm = vlib_get_main();
 	u64 cpu_time_now;
- 	f64 now;
+	f64 now;
+	u32 index = 0;
 
-	vlib_worker_thread_init(w);
-	clib_mem_set_heap(w->thread_mheap);
+	vlib_worker_thread_init(wt);
+	clib_mem_set_heap(wt->thread_mheap);
 
-	producer_thread_t *pt = clib_mem_alloc_aligned(sizeof(*pt), CLIB_CACHE_LINE_BYTES);
-	clib_memset(pt, 0, sizeof(*pt));
+	producer_thread_t *pt = clib_mem_alloc(sizeof(producer_thread_t));
+	clib_memset(pt, 0, sizeof(producer_thread_t));
+
+	const vlib_thread_main_t *tm = vlib_get_thread_main();
+	const uword *p = hash_get_mem (tm->thread_registrations_by_name, "workers");
+	const vlib_thread_registration_t *tr = (const vlib_thread_registration_t *) p[0];
+	const u32 n_workers = tr->count ? tr->count : 1;
 
 	vec_validate(pt->scratch, 1 << 10);
-
-	u64 *p = hash_get_mem(tm->thread_registrations_by_name, "workers");
-	vlib_thread_registration_t *tr = (vlib_thread_registration_t *) p[0];
 
 	kafka_setup(pt);
 
@@ -168,19 +150,12 @@ producer_thread_fn (void *arg)
 	{
 		vlib_worker_thread_barrier_check();
 
-		u64 vectors_in_loop = 0;
+		u64 vectors_in_loop = produce_process(pt, index++);
 
-		if (tr->count == 0)
-		{
-			vectors_in_loop += produce_burst(pt, 0);
-		}
-		else
-		{
-			for (u32 i = 0; i < tr->count; i++)
-				vectors_in_loop += produce_burst(pt, i);
-		}
+		if (index == n_workers)
+			index = 0;
 
-		rd_kafka_poll (pt->rk, 0);
+		rd_kafka_poll(pt->rk, 0);
 
 		vlib_increment_main_loop_counter (vm);
 
@@ -218,65 +193,28 @@ producer_thread_fn (void *arg)
 }
 
 static clib_error_t *
-kafka_producer_init(vlib_main_t *vm)
-{
-	kafka_producer_main_t            *pm = &kafka_producer_main;
-	const udpi_producer_config_t  *pc = &udpi_config->producer;
-	// const udpi_kafka_config_t  *kc = &udpi_config->producer.kafka;
-	vlib_thread_main_t         *tm = vlib_get_thread_main();
-
-	clib_memset (pm, 0, sizeof (*pm));
-
-	pm->ring_size = max_pow2 (pc->ring_capacity);
-
-	/* count vpp workers */
-	uword *p = hash_get_mem (tm->thread_registrations_by_name, "workers");
-	vlib_thread_registration_t *tr = p ? (vlib_thread_registration_t *) p[0] : NULL;
-	pm->n_workers = tr ? tr->count : 1;
-
-	/* allocate one ring per vpp worker */
-	// pm->worker_rings = clib_mem_alloc (sizeof (struct rte_ring *) * pm->n_workers);
-
-	// for (u32 i = 0; i < pm->n_workers; i++)
-	// {
-	// 	char name[64];
-	// 	snprintf (name, sizeof (name), "producer-worker-%u", i);
-	// 	pm->worker_rings[i] = rte_ring_create (name, pm->ring_size,
-	// 											SOCKET_ID_ANY,
-	// 											RING_F_SP_ENQ | RING_F_SC_DEQ);
-	// 	if (!pm->worker_rings[i])
-	// 		return clib_error_return (0, "failed to create ring for worker %u", i);
-	// }
-
-	return 0;
-}
-
-VLIB_INIT_FUNCTION (kafka_producer_init);
-
-/* ── CLI ─────────────────────────────────────────────────────────── */
-
-static clib_error_t *
 producer_show_stats_fn (vlib_main_t *vm, unformat_input_t __clib_unused *input,
 						 vlib_cli_command_t __clib_unused *cmd)
 {
-	// producer_main_t *pm = &producer_main;
+	const producer_main_t *pm = &producer_main;
+	const udpi_producer_config_t *pc = &udpi_config->producer;
+	const udpi_kafka_config_t *kc = &udpi_config->producer.kafka;
 
-	// vlib_cli_output (vm, "kafka ready: %s",
-	// 				 pm->kafka_ready ? "yes" : "no (connecting...)");
-	// vlib_cli_output (vm, "broker:      %s", pm->broker);
-	// vlib_cli_output (vm, "topic:       %s", pm->topic);
-	// vlib_cli_output (vm, "workers:     %u", pm->n_workers);
-	// vlib_cli_output (vm, "ring size:   %u", pm->ring_size);
+	const vlib_thread_main_t *tm = vlib_get_thread_main();
+	const uword *p = hash_get_mem (tm->thread_registrations_by_name, "workers");
+	const vlib_thread_registration_t *tr = (const vlib_thread_registration_t *) p[0];
+	const u32 n_workers = tr->count ? tr->count : 1;
 
-	// vlib_cli_output (vm, "\nWorker rings:");
-	// for (u32 i = 0; i < pm->n_workers; i++)
-	// 	vlib_cli_output (vm, "  [%u] count=%u", i,
-	// 					 rte_ring_count (pm->worker_rings[i]));
+	vlib_cli_output (vm, "broker:      %s", kc->broker);
+	vlib_cli_output (vm, "topic:       %s", kc->topic);
+	vlib_cli_output (vm, "ring capacity:   %u", pc->ring_capacity);
 
-	// vlib_cli_output (vm, "\nCounters:");
-	// vlib_cli_output (vm, "  produced: %llu", pm->counters[UDPI_PRODUCER_COUNTER_PRODUCED]);
-	// vlib_cli_output (vm, "  dropped:  %llu", pm->counters[UDPI_PRODUCER_COUNTER_DROPPED]);
-	// vlib_cli_output (vm, "  errors:   %llu", pm->counters[UDPI_PRODUCER_COUNTER_KAFKA_ERROR]);
+	vlib_cli_output (vm, "\nWorker rings:");
+	for (u32 i = 0; i < n_workers; i++)
+	{
+		vlib_cli_output (vm, "acquire session v4 ring [%u] count=%u", i, rte_ring_count(pm->pw[i].acquire_session_v4_ring));
+		vlib_cli_output (vm, "release session v4 ring [%u] count=%u", i, rte_ring_count(pm->pw[i].release_session_v4_ring));
+	}
 
 	return 0;
 }

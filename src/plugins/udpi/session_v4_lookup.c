@@ -128,11 +128,9 @@ process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, 
 
 	if (clib_bihash_search_16_8(&sw->session_hash, &kv, &kv))
 	{
-		const i32 rv = rte_ring_sc_dequeue(pw->release_session_v4_ring, (void **) &kv.value);
+		const i32 rv = rte_ring_sc_dequeue(pw->release_session_v4_ring, (void **) &session);
 		if (rv)
 			pool_get_aligned(sw->session_pool, session, CLIB_CACHE_LINE_BYTES);
-		else
-			session = pool_elt_at_index(sw->session_pool, kv.value);
 
 		session_flow->direction = FLOW_DIRECTION_CLIENT_TO_SERVER;
 		session_flow->index = session - sw->session_pool;
@@ -331,12 +329,16 @@ session_v4_expired_timer_callback(u32 *session_indexes)
 {
 	producer_worker_t *pw = producer_worker;
 	session_v4_lookup_worker_t *sw = session_v4_lookup_worker;
-	u64 session_index;
+	u32 session_index;
+	ipv4_session_t *session;
 	for (u32 i = 0; i < vec_len(session_indexes); i++)
 	{
-		const i32 rv = rte_ring_sc_dequeue(pw->release_session_v4_ring, (void **) &session_index);
+		const i32 rv = rte_ring_sc_dequeue(pw->release_session_v4_ring, (void **) &session);
 		if (!rv)
-			pool_put_index(sw->session_pool, session_index);
+		{
+			clib_warning("session release %u", session - sw->session_pool);
+			pool_put(sw->session_pool, session);
+		}
 
 		session_index = session_indexes[i];
 
@@ -366,7 +368,7 @@ session_v4_expired_timer_callback(u32 *session_indexes)
 			clib_bihash_add_del_16_8(&sw->session_hash, &reverse_kv, 0);
 
 			const i32 rv = rte_ring_sp_enqueue(pw->acquire_session_v4_ring, (void *) session);
-			if (!rv)
+			if (rv)
 				pool_put_index(sw->session_pool, session_index);
 		}
 	}

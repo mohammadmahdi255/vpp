@@ -43,7 +43,7 @@ unformat_kafka_config(unformat_input_t *input, va_list __clib_unused *args)
 
 	while (unformat_check_input(&sub_input) != UNFORMAT_END_OF_INPUT)
 	{
-		if (unformat(&sub_input, "brokers %s", &kc->brokers))
+		if (unformat(&sub_input, "broker %s", &kc->broker))
 			continue;
 
 		if (unformat (&sub_input, "topic %s", &kc->topic))
