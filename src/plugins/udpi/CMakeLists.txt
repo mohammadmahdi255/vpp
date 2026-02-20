@@ -15,9 +15,10 @@ link_directories(
 add_vpp_plugin(udpi
 	SOURCES
 		config.c
+		kafka_producer.c
+		metadata_generator.c
 		plugin.c
 		producer.c
-		kafka_producer.c
 		session_classifier.c
 		session_v4_lookup.c
 		session_v6_lookup.c

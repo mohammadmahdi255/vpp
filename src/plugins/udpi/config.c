@@ -1,4 +1,5 @@
 #include "config.h"
+#include "vppinfra/error.h"
 
 #include <vlib/vlib.h>
 
@@ -104,4 +105,4 @@ udpi_config_fn (vlib_main_t __clib_unused *vm, unformat_input_t *input)
 	return 0;
 }
 
-VLIB_CONFIG_FUNCTION (udpi_config_fn, "udpi");
+VLIB_EARLY_CONFIG_FUNCTION (udpi_config_fn, "udpi");

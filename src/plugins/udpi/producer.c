@@ -6,14 +6,10 @@
 #include <vppinfra/error.h>
 #include <vppinfra/vec.h>
 
-#ifndef CLIB_MARCH_VARIANT
-__thread producer_worker_t *producer_worker = NULL;
-producer_main_t producer_main;
-#endif
-
 static clib_error_t *
 producer_worker_init(vlib_main_t __clib_unused *vm)
 {
+	clib_warning("init %u", vlib_get_thread_index());
 	const vlib_thread_main_t *tm = vlib_get_thread_main();
 	const u64 *p = hash_get_mem (tm->thread_registrations_by_name, "workers");
 	const vlib_thread_registration_t *tr = (const vlib_thread_registration_t *) p[0];
@@ -46,6 +42,12 @@ producer_worker_init(vlib_main_t __clib_unused *vm)
 	return 0;
 }
 
+VLIB_WORKER_INIT_FUNCTION (producer_worker_init);
+
+#ifndef CLIB_MARCH_VARIANT
+__thread producer_worker_t *producer_worker = NULL;
+producer_main_t producer_main;
+
 static clib_error_t *
 producer_init(vlib_main_t *vm)
 {
@@ -67,5 +69,7 @@ producer_init(vlib_main_t *vm)
 	return 0;
 }
 
-VLIB_WORKER_INIT_FUNCTION (producer_worker_init);
-VLIB_INIT_FUNCTION (producer_init);
+VLIB_INIT_FUNCTION (producer_init) = {
+	.runs_after = VLIB_INITS("dpdk_config"),
+};
+#endif

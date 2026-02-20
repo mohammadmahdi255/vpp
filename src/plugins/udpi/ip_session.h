@@ -25,6 +25,8 @@
 	u64 application_id;											\
 	u64 session_id;
 
+#define TIMER_INTERVAL	1.0
+
 typedef enum
 {
 	FLOW_DIRECTION_SERVER_TO_CLIENT,

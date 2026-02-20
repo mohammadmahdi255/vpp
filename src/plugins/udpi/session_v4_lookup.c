@@ -252,20 +252,18 @@ VLIB_NODE_FN (session_v4_timer_expiration_process) (vlib_main_t *vm, vlib_node_r
 	const vlib_thread_main_t *tm = vlib_get_thread_main();
 	const u64 *p = hash_get_mem(tm->thread_registrations_by_name, "workers");
 	const vlib_thread_registration_t *tr = (const vlib_thread_registration_t *) p[0];
-	const f64 interval = 1.0;
+	session_v4_lookup_worker_t *sw = session_v4_lookup_worker;
 
 	while (tr->count == 0)
 	{
-		(void) vlib_process_wait_for_event_or_clock(vm, interval);
-
-		session_v4_lookup_worker_t *sw = session_v4_lookup_worker;
+		(void) vlib_process_wait_for_event_or_clock(vm, TIMER_INTERVAL);
 		sw->now = vlib_time_now(vm);
 		tw_timer_expire_timers_1t_3w_1024sl_ov(&sw->time_wheel, sw->now);
 	}
 
 	while (tr->count > 0)
 	{
-		(void) vlib_process_wait_for_event_or_clock(vm, interval);
+		(void) vlib_process_wait_for_event_or_clock(vm, TIMER_INTERVAL);
 
 		for (u32 i = 0; i < tr->count; i++)
 			vlib_node_set_interrupt_pending(vlib_get_main_by_index(tr->first_index + i), session_v4_timer_expiration.index);
@@ -344,9 +342,9 @@ session_v4_expired_timer_callback(u32 *session_indexes)
 
 		ipv4_session_t *session =  pool_elt_at_index(sw->session_pool, session_index);
 
-		if (session->end_time > sw->now)
+		if (session->end_time - sw->now > TIMER_INTERVAL)
 		{
-			// clib_warning("Timer update! %u\n", session_index);
+			// clib_warning("Timer update! %u end %.6f now %.6f d %lu %.6f \n", session_index, session->end_time, sw->now, timeout, session->end_time - sw->now);
 			const u64 timeout = floor(session->end_time - sw->now);
 			tw_timer_start_1t_3w_1024sl_ov(&sw->time_wheel, session_index, 0, timeout);
 		}
@@ -367,7 +365,7 @@ session_v4_expired_timer_callback(u32 *session_indexes)
 
 			clib_bihash_add_del_16_8(&sw->session_hash, &reverse_kv, 0);
 
-			const i32 rv = rte_ring_sp_enqueue(pw->acquire_session_v4_ring, (void *) session_index);
+			const i32 rv = rte_ring_sp_enqueue(pw->acquire_session_v4_ring, (void *) session);
 			if (!rv)
 				pool_put_index(sw->session_pool, session_index);
 		}
@@ -395,7 +393,7 @@ session_v4_lookup_worker_init(vlib_main_t __clib_unused *vm)
 	if (!sw->session_pool)
 		return clib_error_return(0, "failed to create session pool");
 
-	tw_timer_wheel_init_1t_3w_1024sl_ov(&sw->time_wheel, session_v4_expired_timer_callback, 1.0, ~0);
+	tw_timer_wheel_init_1t_3w_1024sl_ov(&sw->time_wheel, session_v4_expired_timer_callback, TIMER_INTERVAL, ~0);
 
 	return 0;
 }

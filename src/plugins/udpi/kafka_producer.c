@@ -9,36 +9,24 @@
 #include <librdkafka/rdkafka.h>
 
 #include "config.h"
+#include "metadata_generator.h"
 #include "producer.h"
-#include "vlib/main.h"
-#include "vppinfra/clib.h"
-#include "vppinfra/error.h"
 
 /* ── Constants ───────────────────────────────────────────────────── */
 
-#define PRODUCER_DEQUEUE_BURST      256     /* elements per worker per loop */
 #define PRODUCER_POLL_INTERVAL_NS   1000000 /* 1ms between loops            */
-
 
 typedef struct
 {
-	rd_kafka_t       *rk;
+	rd_kafka_t *rk;
 	rd_kafka_topic_t *rkt;
 
-	/* assigned workers */
-	u32  *assigned_workers;
-	u32   num_assigned_workers;
+	u8 *scratch;
 
 	/* stats */
 	u64   records_produced;
 	u64   records_dropped;
 	u64   kafka_errors;
-
-	/* loop stats */
-	u64   loops_per_sec;
-	u64   vectors_per_sec;
-	u64   loop_count;
-	f64   last_stats_time;
 
 	CLIB_CACHE_LINE_ALIGN_MARK (pad);
 } producer_thread_t;
@@ -115,34 +103,36 @@ kafka_setup(producer_thread_t *pt)
 
 /* ── Produce burst — non-blocking, returns vectors produced ──────── */
 
-static_always_inline u32 __clib_unused
-produce_burst (producer_thread_t *pt, u32 worker_id)
+static_always_inline u32
+produce_burst(producer_thread_t *pt, u32 worker_id)
 {
 	producer_main_t *pm   = &producer_main;
-	struct rte_ring *ring = &pm->pw->acquire_session_v4_ring[worker_id];
-	void *objs[PRODUCER_DEQUEUE_BURST];
+	struct rte_ring *ring = pm->pw[worker_id].acquire_session_v4_ring;
+	void *objs[VLIB_FRAME_SIZE];
 	u32 n_vectors = 0;
 
-	u32 n = rte_ring_sc_dequeue_burst (ring, objs, PRODUCER_DEQUEUE_BURST, NULL);
+	u32 n = rte_ring_sc_dequeue_burst(ring, (void **) objs, VLIB_FRAME_SIZE, NULL);
 
 	for (u32 i = 0; i < n; i++)
 	{
-		/* Non-blocking produce — RD_KAFKA_MSG_F_FREE lets rdkafka free msg */
-		// int err = rd_kafka_produce (pt->rkt,
-		// 							RD_KAFKA_PARTITION_UA,
-		// 							RD_KAFKA_MSG_F_FREE,    /* rdkafka owns msg now */
-		// 							msg->data, msg->length,
-		// 							NULL, 0, NULL);
+		produce_v4_csv_record(pt->scratch, objs[i]);
 
-		// if (PREDICT_FALSE (err != 0))
-		// {
-		// 	/* Queue full — drain delivery reports then discard, never block */
-		// 	if (rd_kafka_last_error () == RD_KAFKA_RESP_ERR__QUEUE_FULL)
-		// 		rd_kafka_poll (pt->rk, 0 /* non-blocking */);
+		clib_warning ("%v", pt->scratch);
 
-		// 	pt->kafka_errors++;
-		// 	continue;
-		// }
+		i32 err = rd_kafka_produce(pt->rkt,
+									RD_KAFKA_PARTITION_UA,
+									RD_KAFKA_MSG_F_COPY,    /* rdkafka owns msg now */
+									pt->scratch, vec_len(pt->scratch),
+									NULL, 0, NULL);
+
+		if (PREDICT_FALSE(err))
+		{
+			if (rd_kafka_last_error() == RD_KAFKA_RESP_ERR__QUEUE_FULL)
+				rd_kafka_poll(pt->rk, 0);
+
+			pt->kafka_errors++;
+			continue;
+		}
 
 		pt->records_produced++;
 		n_vectors++;
@@ -154,7 +144,7 @@ produce_burst (producer_thread_t *pt, u32 worker_id)
 void
 producer_thread_fn (void *arg)
 {
-	// kafka_producer_main_t      *pm = &kafka_producer_main;
+	// kafka_producer_main_t *pm = &kafka_producer_main;
 	vlib_worker_thread_t *w  = (vlib_worker_thread_t *) arg;
 	vlib_thread_main_t   *tm = vlib_get_thread_main();
 	vlib_main_t *vm = vlib_get_main();
@@ -167,29 +157,30 @@ producer_thread_fn (void *arg)
 	producer_thread_t *pt = clib_mem_alloc_aligned(sizeof(*pt), CLIB_CACHE_LINE_BYTES);
 	clib_memset(pt, 0, sizeof(*pt));
 
-	u64 *p = hash_get_mem(tm->thread_registrations_by_name, "producers");
+	vec_validate(pt->scratch, 1 << 10);
+
+	u64 *p = hash_get_mem(tm->thread_registrations_by_name, "workers");
 	vlib_thread_registration_t *tr = (vlib_thread_registration_t *) p[0];
-	u32 producer_idx = vlib_get_thread_index() - tr->first_index;
 
-	if (producer_idx == 10)
-		return;
-
-	/* Kafka setup with non-blocking retry */
 	kafka_setup(pt);
 
-	// __atomic_store_n (&pm->kafka_ready, 1, __ATOMIC_RELEASE);
-
-	/* ── Main loop ────────────────────────────────────────────────── */
 	while (true)
 	{
-		vlib_worker_thread_barrier_check ();
+		vlib_worker_thread_barrier_check();
 
-		u64 vectors_in_loop = 10;
+		u64 vectors_in_loop = 0;
 
-		// for (u32 i = 0; i < pt->num_assigned_workers; i++)
-		// 	vectors_in_loop += produce_burst (pt, pt->assigned_workers[i]);
+		if (tr->count == 0)
+		{
+			vectors_in_loop += produce_burst(pt, 0);
+		}
+		else
+		{
+			for (u32 i = 0; i < tr->count; i++)
+				vectors_in_loop += produce_burst(pt, i);
+		}
 
-		// rd_kafka_poll (pt->rk, 0);
+		rd_kafka_poll (pt->rk, 0);
 
 		vlib_increment_main_loop_counter (vm);
 
@@ -200,7 +191,7 @@ producer_thread_fn (void *arg)
 		cpu_time_now = clib_cpu_time_now();
 		now = clib_time_now_internal(&vm->clib_time, cpu_time_now);
 
-		if (PREDICT_FALSE (now >= vm->loop_interval_end))
+		if (PREDICT_FALSE(now >= vm->loop_interval_end))
 		{
 			if (vm->loop_interval_start)
 			{
