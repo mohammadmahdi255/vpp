@@ -26,8 +26,8 @@
 # vppctl set interface promisc on host-${MainInputLinkName}
 # vppctl set interface mtu 9000 host-${MainInputLinkName}
 
-# # vppctl clear trace
-# # vppctl trace add af-packet-input 100
+vppctl clear trace
+vppctl trace add pg-input 100
 
 # vppctl set interface feature host-${MainInputLinkName} ethernet-detunnel arc device-input
 
@@ -46,8 +46,11 @@
 vppctl packet-generator new \
     limit 49546457546 \
     name fragtest \
-    pcap /home/user/Desktop/vpp/udp.pcap \
-    node ethernet-detunnel
+    pcap /home/mohammad/nemati/vpp/gtpu.pcap \
+    node ethernet-detunnel  \
+    worker 1
+
+# vppctl set interface detunnel pg-1 arc device-input
 
 vppctl packet-generator enable
 # vppctl packet-generator disable  # to stop

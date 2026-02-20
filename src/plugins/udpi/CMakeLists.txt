@@ -14,6 +14,7 @@ add_vpp_plugin(udpi
 		config.c
 		plugin.c
 		producer.c
+		kafka_producer.c
 		session_classifier.c
 		session_v4_lookup.c
 		session_v6_lookup.c

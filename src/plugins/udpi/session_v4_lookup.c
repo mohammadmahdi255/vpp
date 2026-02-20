@@ -28,6 +28,7 @@
 #include "config.h"
 #include "ip_session.h"
 #include "producer.h"
+#include "vlib/global_funcs.h"
 
 #define foreach_session_v4_lookup_next	\
 	_(drop_next, DROP, "drop")			\
@@ -262,15 +263,12 @@ VLIB_NODE_FN (session_v4_timer_expiration_process) (vlib_main_t *vm, vlib_node_r
 		tw_timer_expire_timers_1t_3w_1024sl_ov(&sw->time_wheel, sw->now);
 	}
 
-	u32 start_thread_id = tr->first_index;
-	u32 end_thread_id = start_thread_id + tr->count;
-
 	while (tr->count > 0)
 	{
 		(void) vlib_process_wait_for_event_or_clock(vm, interval);
 
-		for (u32 thread_id = start_thread_id; thread_id < end_thread_id; thread_id++)
-			vlib_node_set_interrupt_pending(vlib_get_main_by_index(thread_id), session_v4_timer_expiration.index);
+		for (u32 i = 0; i < tr->count; i++)
+			vlib_node_set_interrupt_pending(vlib_get_main_by_index(tr->first_index + i), session_v4_timer_expiration.index);
 	}
 
 	return 0;
@@ -379,20 +377,21 @@ session_v4_expired_timer_callback(u32 *session_indexes)
 static clib_error_t *
 session_v4_lookup_worker_init(vlib_main_t __clib_unused *vm)
 {
+	clib_warning("thread id %u", vlib_get_thread_index());
 	session_v4_lookup_worker = clib_mem_alloc(sizeof(session_v4_lookup_worker_t));
 	session_v4_lookup_worker_t *sw = session_v4_lookup_worker;
-	const udpi_session_collection_config_t *sc_config = &udpi_config.session_collection;
+	const udpi_session_collection_config_t *sc_config = &udpi_config->session_collection;
 
 	sw->session_pool = NULL;
 
-	const u32 nbuckets = clib_max(max_pow2(sc_config->bihash_total_entries / 4), 64);
-	const u64 memory_size = sc_config->bihash_total_entries * sizeof(clib_bihash_kv_16_8_t);
+	const u32 nbuckets = clib_max(max_pow2(sc_config->bihash_capacity / 4), 64);
+	const u64 memory_size = sc_config->bihash_capacity * sizeof(clib_bihash_kv_16_8_t);
 
 	void *name = format(NULL, "session-v4-table-%u", vlib_get_thread_index());
 	clib_bihash_init_16_8(&sw->session_hash, name,  nbuckets, memory_size);
 	vec_free(name);
 
-	pool_init_fixed(sw->session_pool, sc_config->session_pool_size);
+	pool_init_fixed(sw->session_pool, sc_config->session_pool_capacity);
 
 	if (!sw->session_pool)
 		return clib_error_return(0, "failed to create session pool");
