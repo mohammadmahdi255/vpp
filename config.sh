@@ -47,10 +47,10 @@ vppctl packet-generator new \
     limit 49546457546 \
     name fragtest \
     pcap /home/mohammad/nemati/vpp/gtpu.pcap \
-    node ethernet-detunnel  \
+    node device-input  \
     worker 1
 
-# vppctl set interface detunnel pg-1 arc device-input
+vppctl set interface detunnel pg-1 arc device-input
 
 vppctl packet-generator enable
 # vppctl packet-generator disable  # to stop
