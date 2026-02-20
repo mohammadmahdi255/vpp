@@ -246,7 +246,6 @@ VLIB_NODE_FN (session_v4_timer_expiration) (vlib_main_t *vm, vlib_node_runtime_t
 VLIB_NODE_FN (session_v4_timer_expiration_process) (vlib_main_t *vm, vlib_node_runtime_t __clib_unused *node,
 		vlib_frame_t __clib_unused *frame)
 {
-
 	const vlib_thread_main_t *tm = vlib_get_thread_main();
 	const u64 *p = hash_get_mem(tm->thread_registrations_by_name, "workers");
 	const vlib_thread_registration_t *tr = (const vlib_thread_registration_t *) p[0];

@@ -1,8 +1,9 @@
 #include "config.h"
-#include "vppinfra/error.h"
 
 #include <vlib/vlib.h>
 
+#include <vppinfra/clib.h>
+#include <vppinfra/error.h>
 #include <vppinfra/format.h>
 
 static udpi_config_t _udpi_config;
@@ -77,7 +78,10 @@ unformat_producer_config(unformat_input_t *input, va_list __clib_unused *args)
 			continue;
 
 		if (unformat(&sub_input, "ring-capacity %u", &pc->ring_capacity))
+		{
+			pc->ring_capacity = max_pow2(pc->ring_capacity);
 			continue;
+		}
 
 		return 0;
 	}

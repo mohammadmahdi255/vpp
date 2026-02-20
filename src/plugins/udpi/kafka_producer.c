@@ -3,6 +3,7 @@
 #include <vlib/threads.h>
 
 #include <vppinfra/cpu.h>
+#include <vppinfra/error.h>
 #include <vppinfra/format.h>
 #include <vppinfra/mem.h>
 #include <vppinfra/vec.h>
@@ -12,8 +13,6 @@
 #include "config.h"
 #include "metadata_generator.h"
 #include "producer.h"
-#include "rte_ring.h"
-#include "vppinfra/error.h"
 
 #define PRODUCER_POLL_INTERVAL_NS   1000000 /* 1ms between loops            */
 
@@ -96,8 +95,6 @@ produce_process(producer_thread_t *pt, u32 worker_id)
 	{
 		produce_v4_csv_record(pt->scratch, objs[i]);
 
-		clib_warning ("%v", pt->scratch);
-
 		i32 err = rd_kafka_produce(pt->rkt,
 									RD_KAFKA_PARTITION_UA,
 									RD_KAFKA_MSG_F_COPY,    /* rdkafka owns msg now */
@@ -154,8 +151,6 @@ producer_thread_fn (void *arg)
 
 		if (index == n_workers)
 			index = 0;
-
-		rd_kafka_poll(pt->rk, 0);
 
 		vlib_increment_main_loop_counter (vm);
 
