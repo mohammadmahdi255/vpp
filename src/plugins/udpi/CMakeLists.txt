@@ -1,12 +1,15 @@
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(DPDK REQUIRED IMPORTED_TARGET libdpdk)
+pkg_check_modules(RDKAFKA REQUIRED IMPORTED_TARGET rdkafka)
 
 include_directories(
 	${DPDK_INCLUDE_DIRS}
+	${RDKAFKA_INCLUDE_DIRS}
 )
 
 link_directories(
 	${DPDK_LIBRARY_DIRS}
+	${RDKAFKA_LIBRARY_DIRS}
 )
 
 add_vpp_plugin(udpi
@@ -27,8 +30,10 @@ add_vpp_plugin(udpi
 
 	LINK_FLAGS
 		${DPDK_LDFLAGS}
+		${RDKAFKA_LDFLAGS}
 
 	LINK_LIBRARIES
 		${DPDK_LIBRARIES}
+		${RDKAFKA_LIBRARIES}
 		detunnel_commons
 )

@@ -377,7 +377,6 @@ session_v4_expired_timer_callback(u32 *session_indexes)
 static clib_error_t *
 session_v4_lookup_worker_init(vlib_main_t __clib_unused *vm)
 {
-	clib_warning("thread id %u", vlib_get_thread_index());
 	session_v4_lookup_worker = clib_mem_alloc(sizeof(session_v4_lookup_worker_t));
 	session_v4_lookup_worker_t *sw = session_v4_lookup_worker;
 	const udpi_session_collection_config_t *sc_config = &udpi_config->session_collection;

@@ -10,6 +10,7 @@
 
 #include "config.h"
 #include "producer.h"
+#include "vlib/main.h"
 #include "vppinfra/clib.h"
 #include "vppinfra/error.h"
 
@@ -18,7 +19,6 @@
 #define PRODUCER_DEQUEUE_BURST      256     /* elements per worker per loop */
 #define PRODUCER_POLL_INTERVAL_NS   1000000 /* 1ms between loops            */
 
-/* ── Types ───────────────────────────────────────────────────────── */
 
 typedef struct
 {
@@ -62,68 +62,56 @@ static kafka_producer_main_t kafka_producer_main;
 
 /* ── Kafka setup ─────────────────────────────────────────────────── */
 
-// static const char *kafka_perf_config[][2] = {
-// 	{ "acks",                           "1"         },
-// 	{ "retries",                        "0"         },
-// 	{ "linger.ms",                      "5"         },
-// 	{ "batch.size",                     "1048576"   },
-// 	{ "queue.buffering.max.kbytes",     "131072"    },
-// 	{ "compression.type",               "snappy"    },
-// 	{ "queue.buffering.max.ms",         "5"         },
-// 	{ "queue.buffering.max.messages",   "1000000"   },
-// 	{ "socket.keepalive.enable",        "true"      },
-// 	{ "request.timeout.ms",             "5000"      },
-// 	{ "message.timeout.ms",             "10000"     },
-// 	{ "api.version.request",            "true"      },
-// 	{ NULL, NULL }
-// };
+static const char *kafka_perf_config[][2] = {
+	{ "acks",                           "1"         },
+	{ "retries",                        "0"         },
+	{ "linger.ms",                      "5"         },
+	{ "batch.size",                     "1048576"   },
+	{ "queue.buffering.max.kbytes",     "131072"    },
+	{ "compression.type",               "snappy"    },
+	{ "queue.buffering.max.ms",         "5"         },
+	{ "queue.buffering.max.messages",   "1000000"   },
+	{ "socket.keepalive.enable",        "true"      },
+	{ "request.timeout.ms",             "5000"      },
+	{ "message.timeout.ms",             "10000"     },
+	{ "api.version.request",            "true"      },
+	{ NULL, NULL }
+};
 
-/* Returns 0 on success, -1 on failure — no abort, caller decides */
-// static int
-// kafka_setup (producer_thread_t *pt)
-// {
-// 	char errstr[512];
+static u64
+kafka_setup(producer_thread_t *pt)
+{
+	char errstr[512];
 
-// 	const udpi_kafka_config_t *kc = &udpi_config->producer.kafka;
-// 	rd_kafka_conf_t *conf = rd_kafka_conf_new ();
+	const udpi_kafka_config_t *kc = &udpi_config->producer.kafka;
+	rd_kafka_conf_t *conf = rd_kafka_conf_new();
 
-// 	/* broker */
-// 	if (rd_kafka_conf_set (conf, "bootstrap.servers", kc->brokers,
-// 						   errstr, sizeof (errstr)) != RD_KAFKA_CONF_OK)
-// 	{
-// 		clib_warning ("kafka: failed to set brokers: %s", errstr);
-// 		rd_kafka_conf_destroy (conf);
-// 		return -1;
-// 	}
+	const rd_kafka_conf_res_t rv =
+			rd_kafka_conf_set(conf, "bootstrap.servers", kc->brokers, errstr, sizeof (errstr));
 
-// 	/* performance tuning */
-// 	for (int i = 0; kafka_perf_config[i][0]; i++)
-// 	{
-// 		if (rd_kafka_conf_set (conf, kafka_perf_config[i][0],
-// 							   kafka_perf_config[i][1],
-// 							   errstr, sizeof (errstr)) != RD_KAFKA_CONF_OK)
-// 			clib_warning ("kafka: config %s=%s failed: %s",
-// 						  kafka_perf_config[i][0], kafka_perf_config[i][1], errstr);
-// 	}
+	/* broker */
+	if (rv != RD_KAFKA_CONF_OK)
+		clib_error("kafka: failed to set brokers: %s", errstr);
 
-// 	pt->rk = rd_kafka_new (RD_KAFKA_PRODUCER, conf, errstr, sizeof (errstr));
-// 	if (!pt->rk)
-// 	{
-// 		clib_warning ("kafka: failed to create producer: %s", errstr);
-// 		return -1;
-// 	}
+	/* performance tuning */
+	for (int i = 0; kafka_perf_config[i][0]; i++)
+	{
+		const rd_kafka_conf_res_t rv =
+				rd_kafka_conf_set(conf, kafka_perf_config[i][0], kafka_perf_config[i][1], errstr, sizeof(errstr));
+		if (rv != RD_KAFKA_CONF_OK)
+			clib_error("kafka: config %s=%s failed: %s", kafka_perf_config[i][0], kafka_perf_config[i][1], errstr);
+	}
 
-// 	pt->rkt = rd_kafka_topic_new (pt->rk, kc->topic, NULL);
-// 	if (!pt->rkt)
-// 	{
-// 		clib_warning ("kafka: failed to create topic handle");
-// 		rd_kafka_destroy (pt->rk);
-// 		pt->rk = NULL;
-// 		return -1;
-// 	}
+	pt->rk = rd_kafka_new(RD_KAFKA_PRODUCER, conf, errstr, sizeof(errstr));
+	if (!pt->rk)
+		clib_error("kafka: failed to create producer: %s", errstr);
 
-// 	return 0;
-// }
+	pt->rkt = rd_kafka_topic_new(pt->rk, kc->topic, NULL);
+	if (!pt->rkt)
+		clib_error("kafka: failed to create topic handle");
+
+	return 0;
+}
 
 /* ── Produce burst — non-blocking, returns vectors produced ──────── */
 
@@ -168,7 +156,7 @@ producer_thread_fn (void *arg)
 {
 	// kafka_producer_main_t      *pm = &kafka_producer_main;
 	vlib_worker_thread_t *w  = (vlib_worker_thread_t *) arg;
-	// vlib_thread_main_t   *tm = vlib_get_thread_main();
+	vlib_thread_main_t   *tm = vlib_get_thread_main();
 	vlib_main_t *vm = vlib_get_main();
 	u64 cpu_time_now;
  	f64 now;
@@ -179,23 +167,15 @@ producer_thread_fn (void *arg)
 	producer_thread_t *pt = clib_mem_alloc_aligned(sizeof(*pt), CLIB_CACHE_LINE_BYTES);
 	clib_memset(pt, 0, sizeof(*pt));
 
-	// u64 *p = hash_get_mem(tm->thread_registrations_by_name, "producers");
+	u64 *p = hash_get_mem(tm->thread_registrations_by_name, "producers");
+	vlib_thread_registration_t *tr = (vlib_thread_registration_t *) p[0];
+	u32 producer_idx = vlib_get_thread_index() - tr->first_index;
 
-	// vlib_thread_registration_t *tr = (vlib_thread_registration_t *) p[0];
-	// u32 producer_idx = vlib_get_thread_index () - tr->first_index;
-
-	// if (pt->num_assigned_workers == 0)
-	// 	return;
+	if (producer_idx == 10)
+		return;
 
 	/* Kafka setup with non-blocking retry */
-	// while (kafka_setup (pt) != 0)
-	// {
-	// 	clib_warning ("producer %u: kafka setup failed, retrying in 1s", producer_idx);
-
-	// 	f64 retry_until = vlib_time_now (vm) + 1.0;
-	// 	while (vlib_time_now (vm) < retry_until)
-	// 		vlib_worker_thread_barrier_check ();
-	// }
+	kafka_setup(pt);
 
 	// __atomic_store_n (&pm->kafka_ready, 1, __ATOMIC_RELEASE);
 
@@ -215,10 +195,10 @@ producer_thread_fn (void *arg)
 
 		vm->internal_node_vectors += vectors_in_loop;
 		vm->internal_node_calls++;
-
-		cpu_time_now = clib_cpu_time_now ();
 		vm->loops_this_reporting_interval++;
-		now = clib_time_now_internal (&vm->clib_time, cpu_time_now);
+
+		cpu_time_now = clib_cpu_time_now();
+		now = clib_time_now_internal(&vm->clib_time, cpu_time_now);
 
 		if (PREDICT_FALSE (now >= vm->loop_interval_end))
 		{
