@@ -11,6 +11,7 @@ link_directories(
 
 add_vpp_plugin(udpi
 	SOURCES
+		config.c
 		plugin.c
 		producer.c
 		session_classifier.c

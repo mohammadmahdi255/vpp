@@ -25,9 +25,9 @@
 
 #include "detunnel/detunnel.h"
 
+#include "config.h"
 #include "ip_session.h"
 #include "producer.h"
-#include "vlib/counter_types.h"
 
 #define foreach_session_v4_lookup_next	\
 	_(drop_next, DROP, "drop")			\
@@ -381,18 +381,18 @@ session_v4_lookup_worker_init(vlib_main_t __clib_unused *vm)
 {
 	session_v4_lookup_worker = clib_mem_alloc(sizeof(session_v4_lookup_worker_t));
 	session_v4_lookup_worker_t *sw = session_v4_lookup_worker;
+	const udpi_session_collection_config_t *sc_config = &udpi_config.session_collection;
 
 	sw->session_pool = NULL;
 
-	const u32 max_sessions = 1024;
-	const u32 nbuckets = clib_max(max_pow2(max_sessions / 4), 64);
-	const u64 memory_size = max_sessions * sizeof(clib_bihash_kv_16_8_t);
+	const u32 nbuckets = clib_max(max_pow2(sc_config->bihash_total_entries / 4), 64);
+	const u64 memory_size = sc_config->bihash_total_entries * sizeof(clib_bihash_kv_16_8_t);
 
 	void *name = format(NULL, "session-v4-table-%u", vlib_get_thread_index());
 	clib_bihash_init_16_8(&sw->session_hash, name,  nbuckets, memory_size);
 	vec_free(name);
 
-	pool_init_fixed(sw->session_pool, max_sessions);
+	pool_init_fixed(sw->session_pool, sc_config->session_pool_size);
 
 	if (!sw->session_pool)
 		return clib_error_return(0, "failed to create session pool");
