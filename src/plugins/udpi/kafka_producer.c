@@ -11,7 +11,7 @@
 #include <librdkafka/rdkafka.h>
 
 #include "config.h"
-#include "metadata_generator.h"
+#include "metadata_generator_funcs.h"
 #include "producer.h"
 
 #define PRODUCER_POLL_INTERVAL_NS   1000000 /* 1ms between loops            */
@@ -81,7 +81,7 @@ kafka_setup(producer_thread_t *pt)
 }
 
 static_always_inline u32
-produce_process(producer_thread_t *pt, u32 worker_id)
+produce_v4_process(producer_thread_t *pt, u32 worker_id)
 {
 	producer_main_t *pm   = &producer_main;
 	struct rte_ring *acquire_session_v4_ring = pm->pw[worker_id].acquire_session_v4_ring;
@@ -114,7 +114,46 @@ produce_process(producer_thread_t *pt, u32 worker_id)
 	const u32 n_enqueue = rte_ring_sp_enqueue_burst(release_session_v4_ring, objs, n_dequeue, NULL);
 
 	if (n_enqueue != n_dequeue)
-		clib_warning("leak in session pool memory");
+		clib_warning("leak in session pool v4 memory");
+
+	return n_vectors;
+}
+
+static_always_inline u32
+produce_v6_process(producer_thread_t *pt, u32 worker_id)
+{
+	producer_main_t *pm   = &producer_main;
+	struct rte_ring *acquire_session_v6_ring = pm->pw[worker_id].acquire_session_v6_ring;
+	struct rte_ring *release_session_v6_ring = pm->pw[worker_id].release_session_v6_ring;
+	void *objs[VLIB_FRAME_SIZE];
+	u32 n_vectors = 0;
+
+	const u32 n_dequeue = rte_ring_sc_dequeue_burst(acquire_session_v6_ring, objs, VLIB_FRAME_SIZE, NULL);
+
+	for (u32 i = 0; i < n_dequeue; i++)
+	{
+		produce_v6_csv_record(pt->scratch, objs[i]);
+
+		i32 err = rd_kafka_produce(pt->rkt,
+									RD_KAFKA_PARTITION_UA,
+									RD_KAFKA_MSG_F_COPY,    /* rdkafka owns msg now */
+									pt->scratch, vec_len(pt->scratch),
+									NULL, 0, NULL);
+
+		if (PREDICT_FALSE(err))
+		{
+			if (rd_kafka_last_error() == RD_KAFKA_RESP_ERR__QUEUE_FULL)
+				rd_kafka_poll(pt->rk, 0);
+			continue;
+		}
+
+		n_vectors++;
+	}
+
+	const u32 n_enqueue = rte_ring_sp_enqueue_burst(release_session_v6_ring, objs, n_dequeue, NULL);
+
+	if (n_enqueue != n_dequeue)
+		clib_warning("leak in session pool v6 memory");
 
 	return n_vectors;
 }
@@ -147,9 +186,9 @@ producer_thread_fn (void *arg)
 	{
 		vlib_worker_thread_barrier_check();
 
-		u64 vectors_in_loop = produce_process(pt, index++);
+		u64 vectors_in_loop = produce_v4_process(pt, index) + produce_v6_process(pt, index);
 
-		if (index == n_workers)
+		if (++index == n_workers)
 			index = 0;
 
 		vlib_increment_main_loop_counter (vm);
