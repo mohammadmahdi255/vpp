@@ -13,6 +13,7 @@
 #include "config.h"
 #include "metadata_generator_funcs.h"
 #include "producer.h"
+#include "vlib/node_funcs.h"
 
 #define PRODUCER_POLL_INTERVAL_NS   1000000 /* 1ms between loops            */
 
@@ -24,6 +25,8 @@ typedef struct
 
 	u8 *scratch;
 } producer_thread_t;
+
+extern vlib_node_registration_t kafka_producer_node;
 
 #ifndef CLIB_MARCH_VARIANT
 static const char *kafka_perf_config[][2] = {
@@ -162,39 +165,52 @@ void
 producer_thread_fn (void *arg)
 {
 	vlib_worker_thread_t *wt = (vlib_worker_thread_t *) arg;
-	vlib_main_t *vm = vlib_get_main();
 	u64 cpu_time_now;
 	f64 now;
 	u32 index = 0;
 
 	vlib_worker_thread_init(wt);
 	clib_mem_set_heap(wt->thread_mheap);
+	vlib_main_t *vm = vlib_get_main();
 
 	producer_thread_t *pt = clib_mem_alloc(sizeof(producer_thread_t));
 	clib_memset(pt, 0, sizeof(producer_thread_t));
 
-	const vlib_thread_main_t *tm = vlib_get_thread_main();
+	const vlib_thread_main_t *tm = vlib_get_thread_main ();
 	const uword *p = hash_get_mem (tm->thread_registrations_by_name, "workers");
 	const vlib_thread_registration_t *tr = (const vlib_thread_registration_t *) p[0];
 	const u32 n_workers = tr->count ? tr->count : 1;
 
 	vec_validate(pt->scratch, 1 << 10);
-
 	kafka_setup(pt);
+
+	vlib_node_runtime_t *rt = vlib_node_get_runtime(vm, kafka_producer_node.index);
+	vlib_node_runtime_sync_stats(vm, rt, 1, 0, 0);
 
 	while (true)
 	{
 		vlib_worker_thread_barrier_check();
 
-		u64 vectors_in_loop = produce_v4_process(pt, index) + produce_v6_process(pt, index);
+		u64 t_start = clib_cpu_time_now();
+
+		u64 vectors_in_loop =
+			produce_v4_process(pt, index) +
+			produce_v6_process(pt, index);
+
+		u64 t_end = clib_cpu_time_now();
 
 		if (++index == n_workers)
 			index = 0;
 
-		vlib_increment_main_loop_counter (vm);
+		/* ── node stats — show runtime table ─────────────────────── */
+		rt = vlib_node_get_runtime(vm, kafka_producer_node.index);
+		vlib_node_runtime_sync_stats(vm, rt, vectors_in_loop > 0, vectors_in_loop, t_end - t_start);
 
+		/* ── thread line stats — loops/sec + vector rate ─────────── */
+		vlib_increment_main_loop_counter(vm);
+
+		vm->internal_node_calls += vectors_in_loop > 0;
 		vm->internal_node_vectors += vectors_in_loop;
-		vm->internal_node_calls++;
 		vm->loops_this_reporting_interval++;
 
 		cpu_time_now = clib_cpu_time_now();
@@ -225,6 +241,8 @@ producer_thread_fn (void *arg)
 			CLIB_PAUSE ();
 	}
 }
+
+#ifndef CLIB_MARCH_VARIANT
 
 static clib_error_t *
 producer_show_stats_fn (vlib_main_t *vm, unformat_input_t __clib_unused *input,
@@ -266,3 +284,12 @@ VLIB_REGISTER_THREAD (producer_thread_reg, static) = {
 	.short_name = "prod",
 	.function   = producer_thread_fn,
 };
+
+VLIB_REGISTER_NODE (kafka_producer_node) = {
+	.name        = "kafka-producer",
+	.type        = VLIB_NODE_TYPE_INTERNAL,
+	.state       = VLIB_NODE_STATE_DISABLED,
+	.vector_size = sizeof (u32),
+};
+
+#endif
