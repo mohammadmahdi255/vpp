@@ -1,15 +1,32 @@
+#include <math.h>
 #include <stdbool.h>
 
-#include <vlib/vlib.h>
+#include <nat/lib/lib.h>
 
-#include <vnet/ip/ip4_packet.h>
+#include <stdint.h>
+#include <vlib/vlib.h>
+#include <vlib/buffer.h>
+#include <vlib/node.h>
+#include <vlib/threads.h>
+
+#include <vat/vat.h>
+#include <vnet/buffer.h>
+#include <vnet/ip/ip6_packet.h>
 #include <vnet/vnet.h>
 
+#include <vppinfra/bihash_40_8.h>
 #include <vppinfra/byte_order.h>
 #include <vppinfra/clib.h>
 #include <vppinfra/error.h>
+#include <vppinfra/format.h>
+#include <vppinfra/pool.h>
+#include <vppinfra/tw_timer_1t_3w_1024sl_ov.h>
+#include <vppinfra/vec.h>
 
 #include "detunnel/detunnel.h"
+#include "config.h"
+#include "ip_session.h"
+#include "producer.h"
 
 #define foreach_session_v6_lookup_next	\
 	_(drop_next, DROP, "drop")			\
@@ -37,8 +54,28 @@ enum
 
 typedef struct
 {
-	u16 next;
+	ipv6_flow_key_t key;
 } session_v6_lookup_trace_t;
+
+typedef struct
+{
+} session_v6_lookup_main_t;
+
+typedef struct
+{
+	CLIB_CACHE_LINE_ALIGN_MARK (cacheline);
+	f64 now;
+	ipv6_session_t *session_pool;
+	clib_bihash_40_8_t session_hash;
+	tw_timer_wheel_1t_3w_1024sl_ov_t time_wheel;
+} session_v6_lookup_worker_t;
+
+extern __thread session_v6_lookup_worker_t *session_v6_lookup_worker;
+extern session_v6_lookup_main_t session_v6_lookup_main;
+extern vlib_node_registration_t session_v6_lookup;
+extern vlib_node_registration_t session_v6_timer_expiration;
+extern vlib_node_registration_t session_v6_timer_expiration_process;
+
 
 extern vlib_node_registration_t session_v6_lookup;
 
@@ -55,21 +92,80 @@ session_v6_lookup_to_next(u16 *next, u16 len)
 
 static_always_inline void
 add_trace(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b,
-		const u16 next)
+		const ipv6_flow_key_t *key)
 {
 	if (PREDICT_FALSE(b->flags & VLIB_BUFFER_IS_TRACED))
 	{
 		session_v6_lookup_trace_t *t = vlib_add_trace(vm, node, b, sizeof(*t));
-		t->next = next;
+		t->key = *key;
 	}
 }
 
 static_always_inline void
 process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, u16 *next, u8 is_trace)
 {
+	const producer_worker_t *pw = producer_worker;
+	const ip6_header_t *ip6 = (void *) b->data + vnet_buffer(b)->l3_hdr_offset;
+	const nat_tcp_udp_header_t *nat_tcp_udp = (void *) b->data + vnet_buffer(b)->l4_hdr_offset;
+
+	clib_bihash_kv_40_8_t kv;
+
+	ipv6_flow_key_t *key = (void *) &kv.key;
+
+	key->src_ip = ip6->src_address;
+	key->dst_ip = ip6->dst_address;
+	key->src_port = nat_tcp_udp->src_port;
+	key->dst_port = nat_tcp_udp->dst_port;
+	key->l4_protocol = ip6->protocol;
 	next[0] = SESSION_V6_LOOKUP_NEXT_DROP;
+
+	session_v6_lookup_worker_t *sw = session_v6_lookup_worker;
+	session_flow_t *session_flow = vnet_buffer_get_opaque(b);
+	ipv6_session_t *session;
+
+	if (clib_bihash_search_40_8(&sw->session_hash, &kv, &kv))
+	{
+		const i32 rv = rte_ring_sc_dequeue(pw->release_session_v6_ring, (void **) &session);
+		if (rv)
+			pool_get_aligned(sw->session_pool, session, CLIB_CACHE_LINE_BYTES);
+
+		session_flow->direction = FLOW_DIRECTION_CLIENT_TO_SERVER;
+		session_flow->index = session - sw->session_pool;
+
+		session->key = *key;
+		session->start_time = sw->now;
+		session->counter[FLOW_DIRECTION_SERVER_TO_CLIENT] = (vlib_counter_t) {0};
+		session->counter[FLOW_DIRECTION_CLIENT_TO_SERVER] = (vlib_counter_t) {0};
+		kv.value = session_flow->as_u64;
+
+		clib_bihash_add_del_40_8(&sw->session_hash, &kv, 1);
+
+		clib_warning("Timer added! rv %d %u %u\n" , rv, session_flow->index, session_flow->direction );
+		tw_timer_start_1t_3w_1024sl_ov(&sw->time_wheel, session_flow->index, 0, SESSION_TIMEOUT);
+
+		key->src_ip = ip6->dst_address;
+		key->dst_ip = ip6->src_address;
+		key->src_port = nat_tcp_udp->dst_port;
+		key->dst_port = nat_tcp_udp->src_port;
+
+		session_flow_t *reverse_flow = (void *)&kv.value;
+		reverse_flow->direction = FLOW_DIRECTION_SERVER_TO_CLIENT;
+
+		clib_bihash_add_del_40_8(&sw->session_hash, &kv, 1);
+	}
+	else
+	{
+		session_flow->as_u64 = kv.value;
+		session = pool_elt_at_index(sw->session_pool, session_flow->index);
+	}
+
+	session->end_time = sw->now + SESSION_TIMEOUT;
+
+	session->counter[session_flow->direction].packets++;
+	session->counter[session_flow->direction].bytes += vlib_buffer_length_in_chain(vm, b);
+
 	if (is_trace)
-		add_trace(vm, node, b, next[0]);
+		add_trace(vm, node, b, key);
 }
 
 static_always_inline u64
@@ -132,14 +228,58 @@ VLIB_NODE_FN (session_v6_lookup) (vlib_main_t *vm, vlib_node_runtime_t *node, vl
 	return session_v6_lookup_inline(vm, node, frame, node->flags & VLIB_NODE_FLAG_TRACE);
 }
 
+VLIB_NODE_FN (session_v6_timer_expiration) (vlib_main_t *vm, vlib_node_runtime_t __clib_unused *node,
+		vlib_frame_t __clib_unused *frame)
+{
+	session_v6_lookup_worker_t *sw = session_v6_lookup_worker;
+	sw->now = vlib_time_now(vm);
+	tw_timer_expire_timers_1t_3w_1024sl_ov(&sw->time_wheel, sw->now);
+	return 0;
+}
+
+VLIB_NODE_FN (session_v6_timer_expiration_process) (vlib_main_t *vm, vlib_node_runtime_t __clib_unused *node,
+		vlib_frame_t __clib_unused *frame)
+{
+	const vlib_thread_main_t *tm = vlib_get_thread_main();
+	const u64 *p = hash_get_mem(tm->thread_registrations_by_name, "workers");
+	const vlib_thread_registration_t *tr = (const vlib_thread_registration_t *) p[0];
+	session_v6_lookup_worker_t *sw = session_v6_lookup_worker;
+
+	while (tr->count == 0)
+	{
+		(void) vlib_process_wait_for_event_or_clock(vm, TIMER_INTERVAL);
+		sw->now = vlib_time_now(vm);
+		tw_timer_expire_timers_1t_3w_1024sl_ov(&sw->time_wheel, sw->now);
+	}
+
+	while (tr->count > 0)
+	{
+		(void) vlib_process_wait_for_event_or_clock(vm, TIMER_INTERVAL);
+
+		for (u32 i = 0; i < tr->count; i++)
+			vlib_node_set_interrupt_pending(vlib_get_main_by_index(tr->first_index + i), session_v6_timer_expiration.index);
+	}
+
+	return 0;
+}
+
 #ifndef CLIB_MARCH_VARIANT
+__thread session_v6_lookup_worker_t *session_v6_lookup_worker;
+session_v6_lookup_main_t session_v6_lookup_main;
+
 static u8 *format_session_v6_lookup_trace(u8 *s, va_list *args)
 {
 	vlib_main_t __clib_unused *vm = va_arg(*args, vlib_main_t *);
 	vlib_node_t __clib_unused *node = va_arg(*args, vlib_node_t *);
 	session_v6_lookup_trace_t *t = va_arg(*args, session_v6_lookup_trace_t *);
-	return format(s,"next node   %u",
-			t->next);
+	return format(s,"src ip   %U\n"
+			"  dst ip   %U\n"
+			"  src port %U\n"
+			"  dst port %U",
+			format_ip6_address, &t->key.src_ip,
+			format_ip6_address, &t->key.dst_ip,
+			format_network_port, t->key.l4_protocol, t->key.src_port,
+			format_network_port, t->key.l4_protocol, t->key.dst_port);
 }
 
 VLIB_REGISTER_NODE (session_v6_lookup) = {
@@ -155,6 +295,17 @@ VLIB_REGISTER_NODE (session_v6_lookup) = {
 	},
 };
 
+VLIB_REGISTER_NODE (session_v6_timer_expiration) = {
+	.name = "session-v6-timer-expiration",
+	.type = VLIB_NODE_TYPE_SCHED,
+	.state = VLIB_NODE_STATE_INTERRUPT
+};
+
+VLIB_REGISTER_NODE (session_v6_timer_expiration_process) = {
+	.name = "session-v6-timer-expiration-process",
+	.type = VLIB_NODE_TYPE_PROCESS,
+};
+
 #endif
 
 CLIB_MARCH_FN (session_v6_lookup_init, clib_error_t *, vlib_main_t __clib_unused *vm)
@@ -166,15 +317,92 @@ CLIB_MARCH_FN (session_v6_lookup_init, clib_error_t *, vlib_main_t __clib_unused
 	return 0;
 }
 
+static void
+session_v6_expired_timer_callback(u32 *session_indexes)
+{
+	producer_worker_t *pw = producer_worker;
+	session_v6_lookup_worker_t *sw = session_v6_lookup_worker;
+	u32 session_index;
+	ipv6_session_t *session;
+	for (u32 i = 0; i < vec_len(session_indexes); i++)
+	{
+		const i32 rv = rte_ring_sc_dequeue(pw->release_session_v6_ring, (void **) &session);
+		if (!rv)
+		{
+			clib_warning("session release %u", session - sw->session_pool);
+			pool_put(sw->session_pool, session);
+		}
+
+		session_index = session_indexes[i];
+
+		ipv6_session_t *session =  pool_elt_at_index(sw->session_pool, session_index);
+
+		if (session->end_time - sw->now > TIMER_INTERVAL)
+		{
+			// clib_warning("Timer update! %u end %.6f now %.6f d %lu %.6f \n", session_index, session->end_time, sw->now, timeout, session->end_time - sw->now);
+			const u64 timeout = floor(session->end_time - sw->now);
+			tw_timer_start_1t_3w_1024sl_ov(&sw->time_wheel, session_index, 0, timeout);
+		}
+		else
+		{
+			clib_warning("Timer expired! time %f now %f %u\n", session->end_time, sw->now, session_index);
+			clib_bihash_kv_40_8_t *kv = (void *) &session->key;
+			clib_bihash_add_del_40_8(&sw->session_hash, kv, 0);
+
+			clib_bihash_kv_40_8_t reverse_kv;
+			ipv6_flow_key_t *key = (ipv6_flow_key_t *) &reverse_kv.key;
+
+			key->src_ip = session->dst_ip;
+			key->dst_ip = session->src_ip;
+			key->src_port = session->dst_port;
+			key->dst_port = session->src_port;
+			key->l4_protocol = session->l4_protocol;
+
+			clib_bihash_add_del_40_8(&sw->session_hash, &reverse_kv, 0);
+
+			const i32 rv = rte_ring_sp_enqueue(pw->acquire_session_v6_ring, (void *) session);
+			if (rv)
+				pool_put_index(sw->session_pool, session_index);
+		}
+	}
+}
+
 static clib_error_t *
 session_v6_lookup_worker_init(vlib_main_t __clib_unused *vm)
 {
+	session_v6_lookup_worker = clib_mem_alloc(sizeof(session_v6_lookup_worker_t));
+	session_v6_lookup_worker_t *sw = session_v6_lookup_worker;
+	const udpi_session_collection_config_t *sc_config = &udpi_config->session_collection;
+
+	sw->session_pool = NULL;
+
+	const u32 nbuckets = clib_max(max_pow2(sc_config->bihash_capacity / 4), 64);
+	const u64 memory_size = sc_config->bihash_capacity * sizeof(clib_bihash_kv_40_8_t);
+
+	void *name = format(NULL, "session-v6-table-%u", vlib_get_thread_index());
+	clib_bihash_init_40_8(&sw->session_hash, name,  nbuckets, memory_size);
+	vec_free(name);
+
+	pool_init_fixed(sw->session_pool, sc_config->session_pool_capacity);
+
+	if (!sw->session_pool)
+		return clib_error_return(0, "failed to create session pool");
+
+	tw_timer_wheel_init_1t_3w_1024sl_ov(&sw->time_wheel, session_v6_expired_timer_callback, TIMER_INTERVAL, ~0);
+
 	return 0;
 }
 
 static clib_error_t *
 session_v6_lookup_init(vlib_main_t *vm)
 {
+	const vlib_thread_main_t *tm = vlib_get_thread_main();
+	const u64 *p = hash_get_mem(tm->thread_registrations_by_name, "workers");
+	const vlib_thread_registration_t *tr = (vlib_thread_registration_t *) p[0];
+
+	if (tr->count == 0)
+		session_v6_lookup_worker_init(vm);
+
 	return CLIB_MARCH_FN_SELECT(session_v6_lookup_init) (vm);
 }
 

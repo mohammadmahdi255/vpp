@@ -26,6 +26,7 @@
 	u64 session_id;
 
 #define TIMER_INTERVAL	1.0
+#define SESSION_TIMEOUT	3.0
 
 typedef enum
 {
@@ -59,7 +60,7 @@ typedef struct
 	ip6_address_t dst_ip;
 	u16 src_port;
 	u16 dst_port;
-	u8 l4_protocol;
+	u32 l4_protocol;
 } ipv6_flow_key_t;
 
 typedef struct

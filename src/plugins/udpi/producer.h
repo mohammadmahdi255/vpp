@@ -20,6 +20,8 @@ typedef struct
 {
 	struct rte_ring *acquire_session_v4_ring;
 	struct rte_ring *release_session_v4_ring;
+	struct rte_ring *acquire_session_v6_ring;
+	struct rte_ring *release_session_v6_ring;
 } producer_worker_t;
 
 typedef struct

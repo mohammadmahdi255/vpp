@@ -23,19 +23,36 @@ producer_worker_init(vlib_main_t __clib_unused *vm)
 	producer_worker_t *pw = producer_worker;
 
 	void *name;
-	name = format(NULL, "acquire-session-ring-%u", vlib_get_thread_index());
-	pw->acquire_session_v4_ring = rte_ring_create(name, pc->ring_capacity,
+	name = format(NULL, "acquire-session-v4-ring-%u", vlib_get_thread_index());
+	pw->acquire_session_v4_ring = rte_ring_create_elem(name, pc->ring_capacity,
+			sizeof(void *),
 			(i32) rte_socket_id(),
 			RING_F_SP_ENQ | RING_F_SC_DEQ);
 	vec_free(name);
 
-	name = format(NULL, "release-session-ring-%u", vlib_get_thread_index());
-	pw->release_session_v4_ring = rte_ring_create(name, pc->ring_capacity,
+	name = format(NULL, "release-session-v4-ring-%u", vlib_get_thread_index());
+	pw->release_session_v4_ring = rte_ring_create_elem(name, pc->ring_capacity,
+			sizeof(void *),
 			(i32) rte_socket_id(),
 			RING_F_SP_ENQ | RING_F_SC_DEQ);
 	vec_free(name);
 
-	if (!pw->acquire_session_v4_ring || !pw->release_session_v4_ring)
+	name = format(NULL, "acquire-session-v6-ring-%u", vlib_get_thread_index());
+	pw->acquire_session_v6_ring = rte_ring_create_elem(name, pc->ring_capacity,
+			sizeof(void *),
+			(i32) rte_socket_id(),
+			RING_F_SP_ENQ | RING_F_SC_DEQ);
+	vec_free(name);
+
+	name = format(NULL, "release-session-v6-ring-%u", vlib_get_thread_index());
+	pw->release_session_v6_ring = rte_ring_create_elem(name, pc->ring_capacity,
+			sizeof(void *),
+			(i32) rte_socket_id(),
+			RING_F_SP_ENQ | RING_F_SC_DEQ);
+	vec_free(name);
+
+	if (!pw->acquire_session_v4_ring || !pw->release_session_v4_ring ||
+			!pw->acquire_session_v6_ring || !pw->release_session_v6_ring)
 		return clib_error_return (0, "failed to create rte_ring for thread %u", vlib_get_thread_index());
 
 	return 0;

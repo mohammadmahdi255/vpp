@@ -24,11 +24,9 @@
 #include <vppinfra/vec.h>
 
 #include "detunnel/detunnel.h"
-
 #include "config.h"
 #include "ip_session.h"
 #include "producer.h"
-#include "vlib/global_funcs.h"
 
 #define foreach_session_v4_lookup_next	\
 	_(drop_next, DROP, "drop")			\
@@ -45,8 +43,6 @@ enum
 
 foreach_session_v4_lookup_next
 #undef _
-
-#define SESSION_TIMEOUT	3
 
 enum
 {
