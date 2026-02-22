@@ -248,6 +248,8 @@ producer_show_stats_fn (vlib_main_t *vm, unformat_input_t __clib_unused *input,
 	{
 		vlib_cli_output (vm, "acquire session v4 ring [%u] count=%u", i, rte_ring_count(pm->pw[i].acquire_session_v4_ring));
 		vlib_cli_output (vm, "release session v4 ring [%u] count=%u", i, rte_ring_count(pm->pw[i].release_session_v4_ring));
+		vlib_cli_output (vm, "acquire session v6 ring [%u] count=%u", i, rte_ring_count(pm->pw[i].acquire_session_v6_ring));
+		vlib_cli_output (vm, "release session v6 ring [%u] count=%u", i, rte_ring_count(pm->pw[i].release_session_v6_ring));
 	}
 
 	return 0;
