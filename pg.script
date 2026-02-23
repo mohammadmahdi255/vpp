@@ -1,0 +1,9 @@
+packet-generator new \
+    limit 49546457546 \
+    name fragtest \
+    node device-input  \
+    worker 1
+
+set interface detunnel pg-1 arc device-input
+
+packet-generator enable
