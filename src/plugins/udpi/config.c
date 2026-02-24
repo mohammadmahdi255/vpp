@@ -50,6 +50,9 @@ unformat_time_wheel(unformat_input_t *input, va_list *args)
 		if (unformat(&sub_input, "interval %f", &tc->interval))
 			continue;
 
+		if (unformat(&sub_input, "resolution %f", &tc->resolution))
+			continue;
+
 		return 0;
 	}
 

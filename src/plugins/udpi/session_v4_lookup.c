@@ -4,7 +4,6 @@
 #include <nat/lib/lib.h>
 
 #include <stdint.h>
-#include <string.h>
 #include <vlib/vlib.h>
 #include <vlib/buffer.h>
 #include <vlib/node.h>
@@ -28,8 +27,6 @@
 #include "config.h"
 #include "ip_session.h"
 #include "producer.h"
-#include "vppinfra/cache.h"
-#include "vppinfra/vec_bootstrap.h"
 
 #define foreach_session_v4_lookup_next	\
 	_(drop_next, DROP, "drop")			\
@@ -142,7 +139,7 @@ process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, 
 		kv.value = sf->as_u64;
 
 		failed = clib_bihash_add_del_16_8(&sw->session_hash, &kv, 1);
-		if (failed)
+		if (PREDICT_FALSE(failed))
 		{
 			pool_put(sw->session_pool, session);
 			next[0] = SESSION_V4_LOOKUP_NEXT_DROP;
@@ -163,7 +160,7 @@ process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, 
 		rsf->direction = FLOW_DIRECTION_SERVER_TO_CLIENT;
 
 		failed = clib_bihash_add_del_16_8(&sw->session_hash, &kv, 1);
-		if (failed)
+		if (PREDICT_FALSE(failed))
 		{
 			clib_bihash_add_del_16_8(&sw->session_hash, &kv, 0);
 			pool_put(sw->session_pool, session);

@@ -13,6 +13,7 @@ typedef struct
 {
 	u32 max_expiration;
 	f64 interval;
+	f64 resolution;
 } udpi_time_wheel_config_t;
 
 typedef struct

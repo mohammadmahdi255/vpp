@@ -25,7 +25,6 @@
 	u64 application_id;											\
 	u64 session_id;
 
-#define TIMER_INTERVAL	1.0
 #define SESSION_TIMEOUT	3.0
 
 typedef enum
