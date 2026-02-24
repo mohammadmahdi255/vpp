@@ -140,7 +140,7 @@ process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, 
 	const bool sequence_flag = gre->flags_and_version & clib_host_to_net_u16(GRE_FLAGS_SEQUENCE);
 	const bool ack_flag = gre->flags_and_version & clib_host_to_net_u16(GRE_FLAGS_ACK);
 
-	u16 offset = sizeof(gre_header_t) + (checksum_flag | routing_flag + key_flag + sequence_flag) * sizeof(u32);
+	u16 offset = sizeof(gre_header_t) + ((checksum_flag | routing_flag) + key_flag + sequence_flag) * sizeof(u32);
 
 	switch (gre->protocol)
 	{
