@@ -106,6 +106,7 @@ process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, 
 	const producer_worker_t *pw = producer_worker;
 	const ip4_header_t *ip4 = (void *) b->data + vnet_buffer(b)->l3_hdr_offset;
 	const nat_tcp_udp_header_t *nat_tcp_udp = (void *) b->data + vnet_buffer(b)->l4_hdr_offset;
+	i32 failed;
 
 	clib_bihash_kv_16_8_t kv;
 
@@ -119,7 +120,7 @@ process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, 
 	next[0] = SESSION_V4_LOOKUP_NEXT_DROP;
 
 	session_v4_lookup_worker_t *sw = session_v4_lookup_worker;
-	session_flow_t *session_flow = vnet_buffer_get_opaque(b);
+	session_flow_t *sf = vnet_buffer_get_opaque(b);
 	ipv4_session_t *session;
 
 	if (clib_bihash_search_16_8(&sw->session_hash, &kv, &kv))
@@ -128,40 +129,58 @@ process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, 
 		if (rv)
 			pool_get_aligned(sw->session_pool, session, CLIB_CACHE_LINE_BYTES);
 
-		session_flow->direction = FLOW_DIRECTION_CLIENT_TO_SERVER;
-		session_flow->index = session - sw->session_pool;
+		sf->index = session - sw->session_pool;
+		sf->direction = FLOW_DIRECTION_CLIENT_TO_SERVER;
 
 		session->key = *key;
 		session->start_time = sw->now;
 		session->counter[FLOW_DIRECTION_SERVER_TO_CLIENT] = (vlib_counter_t) {0};
 		session->counter[FLOW_DIRECTION_CLIENT_TO_SERVER] = (vlib_counter_t) {0};
-		kv.value = session_flow->as_u64;
+		kv.value = sf->as_u64;
 
-		clib_bihash_add_del_16_8(&sw->session_hash, &kv, 1);
+		failed = clib_bihash_add_del_16_8(&sw->session_hash, &kv, 1);
+		if (failed)
+		{
+			pool_put(sw->session_pool, session);
+			next[0] = SESSION_V4_LOOKUP_NEXT_DROP;
+			return;
+		}
 
-		clib_warning("Timer added! rv %d %u %u\n" , rv, session_flow->index, session_flow->direction );
-		tw_timer_start_1t_3w_1024sl_ov(&sw->time_wheel, session_flow->index, 0, SESSION_TIMEOUT);
+		// adding reverse flow
+		clib_bihash_kv_16_8_t rkv;
+		ipv4_flow_key_t *rkey = (void *) &rkv.key;
+		session_flow_t *rsf = (void *)&rkv.value;
 
-		key->src_ip = ip4->dst_address;
-		key->dst_ip = ip4->src_address;
-		key->src_port = nat_tcp_udp->dst_port;
-		key->dst_port = nat_tcp_udp->src_port;
+		rkey->src_ip = ip4->dst_address;
+		rkey->dst_ip = ip4->src_address;
+		rkey->src_port = nat_tcp_udp->dst_port;
+		rkey->dst_port = nat_tcp_udp->src_port;
+		rkey->l4_protocol = ip4->protocol;
+		rsf->index = sf->index;
+		rsf->direction = FLOW_DIRECTION_SERVER_TO_CLIENT;
 
-		session_flow_t *reverse_flow = (void *)&kv.value;
-		reverse_flow->direction = FLOW_DIRECTION_SERVER_TO_CLIENT;
+		failed = clib_bihash_add_del_16_8(&sw->session_hash, &kv, 1);
+		if (failed)
+		{
+			clib_bihash_add_del_16_8(&sw->session_hash, &kv, 0);
+			pool_put(sw->session_pool, session);
+			next[0] = SESSION_V4_LOOKUP_NEXT_DROP;
+			return;
+		}
 
-		clib_bihash_add_del_16_8(&sw->session_hash, &kv, 1);
+		clib_warning("Timer added! rv %d %u %u\n" , rv, sf->index, sf->direction);
+		tw_timer_start_1t_3w_1024sl_ov(&sw->time_wheel, sf->index, 0, SESSION_TIMEOUT);
 	}
 	else
 	{
-		session_flow->as_u64 = kv.value;
-		session = pool_elt_at_index(sw->session_pool, session_flow->index);
+		sf->as_u64 = kv.value;
+		session = pool_elt_at_index(sw->session_pool, sf->index);
 	}
 
 	session->end_time = sw->now + SESSION_TIMEOUT;
 
-	session->counter[session_flow->direction].packets++;
-	session->counter[session_flow->direction].bytes += vlib_buffer_length_in_chain(vm, b);
+	session->counter[sf->direction].packets++;
+	session->counter[sf->direction].bytes += vlib_buffer_length_in_chain(vm, b);
 
 	if (is_trace)
 		add_trace(vm, node, b, key);
@@ -373,13 +392,13 @@ static clib_error_t *
 session_v4_lookup_worker_init(vlib_main_t __clib_unused *vm)
 {
 	session_v4_lookup_worker = clib_mem_alloc(sizeof(session_v4_lookup_worker_t));
+	clib_memset(session_v4_lookup_worker, 0, sizeof(session_v4_lookup_worker_t));
 	session_v4_lookup_worker_t *sw = session_v4_lookup_worker;
 	const udpi_session_collection_config_t *sc_config = &udpi_config->session_collection;
 
-	sw->session_pool = NULL;
-
-	const u32 nbuckets = clib_max(max_pow2(sc_config->bihash_capacity / 4), 64);
-	const u64 memory_size = sc_config->bihash_capacity * sizeof(clib_bihash_kv_16_8_t);
+	const u32 max_entries = sc_config->bihash_capacity * 2; /* forward + reverse */
+	const u32 nbuckets = clib_max(max_pow2 (max_entries / BIHASH_KVP_PER_PAGE), 64);
+	const u64 memory_size = (u64) nbuckets * BIHASH_KVP_PER_PAGE * sizeof(clib_bihash_kv_16_8_t);
 
 	void *name = format(NULL, "session-v4-table-%u", vlib_get_thread_index());
 	clib_bihash_init_16_8(&sw->session_hash, name,  nbuckets, memory_size);
