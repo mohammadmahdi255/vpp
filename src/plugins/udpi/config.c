@@ -23,7 +23,7 @@ unformat_session_collection(unformat_input_t *input, va_list *args)
 		if (unformat(&sub_input, "bihash-capacity %u", &sc->bihash_capacity))
 			continue;
 
-		if (unformat(&sub_input, "session-pool-capacity %u", &sc->session_pool_capacity))
+		if (unformat(&sub_input, "pool-capacity %u", &sc->pool_capacity))
 			continue;
 
 		return 0;
@@ -32,6 +32,31 @@ unformat_session_collection(unformat_input_t *input, va_list *args)
 	unformat_free(&sub_input);
 	return 1;
 }
+
+uword
+unformat_time_wheel(unformat_input_t *input, va_list *args)
+{
+	udpi_time_wheel_config_t *tc = va_arg(*args, udpi_time_wheel_config_t *);
+
+	unformat_input_t sub_input;
+	if (!unformat(input, "%U", unformat_vlib_cli_sub_input, &sub_input))
+		return 0;
+
+	while (unformat_check_input(&sub_input) != UNFORMAT_END_OF_INPUT)
+	{
+		if (unformat(&sub_input, "max-expiration %u", &tc->max_expiration))
+			continue;
+
+		if (unformat(&sub_input, "interval %f", &tc->interval))
+			continue;
+
+		return 0;
+	}
+
+	unformat_free(&sub_input);
+	return 1;
+}
+
 
 uword
 unformat_kafka_config(unformat_input_t *input, va_list __clib_unused *args)
@@ -98,6 +123,9 @@ udpi_config_fn (vlib_main_t __clib_unused *vm, unformat_input_t *input)
 	while (unformat_check_input(input) != UNFORMAT_END_OF_INPUT)
 	{
 		if (unformat(input, "session-collection %U", unformat_session_collection, &uc->session_collection))
+			continue;
+
+		if (unformat(input, "time-wheel %U", unformat_time_wheel, &uc->time_wheel))
 			continue;
 
 		if (unformat(input, "producer %U", unformat_producer_config, &uc->producer))

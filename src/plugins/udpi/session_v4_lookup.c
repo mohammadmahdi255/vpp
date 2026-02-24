@@ -4,6 +4,7 @@
 #include <nat/lib/lib.h>
 
 #include <stdint.h>
+#include <string.h>
 #include <vlib/vlib.h>
 #include <vlib/buffer.h>
 #include <vlib/node.h>
@@ -27,6 +28,8 @@
 #include "config.h"
 #include "ip_session.h"
 #include "producer.h"
+#include "vppinfra/cache.h"
+#include "vppinfra/vec_bootstrap.h"
 
 #define foreach_session_v4_lookup_next	\
 	_(drop_next, DROP, "drop")			\
@@ -252,30 +255,80 @@ VLIB_NODE_FN (session_v4_lookup) (vlib_main_t *vm, vlib_node_runtime_t *node, vl
 VLIB_NODE_FN (session_v4_timer_expiration) (vlib_main_t *vm, vlib_node_runtime_t __clib_unused *node,
 		vlib_frame_t __clib_unused *frame)
 {
+	const producer_worker_t *pw = producer_worker;
+	const udpi_time_wheel_config_t *tc = &udpi_config->time_wheel;
 	session_v4_lookup_worker_t *sw = session_v4_lookup_worker;
+	tw_timer_wheel_1t_3w_1024sl_ov_t *tw = &sw->time_wheel;
+	ipv4_session_t *session;
+
 	sw->now = vlib_time_now(vm);
-	tw_timer_expire_timers_1t_3w_1024sl_ov(&sw->time_wheel, sw->now);
-	return 0;
+	tw->expired_timer_handles = tw_timer_expire_timers_vec_1t_3w_1024sl_ov(tw, sw->now, tw->expired_timer_handles);
+	u32 *session_indices = tw->expired_timer_handles;
+
+	const u32 max_size = clib_min(_vec_len(session_indices), tc->max_expiration);
+
+	for (u32 i = 1; i <= max_size; i++)
+	{
+		const i32 rv = rte_ring_sc_dequeue(pw->release_session_v4_ring, (void **) &session);
+		if (!rv)
+			pool_put(sw->session_pool, session);
+
+		u32 session_index = vec_elt(session_indices, _vec_len(session_indices) - i);
+		session = pool_elt_at_index(sw->session_pool, session_index);
+
+		if (session->end_time - sw->now > TIMER_INTERVAL)
+		{
+			const u64 timeout = floor(session->end_time - sw->now);
+			tw_timer_start_1t_3w_1024sl_ov(&sw->time_wheel, session_index, 0, timeout);
+		}
+		else
+		{
+			clib_bihash_kv_16_8_t *kv = (void *) &session->key;
+			clib_bihash_add_del_16_8(&sw->session_hash, kv, 0);
+
+			clib_bihash_kv_16_8_t reverse_kv;
+			ipv4_flow_key_t *key = (ipv4_flow_key_t *) &reverse_kv.key;
+
+			key->src_ip = session->dst_ip;
+			key->dst_ip = session->src_ip;
+			key->src_port = session->dst_port;
+			key->dst_port = session->src_port;
+			key->l4_protocol = session->l4_protocol;
+
+			clib_bihash_add_del_16_8(&sw->session_hash, &reverse_kv, 0);
+
+			const i32 rv = rte_ring_sp_enqueue(pw->acquire_session_v4_ring, (void *) session);
+			if (rv)
+			{
+				pool_put_index(sw->session_pool, session_index);
+				clib_warning("failed to enqueeu session");
+			}
+		}
+	}
+
+	vec_dec_len(session_indices, max_size);
+	return max_size;
 }
 
-VLIB_NODE_FN (session_v4_timer_expiration_process) (vlib_main_t *vm, vlib_node_runtime_t __clib_unused *node,
-		vlib_frame_t __clib_unused *frame)
+VLIB_NODE_FN (session_v4_timer_expiration_process) (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_frame_t *frame)
 {
 	const vlib_thread_main_t *tm = vlib_get_thread_main();
 	const u64 *p = hash_get_mem(tm->thread_registrations_by_name, "workers");
 	const vlib_thread_registration_t *tr = (const vlib_thread_registration_t *) p[0];
-	session_v4_lookup_worker_t *sw = session_v4_lookup_worker;
+	const udpi_time_wheel_config_t *tc = &udpi_config->time_wheel;
 
-	while (tr->count == 0)
+	if (tr->count == 0)
 	{
-		(void) vlib_process_wait_for_event_or_clock(vm, TIMER_INTERVAL);
-		sw->now = vlib_time_now(vm);
-		tw_timer_expire_timers_1t_3w_1024sl_ov(&sw->time_wheel, sw->now);
+		while (true)
+		{
+			(void) vlib_process_wait_for_event_or_clock(vm, tc->interval);
+			session_v4_timer_expiration.function(vm, node, frame);
+		}
 	}
 
-	while (tr->count > 0)
+	while (true)
 	{
-		(void) vlib_process_wait_for_event_or_clock(vm, TIMER_INTERVAL);
+		(void) vlib_process_wait_for_event_or_clock(vm, tc->interval);
 
 		for (u32 i = 0; i < tr->count; i++)
 			vlib_node_set_interrupt_pending(vlib_get_main_by_index(tr->first_index + i), session_v4_timer_expiration.index);
@@ -338,65 +391,17 @@ CLIB_MARCH_FN (session_v4_lookup_init, clib_error_t *, vlib_main_t __clib_unused
 	return 0;
 }
 
-static void
-session_v4_expired_timer_callback(u32 *session_indexes)
-{
-	producer_worker_t *pw = producer_worker;
-	session_v4_lookup_worker_t *sw = session_v4_lookup_worker;
-	u32 session_index;
-	ipv4_session_t *session;
-	for (u32 i = 0; i < vec_len(session_indexes); i++)
-	{
-		const i32 rv = rte_ring_sc_dequeue(pw->release_session_v4_ring, (void **) &session);
-		if (!rv)
-		{
-			clib_warning("session release %u", session - sw->session_pool);
-			pool_put(sw->session_pool, session);
-		}
-
-		session_index = session_indexes[i];
-
-		ipv4_session_t *session =  pool_elt_at_index(sw->session_pool, session_index);
-
-		if (session->end_time - sw->now > TIMER_INTERVAL)
-		{
-			// clib_warning("Timer update! %u end %.6f now %.6f d %lu %.6f \n", session_index, session->end_time, sw->now, timeout, session->end_time - sw->now);
-			const u64 timeout = floor(session->end_time - sw->now);
-			tw_timer_start_1t_3w_1024sl_ov(&sw->time_wheel, session_index, 0, timeout);
-		}
-		else
-		{
-			clib_warning("Timer expired! time %f now %f %u\n", session->end_time, sw->now, session_index);
-			clib_bihash_kv_16_8_t *kv = (void *) &session->key;
-			clib_bihash_add_del_16_8(&sw->session_hash, kv, 0);
-
-			clib_bihash_kv_16_8_t reverse_kv;
-			ipv4_flow_key_t *key = (ipv4_flow_key_t *) &reverse_kv.key;
-
-			key->src_ip = session->dst_ip;
-			key->dst_ip = session->src_ip;
-			key->src_port = session->dst_port;
-			key->dst_port = session->src_port;
-			key->l4_protocol = session->l4_protocol;
-
-			clib_bihash_add_del_16_8(&sw->session_hash, &reverse_kv, 0);
-
-			const i32 rv = rte_ring_sp_enqueue(pw->acquire_session_v4_ring, (void *) session);
-			if (rv)
-				pool_put_index(sw->session_pool, session_index);
-		}
-	}
-}
-
 static clib_error_t *
 session_v4_lookup_worker_init(vlib_main_t __clib_unused *vm)
 {
 	session_v4_lookup_worker = clib_mem_alloc(sizeof(session_v4_lookup_worker_t));
 	clib_memset(session_v4_lookup_worker, 0, sizeof(session_v4_lookup_worker_t));
+	const udpi_session_collection_config_t *sc = &udpi_config->session_collection;
+	const udpi_time_wheel_config_t *tc = &udpi_config->time_wheel;
 	session_v4_lookup_worker_t *sw = session_v4_lookup_worker;
-	const udpi_session_collection_config_t *sc_config = &udpi_config->session_collection;
+	tw_timer_wheel_1t_3w_1024sl_ov_t *tw = &sw->time_wheel;
 
-	const u32 max_entries = sc_config->bihash_capacity * 2; /* forward + reverse */
+	const u32 max_entries = sc->bihash_capacity * 2; /* forward + reverse */
 	const u32 nbuckets = clib_max(max_pow2 (max_entries / BIHASH_KVP_PER_PAGE), 64);
 	const u64 memory_size = (u64) nbuckets * BIHASH_KVP_PER_PAGE * sizeof(clib_bihash_kv_16_8_t);
 
@@ -404,12 +409,16 @@ session_v4_lookup_worker_init(vlib_main_t __clib_unused *vm)
 	clib_bihash_init_16_8(&sw->session_hash, name,  nbuckets, memory_size);
 	vec_free(name);
 
-	pool_init_fixed(sw->session_pool, sc_config->session_pool_capacity);
+	pool_init_fixed(sw->session_pool, sc->pool_capacity);
 
 	if (!sw->session_pool)
 		return clib_error_return(0, "failed to create session pool");
 
-	tw_timer_wheel_init_1t_3w_1024sl_ov(&sw->time_wheel, session_v4_expired_timer_callback, TIMER_INTERVAL, ~0);
+	tw_timer_wheel_init_1t_3w_1024sl_ov(tw, NULL, TIMER_INTERVAL, tc->max_expiration);
+	vec_resize_aligned(tw->expired_timer_handles, tc->max_expiration, CLIB_CACHE_LINE_BYTES);
+	vec_reset_length(tw->expired_timer_handles);
+
+	ASSERT(vec_len(tw->expired_timer_handles) == 0);
 
 	return 0;
 }

@@ -6,8 +6,14 @@
 typedef struct
 {
 	u32 bihash_capacity;
-	u32 session_pool_capacity;
+	u32 pool_capacity;
 } udpi_session_collection_config_t;
+
+typedef struct
+{
+	u32 max_expiration;
+	f64 interval;
+} udpi_time_wheel_config_t;
 
 typedef struct
 {
@@ -26,6 +32,7 @@ typedef struct
 typedef struct
 {
 	udpi_session_collection_config_t session_collection;
+	udpi_time_wheel_config_t time_wheel;
 	udpi_producer_config_t producer;
 } udpi_config_t;
 
