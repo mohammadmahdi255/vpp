@@ -276,7 +276,7 @@ VLIB_NODE_FN (session_v4_timer_expiration) (vlib_main_t *vm, vlib_node_runtime_t
 		u32 session_index = vec_elt(session_indices, _vec_len(session_indices) - i);
 		session = pool_elt_at_index(sw->session_pool, session_index);
 
-		if (session->end_time - sw->now > TIMER_INTERVAL)
+		if (session->end_time - sw->now > tc->resolution)
 		{
 			const u64 timeout = floor(session->end_time - sw->now);
 			tw_timer_start_1t_3w_1024sl_ov(&sw->time_wheel, session_index, 0, timeout);
@@ -414,7 +414,7 @@ session_v4_lookup_worker_init(vlib_main_t __clib_unused *vm)
 	if (!sw->session_pool)
 		return clib_error_return(0, "failed to create session pool");
 
-	tw_timer_wheel_init_1t_3w_1024sl_ov(tw, NULL, TIMER_INTERVAL, tc->max_expiration);
+	tw_timer_wheel_init_1t_3w_1024sl_ov(tw, NULL, tc->resolution, tc->max_expiration);
 	vec_resize_aligned(tw->expired_timer_handles, tc->max_expiration, CLIB_CACHE_LINE_BYTES);
 	vec_reset_length(tw->expired_timer_handles);
 
