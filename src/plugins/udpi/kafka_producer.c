@@ -106,6 +106,7 @@ produce_v4_process(producer_thread_t *pt, u32 worker_id)
 
 		if (PREDICT_FALSE(err))
 		{
+			clib_warning("produce error");
 			if (rd_kafka_last_error() == RD_KAFKA_RESP_ERR__QUEUE_FULL)
 				rd_kafka_poll(pt->rk, 0);
 			continue;
@@ -114,10 +115,11 @@ produce_v4_process(producer_thread_t *pt, u32 worker_id)
 		n_vectors++;
 	}
 
-	const u32 n_enqueue = rte_ring_sp_enqueue_burst(release_session_v4_ring, objs, n_dequeue, NULL);
+	u32 n_free;
+	const u32 n_enqueue = rte_ring_sp_enqueue_burst(release_session_v4_ring, objs, n_dequeue, &n_free);
 
 	if (n_enqueue != n_dequeue)
-		clib_warning("leak in session pool v4 memory");
+		clib_warning("leak in session pool v4 memory %u free %u", n_dequeue - n_enqueue, n_free);
 
 	return n_vectors;
 }
@@ -236,10 +238,12 @@ producer_thread_fn (void *arg)
 			vm->loop_interval_end = now + 2e-4;
 			vm->loops_this_reporting_interval = 0;
 		}
-
-		if (vectors_in_loop == 0)
-			CLIB_PAUSE ();
 	}
+}
+
+VLIB_NODE_FN (kafka_producer_node) (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_frame_t *frame)
+{
+	return 0;
 }
 
 #ifndef CLIB_MARCH_VARIANT

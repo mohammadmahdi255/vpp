@@ -263,6 +263,9 @@ VLIB_NODE_FN (session_v6_timer_expiration) (vlib_main_t *vm, vlib_node_runtime_t
 	tw->expired_timer_handles = tw_timer_expire_timers_vec_1t_3w_1024sl_ov(tw, sw->now, tw->expired_timer_handles);
 	u32 *session_indices = tw->expired_timer_handles;
 
+	if (session_indices == NULL)
+		return 0;
+
 	const u32 max_size = clib_min(_vec_len(session_indices), tc->max_expiration);
 
 	for (u32 i = 1; i <= max_size; i++)
@@ -394,20 +397,20 @@ session_v6_lookup_worker_init(vlib_main_t __clib_unused *vm)
 {
 	session_v6_lookup_worker = clib_mem_alloc(sizeof(session_v6_lookup_worker_t));
 	clib_memset(session_v6_lookup_worker, 0, sizeof(session_v6_lookup_worker_t));
-	const udpi_session_collection_config_t *sc = &udpi_config->session_collection;
+	// const udpi_session_collection_config_t *sc = &udpi_config->session_collection;
 	const udpi_time_wheel_config_t *tc = &udpi_config->time_wheel;
 	session_v6_lookup_worker_t *sw = session_v6_lookup_worker;
 	tw_timer_wheel_1t_3w_1024sl_ov_t *tw = &sw->time_wheel;
 
-	const u32 max_entries = sc->bihash_capacity * 2; /* forward + reverse */
-	const u32 nbuckets = clib_max(max_pow2 (max_entries / BIHASH_KVP_PER_PAGE), 64);
-	const u64 memory_size = (u64) nbuckets * BIHASH_KVP_PER_PAGE * sizeof(clib_bihash_kv_40_8_t);
+	// const u32 max_entries = sc->bihash_capacity * 2; /* forward + reverse */
+	// const u32 nbuckets = clib_max(max_pow2 (max_entries / BIHASH_KVP_PER_PAGE), 64);
+	// const u64 memory_size = (u64) nbuckets * BIHASH_KVP_PER_PAGE * sizeof(clib_bihash_kv_40_8_t);
 
-	void *name = format(NULL, "session-v6-table-%u", vlib_get_thread_index());
-	clib_bihash_init_40_8(&sw->session_hash, name,  nbuckets, memory_size);
-	vec_free(name);
+	// void *name = format(NULL, "session-v6-table-%u", vlib_get_thread_index());
+	// clib_bihash_init_40_8(&sw->session_hash, name,  nbuckets, memory_size);
+	// vec_free(name);
 
-	pool_init_fixed(sw->session_pool, sc->pool_capacity);
+	// pool_init_fixed(sw->session_pool, sc->pool_capacity);
 
 	if (!sw->session_pool)
 		return clib_error_return(0, "failed to create session pool");

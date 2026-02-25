@@ -168,7 +168,7 @@ process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, 
 			return;
 		}
 
-		clib_warning("Timer added! rv %d %u %u\n" , rv, sf->index, sf->direction);
+		// clib_warning("Timer added! rv %d %u %u\n" , rv, sf->index, sf->direction);
 		tw_timer_start_1t_3w_1024sl_ov(&sw->time_wheel, sf->index, 0, SESSION_TIMEOUT);
 	}
 	else
@@ -406,7 +406,11 @@ session_v4_lookup_worker_init(vlib_main_t __clib_unused *vm)
 	clib_bihash_init_16_8(&sw->session_hash, name,  nbuckets, memory_size);
 	vec_free(name);
 
+	vlib_worker_thread_barrier_check();
+
 	pool_init_fixed(sw->session_pool, sc->pool_capacity);
+
+	vlib_worker_thread_barrier_check();
 
 	if (!sw->session_pool)
 		return clib_error_return(0, "failed to create session pool");

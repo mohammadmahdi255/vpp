@@ -26,8 +26,8 @@
 # vppctl set interface promisc on host-${MainInputLinkName}
 # vppctl set interface mtu 9000 host-${MainInputLinkName}
 
-vppctl clear trace
-vppctl trace add pg-input 100
+# vppctl clear trace
+# vppctl trace add pg-input 100
 
 # vppctl set interface feature host-${MainInputLinkName} ethernet-detunnel arc device-input
 
@@ -43,14 +43,25 @@ vppctl trace add pg-input 100
 #     pcap /home/user/Desktop/vpp/vlan2.pcap \
 #     node ethernet-detunnel
 
-vppctl packet-generator new \
-    limit 49546457546 \
-    name fragtest \
-    pcap /home/mohammad/nemati/vpp/gtpu.pcap \
-    node device-input  \
-    worker 1
+# vppctl packet-generator new \
+#     limit 49546457546 \
+#     name fragtest \
+#     pcap /home/mohammad/nemati/vpp/gtpu.pcap \
+#     node device-input  \
+#     worker 1
 
-vppctl set interface detunnel pg-1 arc device-input
+# vppctl packet-generator new {       \
+#     name test                       \
+#     limit 49546457546               \
+#     size 100-100                    \
+#     node ip4-input                  \
+#     worker 1                        \
+#     data {                          \
+#         UDP: 192.168.1.2 - 192.168.2.255 -> 192.168.1.1      \
+#         UDP: 4321 -> 1234           \
+#         length 72                   \
+#         incrementing 100            \
+#     }                               \
+# }
 
-vppctl packet-generator enable
-# vppctl packet-generator disable  # to stop
+vppctl exec /home/mohammad/nemati/vpp/pg.script

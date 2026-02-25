@@ -6,16 +6,15 @@ trace add pg-input 100
 
 packet-generator new {				\
   name udp							\
-  limit 10							\
-  rate 1e4							\
+  limit 49546457546					\
   node ethernet-input				\
   interface loop0					\
   size 100-100						\
   worker 1							\
   data {							\
     IP4: 1.2.3 -> 4.5.6 vlan 1					\
-    UDP: 192.168.1.2 - 192.168.2.255 -> 192.168.1.1		\
-    UDP: 4321 -> 1234						\
+    UDP: 192.168.1.1 - 192.170.10.255 -> 10.18.1.1 - 10.20.10.255		\
+    UDP: 1110 - 1115 -> 3000 - 3027						\
     length 72							\
     incrementing 100						\
   }								\
