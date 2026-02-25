@@ -252,7 +252,7 @@ VLIB_NODE_FN (session_v4_lookup) (vlib_main_t *vm, vlib_node_runtime_t *node, vl
 VLIB_NODE_FN (session_v4_timer_expiration) (vlib_main_t *vm, vlib_node_runtime_t __clib_unused *node,
 		vlib_frame_t __clib_unused *frame)
 {
-	const producer_worker_t *pw = producer_worker;
+	// const producer_worker_t *pw = producer_worker;
 	const udpi_time_wheel_config_t *tc = &udpi_config->time_wheel;
 	session_v4_lookup_worker_t *sw = session_v4_lookup_worker;
 	tw_timer_wheel_1t_3w_1024sl_ov_t *tw = &sw->time_wheel;
@@ -266,9 +266,9 @@ VLIB_NODE_FN (session_v4_timer_expiration) (vlib_main_t *vm, vlib_node_runtime_t
 
 	for (u32 i = 1; i <= max_size; i++)
 	{
-		const i32 rv = rte_ring_sc_dequeue(pw->release_session_v4_ring, (void **) &session);
-		if (!rv)
-			pool_put(sw->session_pool, session);
+		// const i32 rv = rte_ring_sc_dequeue(pw->release_session_v4_ring, (void **) &session);
+		// if (!rv)
+		// 	pool_put(sw->session_pool, session);
 
 		u32 session_index = vec_elt(session_indices, _vec_len(session_indices) - i);
 		session = pool_elt_at_index(sw->session_pool, session_index);
@@ -294,12 +294,12 @@ VLIB_NODE_FN (session_v4_timer_expiration) (vlib_main_t *vm, vlib_node_runtime_t
 
 			clib_bihash_add_del_16_8(&sw->session_hash, &reverse_kv, 0);
 
-			const i32 rv = rte_ring_sp_enqueue(pw->acquire_session_v4_ring, (void *) session);
-			if (rv)
-			{
+			// const i32 rv = rte_ring_sp_enqueue(pw->acquire_session_v4_ring, (void *) session);
+			// if (rv)
+			// {
 				pool_put_index(sw->session_pool, session_index);
-				clib_warning("failed to enqueeu session");
-			}
+			// 	clib_warning("failed to enqueeu session");
+			// }
 		}
 	}
 
@@ -430,6 +430,8 @@ session_v4_lookup_init(vlib_main_t *vm)
 	const vlib_thread_main_t *tm = vlib_get_thread_main();
 	const u64 *p = hash_get_mem(tm->thread_registrations_by_name, "workers");
 	const vlib_thread_registration_t *tr = (vlib_thread_registration_t *) p[0];
+
+	flat_mapsession_v4();
 
 	if (tr->count == 0)
 		session_v4_lookup_worker_init(vm);

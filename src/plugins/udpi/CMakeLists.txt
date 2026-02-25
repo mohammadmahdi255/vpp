@@ -2,6 +2,13 @@ find_package(PkgConfig REQUIRED)
 pkg_check_modules(DPDK REQUIRED IMPORTED_TARGET libdpdk)
 pkg_check_modules(RDKAFKA REQUIRED IMPORTED_TARGET rdkafka)
 
+enable_language(CXX)                          # <-- this is the fix
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+find_package(Boost 1.90 REQUIRED)
+
 include_directories(
 	${DPDK_INCLUDE_DIRS}
 	${RDKAFKA_INCLUDE_DIRS}
