@@ -40,6 +40,8 @@ extern FM_TYPE() * FM_FN(init) (u32 capacity);
 
 extern bool FM_FN(try_emplace) (FM_TYPE() *flat_map, FM_TYPE(_key) *key, FM_TYPE(_value) **value);
 
+extern void FM_FN(erase) (FM_TYPE() *flat_map, FM_TYPE(_key) *key);
+
 #endif
 
 #undef NAME

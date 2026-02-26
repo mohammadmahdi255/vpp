@@ -68,7 +68,7 @@ typedef struct
 	CLIB_CACHE_LINE_ALIGN_MARK (cacheline);
 	f64 now;
 	ipv4_session_t *session_pool;
-	clib_bihash_16_8_t session_hash;
+	// clib_bihash_16_8_t session_hash;
 	boost_flat_map_16_8_t* session_hash2;
 	tw_timer_wheel_1t_3w_1024sl_ov_t time_wheel;
 } session_v4_lookup_worker_t;
@@ -106,77 +106,82 @@ add_trace(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b,
 static_always_inline void
 process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, u16 *next, u8 is_trace)
 {
-	const producer_worker_t *pw = producer_worker;
+	// const producer_worker_t *pw = producer_worker;
 	const ip4_header_t *ip4 = (void *) b->data + vnet_buffer(b)->l3_hdr_offset;
 	const nat_tcp_udp_header_t *nat_tcp_udp = (void *) b->data + vnet_buffer(b)->l4_hdr_offset;
-	i32 failed;
+	// i32 failed;
 
-	clib_bihash_kv_16_8_t kv;
+	ipv4_flow_key_t key;
+	session_flow_t *value;
 
-	ipv4_flow_key_t *key = (void *) &kv.key;
-
-	key->src_ip = ip4->src_address;
-	key->dst_ip = ip4->dst_address;
-	key->src_port = nat_tcp_udp->src_port;
-	key->dst_port = nat_tcp_udp->dst_port;
-	key->l4_protocol = ip4->protocol;
+	key.src_ip = ip4->src_address;
+	key.dst_ip = ip4->dst_address;
+	key.src_port = nat_tcp_udp->src_port;
+	key.dst_port = nat_tcp_udp->dst_port;
+	key.l4_protocol = ip4->protocol;
 	next[0] = SESSION_V4_LOOKUP_NEXT_DROP;
 
 	session_v4_lookup_worker_t *sw = session_v4_lookup_worker;
 	session_flow_t *sf = vnet_buffer_get_opaque(b);
 	ipv4_session_t *session;
 
-	if (clib_bihash_search_16_8(&sw->session_hash, &kv, &kv))
+	if (boost_flat_map_16_8_try_emplace(sw->session_hash2, (void *) &key, (void *) &value))
 	{
-		const i32 rv = rte_ring_sc_dequeue(pw->release_session_v4_ring, (void **) &session);
-		if (rv)
-			pool_get_aligned(sw->session_pool, session, CLIB_CACHE_LINE_BYTES);
+		// const i32 rv = rte_ring_sc_dequeue(pw->release_session_v4_ring, (void **) &session);
+		// if (rv)
+		pool_get_aligned(sw->session_pool, session, CLIB_CACHE_LINE_BYTES);
 
 		sf->index = session - sw->session_pool;
 		sf->direction = FLOW_DIRECTION_CLIENT_TO_SERVER;
 
-		session->key = *key;
+		session->key = key;
 		session->start_time = sw->now;
 		session->counter[FLOW_DIRECTION_SERVER_TO_CLIENT] = (vlib_counter_t) {0};
 		session->counter[FLOW_DIRECTION_CLIENT_TO_SERVER] = (vlib_counter_t) {0};
-		kv.value = sf->as_u64;
+		value->as_u64 = sf->as_u64;
 
-		failed = clib_bihash_add_del_16_8(&sw->session_hash, &kv, 1);
-		if (PREDICT_FALSE(failed))
-		{
-			pool_put(sw->session_pool, session);
-			next[0] = SESSION_V4_LOOKUP_NEXT_DROP;
-			return;
-		}
+		// failed = clib_bihash_add_del_16_8(&sw->session_hash, &kv, 1);
+		// if (PREDICT_FALSE(failed))
+		// {
+		// 	pool_put(sw->session_pool, session);
+		// 	next[0] = SESSION_V4_LOOKUP_NEXT_DROP;
+		// 	return;
+		// }
 
 		// adding reverse flow
-		clib_bihash_kv_16_8_t rkv;
-		ipv4_flow_key_t *rkey = (void *) &rkv.key;
-		session_flow_t *rsf = (void *)&rkv.value;
+		ipv4_flow_key_t rkey;
+		// session_flow_t *rsf = (void *)&rkv.value;
 
-		rkey->src_ip = ip4->dst_address;
-		rkey->dst_ip = ip4->src_address;
-		rkey->src_port = nat_tcp_udp->dst_port;
-		rkey->dst_port = nat_tcp_udp->src_port;
-		rkey->l4_protocol = ip4->protocol;
-		rsf->index = sf->index;
-		rsf->direction = FLOW_DIRECTION_SERVER_TO_CLIENT;
+		rkey.src_ip = ip4->dst_address;
+		rkey.dst_ip = ip4->src_address;
+		rkey.src_port = nat_tcp_udp->dst_port;
+		rkey.dst_port = nat_tcp_udp->src_port;
+		rkey.l4_protocol = ip4->protocol;
+		// rsf->index = sf->index;
+		// rsf->direction = FLOW_DIRECTION_SERVER_TO_CLIENT;
 
-		failed = clib_bihash_add_del_16_8(&sw->session_hash, &kv, 1);
-		if (PREDICT_FALSE(failed))
-		{
-			clib_bihash_add_del_16_8(&sw->session_hash, &kv, 0);
-			pool_put(sw->session_pool, session);
-			next[0] = SESSION_V4_LOOKUP_NEXT_DROP;
-			return;
-		}
+		boost_flat_map_16_8_try_emplace(sw->session_hash2, (void *) &rkey, (void *) &value);
 
-		// clib_warning("Timer added! rv %d %u %u\n" , rv, sf->index, sf->direction);
+		value->index = sf->index;
+		value->direction = FLOW_DIRECTION_SERVER_TO_CLIENT;
+
+		// failed = clib_bihash_add_del_16_8(&sw->session_hash, &kv, 1);
+		// if (PREDICT_FALSE(failed))
+		// {
+		// 	clib_bihash_add_del_16_8(&sw->session_hash, &kv, 0);
+		// 	pool_put(sw->session_pool, session);
+		// 	next[0] = SESSION_V4_LOOKUP_NEXT_DROP;
+		// 	return;
+		// }
+
+		// if (sf->index % 100000 == 0)
+		// 	clib_warning("session added! %u %u\n", sf->index, sf->direction);
 		tw_timer_start_1t_3w_1024sl_ov(&sw->time_wheel, sf->index, 0, SESSION_TIMEOUT);
 	}
 	else
 	{
-		sf->as_u64 = kv.value;
+		sf->as_u64 = value->as_u64;
+		// clib_warning("session found! %u %u\n", sf->index, sf->direction);
 		session = pool_elt_at_index(sw->session_pool, sf->index);
 	}
 
@@ -186,7 +191,7 @@ process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, 
 	session->counter[sf->direction].bytes += vlib_buffer_length_in_chain(vm, b);
 
 	if (is_trace)
-		add_trace(vm, node, b, key);
+		add_trace(vm, node, b, &key);
 }
 
 static_always_inline u64
@@ -283,19 +288,23 @@ VLIB_NODE_FN (session_v4_timer_expiration) (vlib_main_t *vm, vlib_node_runtime_t
 		}
 		else
 		{
-			clib_bihash_kv_16_8_t *kv = (void *) &session->key;
-			clib_bihash_add_del_16_8(&sw->session_hash, kv, 0);
+			// clib_bihash_kv_16_8_t *kv = (void *) &session->key;
+			// clib_bihash_add_del_16_8(&sw->session_hash, kv, 0);
+			boost_flat_map_16_8_erase(sw->session_hash2, (void *) &session->key);
 
-			clib_bihash_kv_16_8_t reverse_kv;
-			ipv4_flow_key_t *key = (ipv4_flow_key_t *) &reverse_kv.key;
+			// clib_bihash_kv_16_8_t reverse_kv;
+			// ipv4_flow_key_t *key = (ipv4_flow_key_t *) &reverse_kv.key;
 
-			key->src_ip = session->dst_ip;
-			key->dst_ip = session->src_ip;
-			key->src_port = session->dst_port;
-			key->dst_port = session->src_port;
-			key->l4_protocol = session->l4_protocol;
+			ipv4_flow_key_t rkey;
+			rkey.src_ip = session->dst_ip;
+			rkey.dst_ip = session->src_ip;
+			rkey.src_port = session->dst_port;
+			rkey.dst_port = session->src_port;
+			rkey.l4_protocol = session->l4_protocol;
 
-			clib_bihash_add_del_16_8(&sw->session_hash, &reverse_kv, 0);
+			// clib_bihash_add_del_16_8(&sw->session_hash, &reverse_kv, 0);
+
+			boost_flat_map_16_8_erase(sw->session_hash2, (void *) &rkey);
 
 			// const i32 rv = rte_ring_sp_enqueue(pw->acquire_session_v4_ring, (void *) session);
 			// if (rv)
