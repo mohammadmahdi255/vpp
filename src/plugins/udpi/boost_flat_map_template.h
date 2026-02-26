@@ -1,32 +1,49 @@
 #ifndef INCLUDE_UDPI_BOOST_FLAT_MAP_TEMPLATE_H_
 #define INCLUDE_UDPI_BOOST_FLAT_MAP_TEMPLATE_H_
 
-#define _FM_CONCAT_INNER(a, b)	a##b
-#define _FM_CONCAT(a, b)    _FM_CONCAT_INNER(a, b)
-#define _FM_TYPE(name)		_FM_CONCAT(name, _flat_map_t)
-#define _FM_FN(name)		_FM_CONCAT(flat_map_, name)
+#include <stdbool.h>
+#include <vppinfra/types.h>
 
 #endif
+
+#define _fm_fn(a, b)		boost_flat_map_##a##_##b
+#define __fm_fn(a, b)		_fm_fn(a, b)
+#define FM_FN(a) 			__fm_fn(NAME, a)
+
+#define _fm_type(a, b)		boost_flat_map_##a##b##_t
+#define __fm_type(a, b)		_fm_type(a, b)
+#define FM_TYPE(a)			__fm_type(NAME, a)
+
+#define _fm_struct(a, b)	struct boost_flat_map_##a##b
+#define __fm_struct(a, b)	_fm_struct(a, b)
+#define FM_STRUCT(a)		__fm_struct(NAME, a)
+
+typedef FM_STRUCT(_key)
+{
+	u8 _[KEY_SIZE];
+} FM_TYPE(_key);
+
+typedef FM_STRUCT(_value)
+{
+	u8 _[VALUE_SIZE];
+} FM_TYPE(_value);
 
 #ifdef __cplusplus
 #include "boost_flat_map_template.hpp"
 #else
 
-extern void _FM_FN(NAME) ();
+typedef FM_STRUCT() FM_TYPE();
+
+extern void FM_FN(hello_world) ();
+
+extern FM_TYPE() * FM_FN(init) (u32 capacity);
+
+extern bool FM_FN(try_emplace) (FM_TYPE() *flat_map, FM_TYPE(_key) *key, FM_TYPE(_value) **value);
 
 #endif
 
 #undef NAME
-#undef KEY_TYPE
-#undef VALUE_TYPE
+#undef KEY_SIZE
+#undef VALUE_SIZE
 #undef HASH_FN
 #undef KEY_COMPARE_FN
-#undef MAX_LOAD
-#undef KEY_DTOR_FN
-#undef VAL_DTOR_FN
-#undef CTX_TY
-#undef MALLOC_FN
-#undef FREE_FN
-#undef HEADER_MODE
-#undef IMPLEMENTATION_MODE
-#undef VT_API_FN_QUALIFIERS

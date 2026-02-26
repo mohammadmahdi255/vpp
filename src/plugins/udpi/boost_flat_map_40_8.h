@@ -4,9 +4,9 @@
 
 #include <vppinfra/types.h>
 
-#define NAME session_v6
-#define KEY_TYPE u8[40]
-#define VALUE_TYPE u64
+#define NAME 40_8
+#define KEY_SIZE 40
+#define VALUE_SIZE 8
 #include "boost_flat_map_template.h"
 
 #endif

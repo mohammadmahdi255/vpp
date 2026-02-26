@@ -69,6 +69,7 @@ typedef struct
 	f64 now;
 	ipv4_session_t *session_pool;
 	clib_bihash_16_8_t session_hash;
+	boost_flat_map_16_8_t* session_hash2;
 	tw_timer_wheel_1t_3w_1024sl_ov_t time_wheel;
 } session_v4_lookup_worker_t;
 
@@ -401,12 +402,14 @@ session_v4_lookup_worker_init(vlib_main_t __clib_unused *vm)
 	tw_timer_wheel_1t_3w_1024sl_ov_t *tw = &sw->time_wheel;
 
 	const u32 max_entries = sc->bihash_capacity * 2; /* forward + reverse */
-	const u32 nbuckets = clib_max(max_pow2 (max_entries / BIHASH_KVP_PER_PAGE), 64);
-	const u64 memory_size = (u64) nbuckets * BIHASH_KVP_PER_PAGE * sizeof(clib_bihash_kv_16_8_t);
+	// const u32 nbuckets = clib_max(max_pow2 (max_entries / BIHASH_KVP_PER_PAGE), 64);
+	// const u64 memory_size = (u64) nbuckets * BIHASH_KVP_PER_PAGE * sizeof(clib_bihash_kv_16_8_t);
 
-	void *name = format(NULL, "session-v4-table-%u", vlib_get_thread_index());
-	clib_bihash_init_16_8(&sw->session_hash, name,  nbuckets, memory_size);
-	vec_free(name);
+	// void *name = format(NULL, "session-v4-table-%u", vlib_get_thread_index());
+	// clib_bihash_init_16_8(&sw->session_hash, name, nbuckets, memory_size);
+	// vec_free(name);
+
+	sw->session_hash2 = boost_flat_map_16_8_init(max_entries);
 
 	vlib_worker_thread_barrier_check();
 
@@ -433,8 +436,8 @@ session_v4_lookup_init(vlib_main_t *vm)
 	const u64 *p = hash_get_mem(tm->thread_registrations_by_name, "workers");
 	const vlib_thread_registration_t *tr = (vlib_thread_registration_t *) p[0];
 
-	flat_map_session_v4();
-	flat_map_session_v6();
+	boost_flat_map_16_8_hello_world();
+	// boost_flat_map_session_v6_hello_world();
 
 	if (tr->count == 0)
 		session_v4_lookup_worker_init(vm);
