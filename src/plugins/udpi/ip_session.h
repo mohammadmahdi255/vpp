@@ -75,10 +75,4 @@ typedef struct
 	ip_session_template_fields(ipv6_flow_key_t, ip6_address_t);
 } ipv6_session_t;
 
-
-#define NAME session_v4
-#define KEY_TYPE ipv4_flow_key_t
-#define VALUE_TYPE ipv4_session_t
-#include "boost_flat_map_template.h"
-
 #endif

@@ -29,6 +29,7 @@ add_vpp_plugin(udpi
 		session_classifier.c
 		session_v4_lookup.c
 		session_v6_lookup.c
+		boost_flat_map_template.cpp
 
 	MULTIARCH_SOURCES
 		producer.c

@@ -27,6 +27,8 @@
 #include "config.h"
 #include "ip_session.h"
 #include "producer.h"
+#include "boost_flat_map_16_8.h"
+#include "boost_flat_map_40_8.h"
 
 #define foreach_session_v4_lookup_next	\
 	_(drop_next, DROP, "drop")			\
@@ -431,7 +433,8 @@ session_v4_lookup_init(vlib_main_t *vm)
 	const u64 *p = hash_get_mem(tm->thread_registrations_by_name, "workers");
 	const vlib_thread_registration_t *tr = (vlib_thread_registration_t *) p[0];
 
-	flat_mapsession_v4();
+	flat_map_session_v4();
+	flat_map_session_v6();
 
 	if (tr->count == 0)
 		session_v4_lookup_worker_init(vm);
