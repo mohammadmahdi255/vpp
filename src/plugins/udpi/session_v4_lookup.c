@@ -271,6 +271,7 @@ VLIB_NODE_FN (session_v4_timer_expiration) (vlib_main_t *vm, vlib_node_runtime_t
 	u32 *session_indices = tw->expired_timer_handles;
 
 	const u32 max_size = clib_min(_vec_len(session_indices), tc->max_expiration);
+	u32 counter = 0;
 
 	for (u32 i = 1; i <= max_size; i++)
 	{
@@ -288,6 +289,8 @@ VLIB_NODE_FN (session_v4_timer_expiration) (vlib_main_t *vm, vlib_node_runtime_t
 		}
 		else
 		{
+			counter++;
+			// clib_warning("remove");
 			// clib_bihash_kv_16_8_t *kv = (void *) &session->key;
 			// clib_bihash_add_del_16_8(&sw->session_hash, kv, 0);
 			boost_flat_map_16_8_erase(sw->session_hash2, (void *) &session->key);
@@ -316,7 +319,7 @@ VLIB_NODE_FN (session_v4_timer_expiration) (vlib_main_t *vm, vlib_node_runtime_t
 	}
 
 	vec_dec_len(session_indices, max_size);
-	return max_size;
+	return counter;
 }
 
 VLIB_NODE_FN (session_v4_timer_expiration_process) (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_frame_t *frame)
