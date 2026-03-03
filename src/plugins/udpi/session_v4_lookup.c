@@ -105,7 +105,7 @@ add_trace(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b,
 static_always_inline void
 process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, u16 *next, u8 is_trace)
 {
-	// const producer_worker_t *pw = producer_worker;
+	const producer_worker_t *pw = producer_worker;
 	const ip4_header_t *ip4 = (void *) b->data + vnet_buffer(b)->l3_hdr_offset;
 	const nat_tcp_udp_header_t *nat_tcp_udp = (void *) b->data + vnet_buffer(b)->l4_hdr_offset;
 
@@ -126,9 +126,9 @@ process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, 
 
 	if (vt_is_end(it))
 	{
-		// const i32 rv = rte_ring_sc_dequeue(pw->release_session_v4_ring, (void **) &session);
-		// if (rv)
-		pool_get_aligned(sw->session_pool, session, CLIB_CACHE_LINE_BYTES);
+		const i32 rv = rte_ring_sc_dequeue(pw->release_session_v4_ring, (void **) &session);
+		if (rv)
+			pool_get_aligned(sw->session_pool, session, CLIB_CACHE_LINE_BYTES);
 
 		sf->index = session - sw->session_pool;
 		sf->direction = FLOW_DIRECTION_CLIENT_TO_SERVER;
@@ -255,7 +255,7 @@ VLIB_NODE_FN (session_v4_lookup) (vlib_main_t *vm, vlib_node_runtime_t *node, vl
 VLIB_NODE_FN (session_v4_timer_expiration) (vlib_main_t *vm, vlib_node_runtime_t __clib_unused *node,
 		vlib_frame_t __clib_unused *frame)
 {
-	// const producer_worker_t *pw = producer_worker;
+	const producer_worker_t *pw = producer_worker;
 	const udpi_time_wheel_config_t *tc = &udpi_config->time_wheel;
 	session_v4_lookup_worker_t *sw = session_v4_lookup_worker;
 	tw_timer_wheel_1t_3w_1024sl_ov_t *tw = &sw->time_wheel;
@@ -270,9 +270,9 @@ VLIB_NODE_FN (session_v4_timer_expiration) (vlib_main_t *vm, vlib_node_runtime_t
 
 	for (u32 i = 1; i <= max_size; i++)
 	{
-		// const i32 rv = rte_ring_sc_dequeue(pw->release_session_v4_ring, (void **) &session);
-		// if (!rv)
-		// 	pool_put(sw->session_pool, session);
+		const i32 rv = rte_ring_sc_dequeue(pw->release_session_v4_ring, (void **) &session);
+		if (!rv)
+			pool_put(sw->session_pool, session);
 
 		u32 session_index = vec_elt(session_indices, _vec_len(session_indices) - i);
 		session = pool_elt_at_index(sw->session_pool, session_index);
@@ -296,12 +296,12 @@ VLIB_NODE_FN (session_v4_timer_expiration) (vlib_main_t *vm, vlib_node_runtime_t
 			vt_erase(&sw->session_hash, session->key);
 			vt_erase(&sw->session_hash, rkey);
 
-			// const i32 rv = rte_ring_sp_enqueue(pw->acquire_session_v4_ring, (void *) session);
-			// if (rv)
-			// {
-			pool_put_index(sw->session_pool, session_index);
-				// clib_warning("failed to enqueeu session");
-			// }
+			const i32 rv = rte_ring_sp_enqueue(pw->acquire_session_v4_ring, (void *) session);
+			if (rv)
+			{
+				pool_put_index(sw->session_pool, session_index);
+				clib_warning("failed to enqueeu session");
+			}
 		}
 	}
 
