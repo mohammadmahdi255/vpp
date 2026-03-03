@@ -4,8 +4,7 @@
 #include <vlib/counter_types.h>
 #include <vlib/vlib.h>
 
-#include <vppinfra/string.h>
-#include <vppinfra/xxhash.h>
+#include <vppinfra/mem.h>
 
 #include <vnet/ip/ip4_packet.h>
 #include <vnet/ip/ip6_packet.h>
@@ -80,27 +79,13 @@ typedef struct
 
 #undef always_inline
 
-static inline u64 vt_hash_ipv4_flow_key(ipv4_flow_key_t key)
-{
-#ifdef clib_crc32c_uses_intrinsics
-	return clib_crc32c ((u8 *) &key, 16);
-#else
-	u64 *ptr = (u64 *) &key;
-	u64 tmp = ptr[0] ^ ptr[1];
-	return clib_xxhash (tmp);
-#endif
-}
-
-static inline bool vt_cmpr_ipv4_flow_key(ipv4_flow_key_t key_1, ipv4_flow_key_t key_2)
-{
-  return clib_memcmp(&key_1, &key_2, sizeof(ipv4_flow_key_t)) == 0;
-}
-
-#define NAME	verstable_map_16_8
-#define KEY_TY	ipv4_flow_key_t
-#define VAL_TY	session_flow_t
-#define HASH_FN	vt_hash_ipv4_flow_key
-#define CMPR_FN	vt_cmpr_ipv4_flow_key
+#define NAME					session_v4_map
+#define KEY_TY					ipv4_flow_key_t
+#define VAL_TY					session_flow_t
+#define HASH_FN(key)			vt_wyhash(&(key), sizeof(KEY_TY))
+#define CMPR_FN(key_1, key_2)	clib_memcmp(&(key_1), &(key_2), sizeof(KEY_TY)) == 0
+#define MALLOC_FN				clib_mem_alloc
+#define FREE_FN(ptr, size)		clib_mem_free(ptr)
 #include "verstable.h"
 
 #if CLIB_DEBUG > 0
