@@ -24,11 +24,12 @@
 #include <vppinfra/vec.h>
 
 #include "boost_flat_map_16_8.h"
-#include "boost_flat_map_40_8.h"
 #include "config.h"
 #include "detunnel/detunnel.h"
 #include "ip_session.h"
 #include "producer.h"
+#include "udpi/metadata_generator_funcs.h"
+#include "vlib/counter.h"
 
 #define foreach_session_v4_lookup_next	\
 	_(drop_next, DROP, "drop")			\
@@ -61,6 +62,9 @@ typedef struct
 
 typedef struct
 {
+	vlib_simple_counter_main_t create_session;
+	vlib_simple_counter_main_t find_session;
+	vlib_simple_counter_main_t remove_session;
 } session_v4_lookup_main_t;
 
 typedef struct
@@ -70,6 +74,8 @@ typedef struct
 	ipv4_session_t *session_pool;
 	session_v4_map session_hash;
 	tw_timer_wheel_1t_3w_1024sl_ov_t time_wheel;
+
+	u8 *scratch;
 } session_v4_lookup_worker_t;
 
 extern __thread session_v4_lookup_worker_t *session_v4_lookup_worker;
@@ -105,9 +111,10 @@ add_trace(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b,
 static_always_inline void
 process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, u16 *next, u8 is_trace)
 {
-	const producer_worker_t *pw = producer_worker;
+	// const producer_worker_t *pw = producer_worker;
 	const ip4_header_t *ip4 = (void *) b->data + vnet_buffer(b)->l3_hdr_offset;
 	const nat_tcp_udp_header_t *nat_tcp_udp = (void *) b->data + vnet_buffer(b)->l4_hdr_offset;
+	session_v4_lookup_main_t *sm = &session_v4_lookup_main;
 
 	ipv4_flow_key_t key;
 
@@ -126,9 +133,9 @@ process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, 
 
 	if (vt_is_end(it))
 	{
-		const i32 rv = rte_ring_sc_dequeue(pw->release_session_v4_ring, (void **) &session);
-		if (rv)
-			pool_get_aligned(sw->session_pool, session, CLIB_CACHE_LINE_BYTES);
+		// const i32 rv = rte_ring_sc_dequeue(pw->release_session_v4_ring, (void **) &session);
+		// if (rv)
+		pool_get_aligned(sw->session_pool, session, CLIB_CACHE_LINE_BYTES);
 
 		sf->index = session - sw->session_pool;
 		sf->direction = FLOW_DIRECTION_CLIENT_TO_SERVER;
@@ -172,12 +179,16 @@ process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, 
 		// if (sf->index % 100000 == 0 && sf->index != 0)
 		// 	clib_warning("session added! %u %u\n", sf->index, sf->direction);
 		tw_timer_start_1t_3w_1024sl_ov(&sw->time_wheel, sf->index, 0, SESSION_TIMEOUT);
+
+		vlib_increment_simple_counter(&sm->create_session, vm->thread_index, 0, 1);
 	}
 	else
 	{
 		*sf = it.data->val;
 		session = pool_elt_at_index(sw->session_pool, sf->index);
 		// clib_warning("session found! %u %u\n", sf->index, sf->direction);
+
+		vlib_increment_simple_counter(&sm->find_session, vm->thread_index, 0, 1);
 	}
 
 	session->end_time = sw->now + SESSION_TIMEOUT;
@@ -257,6 +268,7 @@ VLIB_NODE_FN (session_v4_timer_expiration) (vlib_main_t *vm, vlib_node_runtime_t
 {
 	const producer_worker_t *pw = producer_worker;
 	const udpi_time_wheel_config_t *tc = &udpi_config->time_wheel;
+	session_v4_lookup_main_t *sm = &session_v4_lookup_main;
 	session_v4_lookup_worker_t *sw = session_v4_lookup_worker;
 	tw_timer_wheel_1t_3w_1024sl_ov_t *tw = &sw->time_wheel;
 	ipv4_session_t *session;
@@ -296,14 +308,33 @@ VLIB_NODE_FN (session_v4_timer_expiration) (vlib_main_t *vm, vlib_node_runtime_t
 			vt_erase(&sw->session_hash, session->key);
 			vt_erase(&sw->session_hash, rkey);
 
-			const i32 rv = rte_ring_sp_enqueue(pw->acquire_session_v4_ring, (void *) session);
-			if (rv)
-			{
-				pool_put_index(sw->session_pool, session_index);
-				clib_warning("failed to enqueeu session");
-			}
+			// const i32 rv = rte_ring_sp_enqueue(pw->acquire_session_v4_ring, (void *) session);
+			// if (rv)
+			// {
+
+			produce_v4_csv_record(sw->scratch, session);
+
+			// i32 err = rd_kafka_produce(pt->rkt,
+			// 							RD_KAFKA_PARTITION_UA,
+			// 							RD_KAFKA_MSG_F_COPY,    /* rdkafka owns msg now */
+			// 							sw->scratch, vec_len(sw->scratch),
+			// 							NULL, 0, NULL);
+
+			// if (PREDICT_FALSE(err))
+			// {
+			// 	clib_warning("produce error");
+			// 	if (rd_kafka_last_error() == RD_KAFKA_RESP_ERR__QUEUE_FULL)
+			// 		rd_kafka_poll(pt->rk, 0);
+			// 	continue;
+			// }
+
+			pool_put_index(sw->session_pool, session_index);
+			// 	clib_warning("failed to enqueeu session");
+			// }
 		}
 	}
+
+	vlib_increment_simple_counter(&sm->remove_session, vm->thread_index, 0, counter);
 
 	vec_dec_len(session_indices, max_size);
 	return counter;
@@ -419,6 +450,8 @@ session_v4_lookup_worker_init(vlib_main_t __clib_unused *vm)
 
 	vlib_worker_thread_barrier_check();
 
+	vec_validate(sw->scratch, 1 << 10);
+
 	if (!sw->session_pool)
 		return clib_error_return(0, "failed to create session pool");
 
@@ -443,6 +476,23 @@ session_v4_lookup_init(vlib_main_t *vm)
 
 	if (tr->count == 0)
 		session_v4_lookup_worker_init(vm);
+
+	session_v4_lookup_main_t *sm = &session_v4_lookup_main;
+
+	sm->create_session.name = "create_session_v4";
+	sm->create_session.stat_segment_name = "/udpi/ipv4/create_session_v4";
+	vlib_validate_simple_counter(&sm->create_session, 0);
+	vlib_zero_simple_counter(&sm->create_session, 0);
+
+	sm->find_session.name = "find_session_v4";
+	sm->find_session.stat_segment_name = "/udpi/ipv4/find_session_v4";
+	vlib_validate_simple_counter(&sm->find_session, 0);
+	vlib_zero_simple_counter(&sm->find_session, 0);
+
+	sm->remove_session.name = "remove_session_v4";
+	sm->remove_session.stat_segment_name = "/udpi/ipv4/remove_session_v4";
+	vlib_validate_simple_counter(&sm->remove_session, 0);
+	vlib_zero_simple_counter(&sm->remove_session, 0);
 
 	return CLIB_MARCH_FN_SELECT(session_v4_lookup_init) (vm);
 }

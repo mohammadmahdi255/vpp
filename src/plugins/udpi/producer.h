@@ -5,6 +5,9 @@
 
 #include <vnet/ip/ip46_address.h>
 
+#include <librdkafka/rdkafka.h>
+
+
 #undef always_inline
 
 #include <rte_lcore.h>
@@ -23,6 +26,17 @@ typedef struct
 	struct rte_ring *acquire_session_v6_ring;
 	struct rte_ring *release_session_v6_ring;
 } producer_worker_t;
+
+typedef struct
+{
+	CLIB_CACHE_LINE_ALIGN_MARK (cacheline);
+	rd_kafka_t *rk;
+	rd_kafka_topic_t *rkt;
+
+	u8 *scratch;
+} producer_thread_t;
+
+extern producer_thread_t *pt;
 
 typedef struct
 {

@@ -17,18 +17,12 @@
 
 #define PRODUCER_POLL_INTERVAL_NS   1000000 /* 1ms between loops            */
 
-typedef struct
-{
-	CLIB_CACHE_LINE_ALIGN_MARK (cacheline);
-	rd_kafka_t *rk;
-	rd_kafka_topic_t *rkt;
-
-	u8 *scratch;
-} producer_thread_t;
-
 extern vlib_node_registration_t kafka_producer_node;
 
 #ifndef CLIB_MARCH_VARIANT
+
+producer_thread_t *pt = NULL;
+
 static const char *kafka_perf_config[][2] = {
 	{ "acks",                           "1"         },
 	{ "retries",                        "0"         },
@@ -175,7 +169,7 @@ producer_thread_fn (void *arg)
 	clib_mem_set_heap(wt->thread_mheap);
 	vlib_main_t *vm = vlib_get_main();
 
-	producer_thread_t *pt = clib_mem_alloc(sizeof(producer_thread_t));
+	pt = clib_mem_alloc(sizeof(producer_thread_t));
 	clib_memset(pt, 0, sizeof(producer_thread_t));
 
 	const vlib_thread_main_t *tm = vlib_get_thread_main ();
