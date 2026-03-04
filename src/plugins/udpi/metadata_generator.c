@@ -5,7 +5,7 @@
 #include <vnet/ip/ip4_packet.h>
 #include <vnet/vnet.h>
 
-void
+u8 *
 produce_v4_csv_record(u8 *buffer, ipv4_session_t *session)
 {
 	u64 start_s  = (u64) session->start_time;
@@ -15,7 +15,7 @@ produce_v4_csv_record(u8 *buffer, ipv4_session_t *session)
 
 	vec_reset_length(buffer);
 
-	buffer = format(buffer,
+	return format(buffer,
 			"%u,"	/* probe_id */
 			"%llu,"			/* start_time_s */
 			"%llu,"			/* start_time_ms */

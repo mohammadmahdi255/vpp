@@ -26,7 +26,7 @@ producer_worker_init(vlib_main_t __clib_unused *vm)
 
 	void *name;
 	name = format(NULL, "acquire-session-v4-ring-%u", vlib_get_thread_index());
-	pw->acquire_session_v4_ring = rte_ring_create_elem(name, sizeof(void *),
+	pw->acquire_session_v4_ring = rte_ring_create_elem(name, sizeof(u8 *),
 			pc->ring_capacity,
 			(i32) rte_socket_id(),
 			RING_F_SP_ENQ | RING_F_SC_DEQ);
@@ -35,7 +35,7 @@ producer_worker_init(vlib_main_t __clib_unused *vm)
 	clib_warning("ring size: %u\n", rte_ring_get_size(pw->acquire_session_v4_ring));
 
 	name = format(NULL, "release-session-v4-ring-%u", vlib_get_thread_index());
-	pw->release_session_v4_ring = rte_ring_create_elem(name, sizeof(void *),
+	pw->release_session_v4_ring = rte_ring_create_elem(name, sizeof(u8 *),
 			pc->ring_capacity,
 			(i32) rte_socket_id(),
 			RING_F_SP_ENQ | RING_F_SC_DEQ);

@@ -3,7 +3,7 @@
 
 #include "ip_session.h"
 
-void
+u8 *
 produce_v4_csv_record(u8 *buffer, ipv4_session_t *session);
 
 void

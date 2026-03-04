@@ -4,6 +4,8 @@
 #include <nat/lib/lib.h>
 
 #include <stdint.h>
+#include <stdio.h>
+#include <time.h>
 #include <vlib/vlib.h>
 #include <vlib/buffer.h>
 #include <vlib/node.h>
@@ -30,6 +32,7 @@
 #include "producer.h"
 #include "udpi/metadata_generator_funcs.h"
 #include "vlib/counter.h"
+#include "vppinfra/vec_bootstrap.h"
 
 #define foreach_session_v4_lookup_next	\
 	_(drop_next, DROP, "drop")			\
@@ -72,10 +75,10 @@ typedef struct
 	CLIB_CACHE_LINE_ALIGN_MARK (cacheline);
 	f64 now;
 	ipv4_session_t *session_pool;
-	session_v4_map session_hash;
+	session_v4_map session_map;
 	tw_timer_wheel_1t_3w_1024sl_ov_t time_wheel;
 
-	u8 *scratch;
+	rd_kafka_message_t *msgs;
 } session_v4_lookup_worker_t;
 
 extern __thread session_v4_lookup_worker_t *session_v4_lookup_worker;
@@ -129,18 +132,16 @@ process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, 
 	session_flow_t *sf = vnet_buffer_get_opaque(b);
 	ipv4_session_t *session;
 
-	session_v4_map_itr it = vt_get(&sw->session_hash, key);
+	session_v4_map_itr it = vt_get(&sw->session_map, key);
 
 	if (vt_is_end(it))
 	{
-		// const i32 rv = rte_ring_sc_dequeue(pw->release_session_v4_ring, (void **) &session);
-		// if (rv)
 		pool_get_aligned(sw->session_pool, session, CLIB_CACHE_LINE_BYTES);
 
 		sf->index = session - sw->session_pool;
 		sf->direction = FLOW_DIRECTION_CLIENT_TO_SERVER;
 
-		it = session_v4_map_insert_raw(&sw->session_hash, key, sf, true, true);
+		it = session_v4_map_insert_raw(&sw->session_map, key, sf, true, true);
 
 		if (PREDICT_FALSE(vt_is_end(it)))
 		{
@@ -161,11 +162,11 @@ process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, 
 		rsf.index = sf->index;
 		rsf.direction = FLOW_DIRECTION_SERVER_TO_CLIENT;
 
-		session_v4_map_itr rit = session_v4_map_insert_raw(&sw->session_hash, rkey, &rsf, true, true);
+		session_v4_map_itr rit = session_v4_map_insert_raw(&sw->session_map, rkey, &rsf, true, true);
 
 		if (PREDICT_FALSE(vt_is_end(rit)))
 		{
-			vt_erase_itr(&sw->session_hash, it);
+			vt_erase_itr(&sw->session_map, it);
 			pool_put(sw->session_pool, session);
 			next[0] = SESSION_V4_LOOKUP_NEXT_DROP;
 			return;
@@ -272,20 +273,17 @@ VLIB_NODE_FN (session_v4_timer_expiration) (vlib_main_t *vm, vlib_node_runtime_t
 	session_v4_lookup_worker_t *sw = session_v4_lookup_worker;
 	tw_timer_wheel_1t_3w_1024sl_ov_t *tw = &sw->time_wheel;
 	ipv4_session_t *session;
+	u32 n_vectors = 0;
 
 	sw->now = vlib_time_now(vm);
 	tw->expired_timer_handles = tw_timer_expire_timers_vec_1t_3w_1024sl_ov(tw, sw->now, tw->expired_timer_handles);
 	u32 *session_indices = tw->expired_timer_handles;
 
 	const u32 max_size = clib_min(_vec_len(session_indices), tc->max_expiration);
-	u32 counter = 0;
+	i32 rv;
 
 	for (u32 i = 1; i <= max_size; i++)
 	{
-		const i32 rv = rte_ring_sc_dequeue(pw->release_session_v4_ring, (void **) &session);
-		if (!rv)
-			pool_put(sw->session_pool, session);
-
 		u32 session_index = vec_elt(session_indices, _vec_len(session_indices) - i);
 		session = pool_elt_at_index(sw->session_pool, session_index);
 
@@ -293,51 +291,48 @@ VLIB_NODE_FN (session_v4_timer_expiration) (vlib_main_t *vm, vlib_node_runtime_t
 		{
 			const u64 timeout = floor(session->end_time - sw->now);
 			tw_timer_start_1t_3w_1024sl_ov(&sw->time_wheel, session_index, 0, timeout);
+			continue;
 		}
-		else
-		{
-			counter++;
 
-			ipv4_flow_key_t rkey;
-			rkey.src_ip = session->dst_ip;
-			rkey.dst_ip = session->src_ip;
-			rkey.src_port = session->dst_port;
-			rkey.dst_port = session->src_port;
-			rkey.l4_protocol = session->l4_protocol;
+		ipv4_flow_key_t rkey;
+		rkey.src_ip = session->dst_ip;
+		rkey.dst_ip = session->src_ip;
+		rkey.src_port = session->dst_port;
+		rkey.dst_port = session->src_port;
+		rkey.l4_protocol = session->l4_protocol;
 
-			vt_erase(&sw->session_hash, session->key);
-			vt_erase(&sw->session_hash, rkey);
+		vt_erase(&sw->session_map, session->key);
+		vt_erase(&sw->session_map, rkey);
 
-			// const i32 rv = rte_ring_sp_enqueue(pw->acquire_session_v4_ring, (void *) session);
-			// if (rv)
-			// {
+		u8 *buffer = NULL;
 
-			produce_v4_csv_record(sw->scratch, session);
+		rv = rte_ring_sc_dequeue(pw->release_session_v4_ring, (void **) &buffer);
+		if (rv)
+			vec_validate(buffer, 1 << 8);
 
-			// i32 err = rd_kafka_produce(pt->rkt,
-			// 							RD_KAFKA_PARTITION_UA,
-			// 							RD_KAFKA_MSG_F_COPY,    /* rdkafka owns msg now */
-			// 							sw->scratch, vec_len(sw->scratch),
-			// 							NULL, 0, NULL);
+		buffer = produce_v4_csv_record(buffer, session);
+		pool_put_index(sw->session_pool, session_index);
 
-			// if (PREDICT_FALSE(err))
-			// {
-			// 	clib_warning("produce error");
-			// 	if (rd_kafka_last_error() == RD_KAFKA_RESP_ERR__QUEUE_FULL)
-			// 		rd_kafka_poll(pt->rk, 0);
-			// 	continue;
-			// }
+		sw->msgs[n_vectors].partition = RD_KAFKA_PARTITION_UA;
+		sw->msgs[n_vectors].payload = buffer;
+		sw->msgs[n_vectors].len = _vec_len(buffer);
+		sw->msgs[n_vectors].key = NULL;
+		sw->msgs[n_vectors].key_len = 0;
+		sw->msgs[n_vectors]._private = pw->release_session_v4_ring;
 
-			pool_put_index(sw->session_pool, session_index);
-			// 	clib_warning("failed to enqueeu session");
-			// }
-		}
+		n_vectors++;
 	}
 
-	vlib_increment_simple_counter(&sm->remove_session, vm->thread_index, 0, counter);
+	u32 n_send = rd_kafka_produce_batch(pt->rkt, RD_KAFKA_PARTITION_UA, 0, sw->msgs, (i32) n_vectors);
+	rd_kafka_poll(pt->rk, 0);
+
+	if (n_vectors != n_send)
+		clib_warning("send %u total %u", n_send, n_vectors);
+
+	vlib_increment_simple_counter(&sm->remove_session, vm->thread_index, 0, n_vectors);
 
 	vec_dec_len(session_indices, max_size);
-	return counter;
+	return n_vectors;
 }
 
 VLIB_NODE_FN (session_v4_timer_expiration_process) (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_frame_t *frame)
@@ -431,7 +426,7 @@ session_v4_lookup_worker_init(vlib_main_t __clib_unused *vm)
 	session_v4_lookup_worker_t *sw = session_v4_lookup_worker;
 	tw_timer_wheel_1t_3w_1024sl_ov_t *tw = &sw->time_wheel;
 
-	const u32 max_entries = sc->bihash_capacity * 2; /* forward + reverse */
+	const u32 max_entries = max_pow2((u64) sc->bihash_capacity * 2); /* forward + reverse */
 	// const u32 nbuckets = clib_max(max_pow2 (max_entries / BIHASH_KVP_PER_PAGE), 64);
 	// const u64 memory_size = (u64) nbuckets * BIHASH_KVP_PER_PAGE * sizeof(clib_bihash_kv_16_8_t);
 
@@ -441,8 +436,8 @@ session_v4_lookup_worker_init(vlib_main_t __clib_unused *vm)
 
 	// sw->session_hash = boost_flat_map_16_8_init(max_entries);
 
-	vt_init(&sw->session_hash);
-	vt_reserve(&sw->session_hash, max_entries);
+	vt_init(&sw->session_map);
+	vt_reserve(&sw->session_map, max_entries);
 
 	vlib_worker_thread_barrier_check();
 
@@ -450,7 +445,7 @@ session_v4_lookup_worker_init(vlib_main_t __clib_unused *vm)
 
 	vlib_worker_thread_barrier_check();
 
-	vec_validate(sw->scratch, 1 << 10);
+	vec_validate(sw->msgs, tc->max_expiration);
 
 	if (!sw->session_pool)
 		return clib_error_return(0, "failed to create session pool");

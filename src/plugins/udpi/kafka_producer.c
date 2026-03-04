@@ -24,20 +24,35 @@ extern vlib_node_registration_t kafka_producer_node;
 producer_thread_t *pt = NULL;
 
 static const char *kafka_perf_config[][2] = {
-	{ "acks",                           "1"         },
-	{ "retries",                        "0"         },
-	{ "linger.ms",                      "5"         },
-	{ "batch.size",                     "1048576"   },
-	{ "queue.buffering.max.kbytes",     "131072"    },
-	{ "compression.type",               "snappy"    },
-	{ "queue.buffering.max.ms",         "5"         },
-	{ "queue.buffering.max.messages",   "1000000"   },
-	{ "socket.keepalive.enable",        "true"      },
-	{ "request.timeout.ms",             "5000"      },
-	{ "message.timeout.ms",             "10000"     },
-	{ "api.version.request",            "true"      },
-	{ NULL, NULL }
+    { "acks",                           "1"         },
+    { "retries",                        "0"         },
+    { "linger.ms",                      "100"       },  /* was 10, match 1s cycle */
+    { "batch.size",                     "1048576"   },
+    { "queue.buffering.max.kbytes",     "131072"    },
+    { "compression.type",               "snappy"    },
+    { "queue.buffering.max.messages",   "1000000"   },
+    { "batch.num.messages",             "10000"     },
+    { "socket.blocking.max.ms",         "50"        },
+    { "socket.keepalive.enable",        "true"      },
+    { "request.timeout.ms",             "5000"      },
+    { "message.timeout.ms",             "10000"     },
+    { "api.version.request",            "true"      },
+    { NULL, NULL }
 };
+
+static void
+dr_msg_cb(rd_kafka_t __clib_unused *rk, const rd_kafka_message_t __clib_unused *msg, void __clib_unused *opaque)
+{
+	// vec_free(msg->payload);   /* rdkafka is done, free the vec */
+	struct rte_ring *release_session_v4_ring = msg->_private;
+
+	const i32 rv = rte_ring_sp_enqueue(release_session_v4_ring, msg->payload);
+
+	if (rv)
+	{
+		clib_warning("failed to enqueue");
+	}
+}
 
 #endif
 
@@ -66,6 +81,8 @@ kafka_setup(producer_thread_t *pt)
 			clib_error("kafka: config %s=%s failed: %s", kafka_perf_config[i][0], kafka_perf_config[i][1], errstr);
 	}
 
+	rd_kafka_conf_set_dr_msg_cb(conf, dr_msg_cb);
+
 	pt->rk = rd_kafka_new(RD_KAFKA_PRODUCER, conf, errstr, sizeof(errstr));
 	if (!pt->rk)
 		clib_error("kafka: failed to create producer: %s", errstr);
@@ -80,40 +97,29 @@ kafka_setup(producer_thread_t *pt)
 static_always_inline u32
 produce_v4_process(producer_thread_t *pt, u32 worker_id)
 {
-	producer_main_t *pm   = &producer_main;
+	producer_main_t *pm = &producer_main;
 	struct rte_ring *acquire_session_v4_ring = pm->pw[worker_id].acquire_session_v4_ring;
 	struct rte_ring *release_session_v4_ring = pm->pw[worker_id].release_session_v4_ring;
 	void *objs[VLIB_FRAME_SIZE];
-	u32 n_vectors = 0;
+	rd_kafka_message_t msgs[VLIB_FRAME_SIZE];
 
 	const u32 n_dequeue = rte_ring_sc_dequeue_burst(acquire_session_v4_ring, objs, VLIB_FRAME_SIZE, NULL);
 
 	for (u32 i = 0; i < n_dequeue; i++)
 	{
-		produce_v4_csv_record(pt->scratch, objs[i]);
-
-		i32 err = rd_kafka_produce(pt->rkt,
-									RD_KAFKA_PARTITION_UA,
-									RD_KAFKA_MSG_F_COPY,    /* rdkafka owns msg now */
-									pt->scratch, vec_len(pt->scratch),
-									NULL, 0, NULL);
-
-		if (PREDICT_FALSE(err))
-		{
-			clib_warning("produce error");
-			if (rd_kafka_last_error() == RD_KAFKA_RESP_ERR__QUEUE_FULL)
-				rd_kafka_poll(pt->rk, 0);
-			continue;
-		}
-
-		n_vectors++;
+		msgs[i].partition = RD_KAFKA_PARTITION_UA;
+		msgs[i].payload = objs[i];
+		msgs[i].len = vec_len(objs[i]);
+		msgs[i].key = NULL;
+		msgs[i].key_len = 0;
+		msgs[i]._private = release_session_v4_ring;
 	}
 
-	u32 n_free;
-	const u32 n_enqueue = rte_ring_sp_enqueue_burst(release_session_v4_ring, objs, n_dequeue, &n_free);
+	u32 n_vectors = rd_kafka_produce_batch(pt->rkt, RD_KAFKA_PARTITION_UA, 0, msgs, (i32) n_dequeue);
+	rd_kafka_poll(pt->rk, 0);
 
-	if (n_enqueue != n_dequeue)
-		clib_warning("leak in session pool v4 memory %u free %u", n_dequeue - n_enqueue, n_free);
+	if (n_vectors != n_dequeue)
+		clib_warning("leak in session pool v4 memory %u", n_dequeue - n_vectors);
 
 	return n_vectors;
 }
@@ -289,5 +295,19 @@ VLIB_REGISTER_NODE (kafka_producer_node) = {
 	.state       = VLIB_NODE_STATE_DISABLED,
 	.vector_size = sizeof (u32),
 };
+
+static clib_error_t *
+kafka_producer_init(vlib_main_t *vm)
+{
+	pt = clib_mem_alloc(sizeof(producer_thread_t));
+	clib_memset(pt, 0, sizeof(producer_thread_t));
+
+	vec_validate(pt->scratch, 1 << 10);
+	kafka_setup(pt);
+
+	return 0;
+}
+
+VLIB_INIT_FUNCTION (kafka_producer_init);
 
 #endif
