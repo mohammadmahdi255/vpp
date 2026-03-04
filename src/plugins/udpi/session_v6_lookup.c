@@ -254,7 +254,7 @@ VLIB_NODE_FN (session_v6_timer_expiration) (vlib_main_t *vm, vlib_node_runtime_t
 		vlib_frame_t __clib_unused *frame)
 {
 	const producer_worker_t *pw = producer_worker;
-	const udpi_time_wheel_config_t *tc = &udpi_config->time_wheel;
+	const udpi_time_wheel_config_t *tc = &udpi_config->ipv6_config.time_wheel;
 	session_v6_lookup_worker_t *sw = session_v6_lookup_worker;
 	tw_timer_wheel_1t_3w_1024sl_ov_t *tw = &sw->time_wheel;
 	ipv6_session_t *session;
@@ -316,7 +316,7 @@ VLIB_NODE_FN (session_v6_timer_expiration_process) (vlib_main_t *vm, vlib_node_r
 	const vlib_thread_main_t *tm = vlib_get_thread_main();
 	const u64 *p = hash_get_mem(tm->thread_registrations_by_name, "workers");
 	const vlib_thread_registration_t *tr = (const vlib_thread_registration_t *) p[0];
-	const udpi_time_wheel_config_t *tc = &udpi_config->time_wheel;
+	const udpi_time_wheel_config_t *tc = &udpi_config->ipv6_config.time_wheel;
 
 	if (tr->count == 0)
 	{
@@ -398,11 +398,11 @@ session_v6_lookup_worker_init(vlib_main_t __clib_unused *vm)
 	session_v6_lookup_worker = clib_mem_alloc(sizeof(session_v6_lookup_worker_t));
 	clib_memset(session_v6_lookup_worker, 0, sizeof(session_v6_lookup_worker_t));
 	// const udpi_session_collection_config_t *sc = &udpi_config->session_collection;
-	const udpi_time_wheel_config_t *tc = &udpi_config->time_wheel;
+	const udpi_time_wheel_config_t *tc = &udpi_config->ipv6_config.time_wheel;
 	session_v6_lookup_worker_t *sw = session_v6_lookup_worker;
 	tw_timer_wheel_1t_3w_1024sl_ov_t *tw = &sw->time_wheel;
 
-	// const u32 max_entries = sc->bihash_capacity * 2; /* forward + reverse */
+	// const u32 max_entries = sc->map_capacity * 2; /* forward + reverse */
 	// const u32 nbuckets = clib_max(max_pow2 (max_entries / BIHASH_KVP_PER_PAGE), 64);
 	// const u64 memory_size = (u64) nbuckets * BIHASH_KVP_PER_PAGE * sizeof(clib_bihash_kv_40_8_t);
 

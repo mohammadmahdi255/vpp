@@ -25,13 +25,12 @@
 #include <vppinfra/tw_timer_1t_3w_1024sl_ov.h>
 #include <vppinfra/vec.h>
 
-#include "boost_flat_map_16_8.h"
+#include "vec.h"
 #include "config.h"
 #include "detunnel/detunnel.h"
 #include "ip_session.h"
+#include "metadata_generator_funcs.h"
 #include "producer.h"
-#include "udpi/metadata_generator_funcs.h"
-#include "vlib/counter.h"
 #include "vppinfra/vec_bootstrap.h"
 
 #define foreach_session_v4_lookup_next	\
@@ -268,23 +267,29 @@ VLIB_NODE_FN (session_v4_timer_expiration) (vlib_main_t *vm, vlib_node_runtime_t
 		vlib_frame_t __clib_unused *frame)
 {
 	const producer_worker_t *pw = producer_worker;
-	const udpi_time_wheel_config_t *tc = &udpi_config->time_wheel;
+	const udpi_time_wheel_config_t *tc = &udpi_config->ipv4_config.time_wheel;
 	session_v4_lookup_main_t *sm = &session_v4_lookup_main;
 	session_v4_lookup_worker_t *sw = session_v4_lookup_worker;
 	tw_timer_wheel_1t_3w_1024sl_ov_t *tw = &sw->time_wheel;
 	ipv4_session_t *session;
-	u32 n_vectors = 0;
+	u32 n_remove = 0;
+	i32 rv;
+	rd_kafka_message_t msg = {
+		.partition = RD_KAFKA_PARTITION_UA,
+		.key = NULL,
+		.key_len = 0,
+		._private = pw->release_session_v4_ring,
+	};
 
 	sw->now = vlib_time_now(vm);
 	tw->expired_timer_handles = tw_timer_expire_timers_vec_1t_3w_1024sl_ov(tw, sw->now, tw->expired_timer_handles);
 	u32 *session_indices = tw->expired_timer_handles;
 
-	const u32 max_size = clib_min(_vec_len(session_indices), tc->max_expiration);
-	i32 rv;
+	const u32 n_expire = clib_min(_vec_len(session_indices), tc->max_expiration);
 
-	for (u32 i = 1; i <= max_size; i++)
+	for (u32 i = 0; i < n_expire; i++)
 	{
-		u32 session_index = vec_elt(session_indices, _vec_len(session_indices) - i);
+		u32 session_index = vec_elt(session_indices, i);
 		session = pool_elt_at_index(sw->session_pool, session_index);
 
 		if (session->end_time - sw->now > tc->resolution)
@@ -313,26 +318,25 @@ VLIB_NODE_FN (session_v4_timer_expiration) (vlib_main_t *vm, vlib_node_runtime_t
 		buffer = produce_v4_csv_record(buffer, session);
 		pool_put_index(sw->session_pool, session_index);
 
-		sw->msgs[n_vectors].partition = RD_KAFKA_PARTITION_UA;
-		sw->msgs[n_vectors].payload = buffer;
-		sw->msgs[n_vectors].len = _vec_len(buffer);
-		sw->msgs[n_vectors].key = NULL;
-		sw->msgs[n_vectors].key_len = 0;
-		sw->msgs[n_vectors]._private = pw->release_session_v4_ring;
+		msg.payload = buffer;
+		msg.len = _vec_len(buffer);
 
-		n_vectors++;
+		vec_add1(sw->msgs, msg);
+
+		n_remove++;
 	}
 
-	u32 n_send = rd_kafka_produce_batch(pt->rkt, RD_KAFKA_PARTITION_UA, 0, sw->msgs, (i32) n_vectors);
+	// clib_warning("total %u expire %u remove %u", _vec_len(session_indices), n_expire, n_remove);
+
+	u32 n_send = rd_kafka_produce_batch(pt->rkt, RD_KAFKA_PARTITION_UA, 0, sw->msgs, _vec_len(sw->msgs));
 	rd_kafka_poll(pt->rk, 0);
 
-	if (n_vectors != n_send)
-		clib_warning("send %u total %u", n_send, n_vectors);
+	vec_fast_delete(sw->msgs, n_send, 0);
+	vec_fast_delete(session_indices, n_expire, 0);
 
-	vlib_increment_simple_counter(&sm->remove_session, vm->thread_index, 0, n_vectors);
+	vlib_increment_simple_counter(&sm->remove_session, vm->thread_index, 0, n_remove);
 
-	vec_dec_len(session_indices, max_size);
-	return n_vectors;
+	return n_remove;
 }
 
 VLIB_NODE_FN (session_v4_timer_expiration_process) (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_frame_t *frame)
@@ -340,7 +344,7 @@ VLIB_NODE_FN (session_v4_timer_expiration_process) (vlib_main_t *vm, vlib_node_r
 	const vlib_thread_main_t *tm = vlib_get_thread_main();
 	const u64 *p = hash_get_mem(tm->thread_registrations_by_name, "workers");
 	const vlib_thread_registration_t *tr = (const vlib_thread_registration_t *) p[0];
-	const udpi_time_wheel_config_t *tc = &udpi_config->time_wheel;
+	const udpi_time_wheel_config_t *tc = &udpi_config->ipv4_config.time_wheel;
 
 	if (tr->count == 0)
 	{
@@ -421,23 +425,13 @@ session_v4_lookup_worker_init(vlib_main_t __clib_unused *vm)
 {
 	session_v4_lookup_worker = clib_mem_alloc(sizeof(session_v4_lookup_worker_t));
 	clib_memset(session_v4_lookup_worker, 0, sizeof(session_v4_lookup_worker_t));
-	const udpi_session_collection_config_t *sc = &udpi_config->session_collection;
-	const udpi_time_wheel_config_t *tc = &udpi_config->time_wheel;
+	const udpi_session_collection_config_t *sc = &udpi_config->ipv4_config.session_collection;
+	const udpi_time_wheel_config_t *tc = &udpi_config->ipv4_config.time_wheel;
 	session_v4_lookup_worker_t *sw = session_v4_lookup_worker;
 	tw_timer_wheel_1t_3w_1024sl_ov_t *tw = &sw->time_wheel;
 
-	const u32 max_entries = max_pow2((u64) sc->bihash_capacity * 2); /* forward + reverse */
-	// const u32 nbuckets = clib_max(max_pow2 (max_entries / BIHASH_KVP_PER_PAGE), 64);
-	// const u64 memory_size = (u64) nbuckets * BIHASH_KVP_PER_PAGE * sizeof(clib_bihash_kv_16_8_t);
-
-	// void *name = format(NULL, "session-v4-table-%u", vlib_get_thread_index());
-	// clib_bihash_init_16_8(&sw->session_hash, name, nbuckets, memory_size);
-	// vec_free(name);
-
-	// sw->session_hash = boost_flat_map_16_8_init(max_entries);
-
 	vt_init(&sw->session_map);
-	vt_reserve(&sw->session_map, max_entries);
+	vt_reserve(&sw->session_map,  max_pow2((u64) sc->map_capacity * 2));
 
 	vlib_worker_thread_barrier_check();
 
@@ -446,6 +440,7 @@ session_v4_lookup_worker_init(vlib_main_t __clib_unused *vm)
 	vlib_worker_thread_barrier_check();
 
 	vec_validate(sw->msgs, tc->max_expiration);
+	vec_reset_length(sw->msgs);
 
 	if (!sw->session_pool)
 		return clib_error_return(0, "failed to create session pool");
@@ -465,9 +460,6 @@ session_v4_lookup_init(vlib_main_t *vm)
 	const vlib_thread_main_t *tm = vlib_get_thread_main();
 	const u64 *p = hash_get_mem(tm->thread_registrations_by_name, "workers");
 	const vlib_thread_registration_t *tr = (vlib_thread_registration_t *) p[0];
-
-	boost_flat_map_16_8_hello_world();
-	// boost_flat_map_session_v6_hello_world();
 
 	if (tr->count == 0)
 		session_v4_lookup_worker_init(vm);

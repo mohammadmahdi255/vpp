@@ -28,7 +28,7 @@
 	u64 application_id;											\
 	u64 session_id;
 
-#define SESSION_TIMEOUT	0
+#define SESSION_TIMEOUT	1
 
 typedef enum
 {

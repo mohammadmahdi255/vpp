@@ -32,7 +32,6 @@ static const char *kafka_perf_config[][2] = {
     { "compression.type",               "snappy"    },
     { "queue.buffering.max.messages",   "1000000"   },
     { "batch.num.messages",             "10000"     },
-    { "socket.blocking.max.ms",         "50"        },
     { "socket.keepalive.enable",        "true"      },
     { "request.timeout.ms",             "5000"      },
     { "message.timeout.ms",             "10000"     },

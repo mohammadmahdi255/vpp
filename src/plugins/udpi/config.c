@@ -20,7 +20,7 @@ unformat_session_collection(unformat_input_t *input, va_list *args)
 
 	while (unformat_check_input(&sub_input) != UNFORMAT_END_OF_INPUT)
 	{
-		if (unformat(&sub_input, "bihash-capacity %u", &sc->bihash_capacity))
+		if (unformat(&sub_input, "map-capacity %u", &sc->map_capacity))
 			continue;
 
 		if (unformat(&sub_input, "pool-capacity %u", &sc->pool_capacity))
@@ -118,6 +118,30 @@ unformat_producer_config(unformat_input_t *input, va_list __clib_unused *args)
 	return 1;
 }
 
+uword
+unformat_ip_config(unformat_input_t *input, va_list *args)
+{
+	udpi_ip_config_t *ic = va_arg(*args, udpi_ip_config_t *);
+
+	unformat_input_t sub_input;
+	if (!unformat(input, "%U", unformat_vlib_cli_sub_input, &sub_input))
+		return 0;
+
+	while (unformat_check_input(&sub_input) != UNFORMAT_END_OF_INPUT)
+	{
+		if (unformat(&sub_input, "session-collection %U", unformat_session_collection, &ic->session_collection))
+			continue;
+
+		if (unformat(&sub_input, "time-wheel %U", unformat_time_wheel, &ic->time_wheel))
+			continue;
+
+		return 0;
+	}
+
+	unformat_free(&sub_input);
+	return 1;
+}
+
 static clib_error_t *
 udpi_config_fn (vlib_main_t __clib_unused *vm, unformat_input_t *input)
 {
@@ -125,16 +149,16 @@ udpi_config_fn (vlib_main_t __clib_unused *vm, unformat_input_t *input)
 
 	while (unformat_check_input(input) != UNFORMAT_END_OF_INPUT)
 	{
-		if (unformat(input, "session-collection %U", unformat_session_collection, &uc->session_collection))
+		if (unformat(input, "ipv4 %U", unformat_ip_config, &uc->ipv4_config))
 			continue;
 
-		if (unformat(input, "time-wheel %U", unformat_time_wheel, &uc->time_wheel))
+		if (unformat(input, "ipv6 %U", unformat_ip_config, &uc->ipv6_config))
 			continue;
 
 		if (unformat(input, "producer %U", unformat_producer_config, &uc->producer))
 			continue;
 
-		return clib_error_return (0, "unknown udpi option: '%U'", format_unformat_error, input);
+		return clib_error_return(0, "unknown udpi option: '%U'", format_unformat_error, input);
 	}
 
 	return 0;
