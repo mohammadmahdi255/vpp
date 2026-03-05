@@ -113,7 +113,6 @@ add_trace(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b,
 static_always_inline void
 process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, u16 *next, u8 is_trace)
 {
-	// const producer_worker_t *pw = producer_worker;
 	const ip4_header_t *ip4 = (void *) b->data + vnet_buffer(b)->l3_hdr_offset;
 	const nat_tcp_udp_header_t *nat_tcp_udp = (void *) b->data + vnet_buffer(b)->l4_hdr_offset;
 	session_v4_lookup_main_t *sm = &session_v4_lookup_main;
@@ -146,7 +145,7 @@ process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, 
 		{
 			pool_put(sw->session_pool, session);
 			next[0] = SESSION_V4_LOOKUP_NEXT_DROP;
-			return;
+			goto trace;
 		}
 
 		// adding reverse flow
@@ -168,7 +167,7 @@ process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, 
 			vt_erase_itr(&sw->session_map, it);
 			pool_put(sw->session_pool, session);
 			next[0] = SESSION_V4_LOOKUP_NEXT_DROP;
-			return;
+			goto trace;
 		}
 
 		session->key = key;
@@ -176,8 +175,6 @@ process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, 
 		session->counter[FLOW_DIRECTION_SERVER_TO_CLIENT] = (vlib_counter_t) {0};
 		session->counter[FLOW_DIRECTION_CLIENT_TO_SERVER] = (vlib_counter_t) {0};
 
-		// if (sf->index % 100000 == 0 && sf->index != 0)
-		// 	clib_warning("session added! %u %u\n", sf->index, sf->direction);
 		tw_timer_start_1t_3w_1024sl_ov(&sw->time_wheel, sf->index, 0, SESSION_TIMEOUT);
 
 		vlib_increment_simple_counter(&sm->create_session, vm->thread_index, 0, 1);
@@ -186,8 +183,6 @@ process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, 
 	{
 		*sf = it.data->val;
 		session = pool_elt_at_index(sw->session_pool, sf->index);
-		// clib_warning("session found! %u %u\n", sf->index, sf->direction);
-
 		vlib_increment_simple_counter(&sm->find_session, vm->thread_index, 0, 1);
 	}
 
@@ -196,6 +191,7 @@ process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, 
 	session->counter[sf->direction].packets++;
 	session->counter[sf->direction].bytes += vlib_buffer_length_in_chain(vm, b);
 
+trace:
 	if (is_trace)
 		add_trace(vm, node, b, &key);
 }
@@ -325,8 +321,6 @@ VLIB_NODE_FN (session_v4_timer_expiration) (vlib_main_t *vm, vlib_node_runtime_t
 
 		n_remove++;
 	}
-
-	// clib_warning("total %u expire %u remove %u", _vec_len(session_indices), n_expire, n_remove);
 
 	u32 n_send = rd_kafka_produce_batch(pt->rkt, RD_KAFKA_PARTITION_UA, 0, sw->msgs, _vec_len(sw->msgs));
 	rd_kafka_poll(pt->rk, 0);
