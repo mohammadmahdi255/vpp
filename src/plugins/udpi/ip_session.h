@@ -88,6 +88,15 @@ typedef struct
 #define FREE_FN(ptr, size)		clib_mem_free(ptr)
 #include "verstable.h"
 
+#define NAME					session_v6_map
+#define KEY_TY					ipv6_flow_key_t
+#define VAL_TY					session_flow_t
+#define HASH_FN(key)			vt_wyhash(&(key), sizeof(KEY_TY))
+#define CMPR_FN(key_1, key_2)	memcmp(&(key_1), &(key_2), sizeof(KEY_TY)) == 0
+#define MALLOC_FN				clib_mem_alloc
+#define FREE_FN(ptr, size)		clib_mem_free(ptr)
+#include "verstable.h"
+
 #if CLIB_DEBUG > 0
 #define always_inline static inline
 #else

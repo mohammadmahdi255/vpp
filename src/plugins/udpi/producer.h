@@ -22,6 +22,7 @@
 typedef struct
 {
 	struct rte_ring *buffer_ring;
+	rd_kafka_message_t *msgs;
 } producer_worker_t;
 
 typedef struct

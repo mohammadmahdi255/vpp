@@ -76,8 +76,6 @@ typedef struct
 	ipv4_session_t *session_pool;
 	session_v4_map session_map;
 	tw_timer_wheel_1t_3w_1024sl_ov_t time_wheel;
-
-	rd_kafka_message_t *msgs;
 } session_v4_lookup_worker_t;
 
 extern __thread session_v4_lookup_worker_t *session_v4_lookup_worker;
@@ -117,17 +115,18 @@ process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, 
 	const nat_tcp_udp_header_t *nat_tcp_udp = (void *) b->data + vnet_buffer(b)->l4_hdr_offset;
 	session_v4_lookup_main_t *sm = &session_v4_lookup_main;
 
-	ipv4_flow_key_t key;
+	session_flow_t *sf = vnet_buffer_get_opaque(b);
+	ipv4_flow_key_t key = {
+		.src_ip = ip4->src_address,
+		.dst_ip = ip4->dst_address,
+		.src_port = nat_tcp_udp->src_port,
+		.dst_port = nat_tcp_udp->dst_port,
+		.l4_protocol = ip4->protocol
+	};
 
-	key.src_ip = ip4->src_address;
-	key.dst_ip = ip4->dst_address;
-	key.src_port = nat_tcp_udp->src_port;
-	key.dst_port = nat_tcp_udp->dst_port;
-	key.l4_protocol = ip4->protocol;
 	next[0] = SESSION_V4_LOOKUP_NEXT_DROP;
 
 	session_v4_lookup_worker_t *sw = session_v4_lookup_worker;
-	session_flow_t *sf = vnet_buffer_get_opaque(b);
 	ipv4_session_t *session;
 
 	session_v4_map_itr it = vt_get(&sw->session_map, key);
@@ -149,14 +148,15 @@ process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, 
 		}
 
 		// adding reverse flow
-		ipv4_flow_key_t rkey;
 		session_flow_t rsf;
+		ipv4_flow_key_t rkey = {
+			.src_ip = ip4->dst_address,
+			.dst_ip = ip4->src_address,
+			.src_port = nat_tcp_udp->dst_port,
+			.dst_port = nat_tcp_udp->src_port,
+			.l4_protocol = ip4->protocol
+		};
 
-		rkey.src_ip = ip4->dst_address;
-		rkey.dst_ip = ip4->src_address;
-		rkey.src_port = nat_tcp_udp->dst_port;
-		rkey.dst_port = nat_tcp_udp->src_port;
-		rkey.l4_protocol = ip4->protocol;
 		rsf.index = sf->index;
 		rsf.direction = FLOW_DIRECTION_SERVER_TO_CLIENT;
 
@@ -295,12 +295,13 @@ VLIB_NODE_FN (session_v4_timer_expiration) (vlib_main_t *vm, vlib_node_runtime_t
 			continue;
 		}
 
-		ipv4_flow_key_t rkey;
-		rkey.src_ip = session->dst_ip;
-		rkey.dst_ip = session->src_ip;
-		rkey.src_port = session->dst_port;
-		rkey.dst_port = session->src_port;
-		rkey.l4_protocol = session->l4_protocol;
+		ipv4_flow_key_t rkey = {
+			.src_ip = session->dst_ip,
+			.dst_ip = session->src_ip,
+			.src_port = session->dst_port,
+			.dst_port = session->src_port,
+			.l4_protocol = session->l4_protocol
+		};
 
 		vt_erase(&sw->session_map, session->key);
 		vt_erase(&sw->session_map, rkey);
@@ -317,15 +318,15 @@ VLIB_NODE_FN (session_v4_timer_expiration) (vlib_main_t *vm, vlib_node_runtime_t
 		msg.payload = buffer;
 		msg.len = _vec_len(buffer);
 
-		vec_add1(sw->msgs, msg);
+		vec_add1(pw->msgs, msg);
 
 		n_remove++;
 	}
 
-	u32 n_send = rd_kafka_produce_batch(pt->rkt, RD_KAFKA_PARTITION_UA, 0, sw->msgs, _vec_len(sw->msgs));
+	u32 n_send = rd_kafka_produce_batch(pt->rkt, RD_KAFKA_PARTITION_UA, 0, pw->msgs, _vec_len(pw->msgs));
 	rd_kafka_poll(pt->rk, 0);
 
-	vec_fast_delete(sw->msgs, n_send, 0);
+	vec_fast_delete(pw->msgs, n_send, 0);
 	vec_fast_delete(session_indices, n_expire, 0);
 
 	vlib_increment_simple_counter(&sm->remove_session, vm->thread_index, 0, n_remove);
@@ -433,9 +434,6 @@ session_v4_lookup_worker_init(vlib_main_t __clib_unused *vm)
 
 	vlib_worker_thread_barrier_check();
 
-	vec_validate_aligned(sw->msgs, tc->max_expiration, CLIB_CACHE_LINE_BYTES);
-	vec_set_len(sw->msgs, 0);
-
 	if (!sw->session_pool)
 		return clib_error_return(0, "failed to create session pool");
 
@@ -443,7 +441,6 @@ session_v4_lookup_worker_init(vlib_main_t __clib_unused *vm)
 	vec_validate_aligned(tw->expired_timer_handles, tc->max_expiration, CLIB_CACHE_LINE_BYTES);
 	vec_set_len(tw->expired_timer_handles, 0);
 
-	ASSERT(_vec_len(sw->msgs) == 0);
 	ASSERT(_vec_len(tw->expired_timer_handles) == 0);
 
 	return 0;

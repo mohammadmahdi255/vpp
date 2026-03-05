@@ -24,7 +24,7 @@ producer_worker_init(vlib_main_t __clib_unused *vm)
 	producer_worker = tr->count == 0 ? pm->pw : &pm->pw[worker_id];
 	producer_worker_t *pw = producer_worker;
 
-	const u32 ring_capacity = max_pow2(2ULL * (tc4->max_expiration + tc6->max_expiration));
+	const u32 ring_capacity = max_pow2(2ULL * clib_max(tc4->max_expiration, tc6->max_expiration));
 	clib_warning("producer ring size %u", ring_capacity);
 
 	void *name = format(NULL, "buffer-ring-%u", vlib_get_thread_index());
@@ -33,6 +33,11 @@ producer_worker_init(vlib_main_t __clib_unused *vm)
 			(i32) rte_socket_id(),
 			RING_F_SP_ENQ | RING_F_SC_DEQ);
 	vec_free(name);
+
+	vec_validate_aligned(pw->msgs, clib_max(tc4->max_expiration, tc6->max_expiration), CLIB_CACHE_LINE_BYTES);
+	vec_set_len(pw->msgs, 0);
+
+	ASSERT(_vec_len(pw->msgs) == 0);
 
 	// void *name;
 	// name = format(NULL, "acquire-session-v4-ring-%u", vlib_get_thread_index());

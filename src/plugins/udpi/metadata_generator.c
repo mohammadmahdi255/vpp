@@ -53,7 +53,7 @@ produce_v4_csv_record(u8 *buffer, ipv4_session_t *session)
 	);
 }
 
-void
+u8 *
 produce_v6_csv_record(u8 *buffer, ipv6_session_t *session)
 {
 	u64 start_s  = (u64) session->start_time;
@@ -63,7 +63,7 @@ produce_v6_csv_record(u8 *buffer, ipv6_session_t *session)
 
 	vec_reset_length(buffer);
 
-	buffer = format(buffer,
+	return format(buffer,
 			"%u,"	/* probe_id */
 			"%llu,"			/* start_time_s */
 			"%llu,"			/* start_time_ms */

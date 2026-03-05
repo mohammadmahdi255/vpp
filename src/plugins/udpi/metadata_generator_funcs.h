@@ -6,7 +6,7 @@
 u8 *
 produce_v4_csv_record(u8 *buffer, ipv4_session_t *session);
 
-void
+u8 *
 produce_v6_csv_record(u8 *buffer, ipv6_session_t *session);
 
 #endif

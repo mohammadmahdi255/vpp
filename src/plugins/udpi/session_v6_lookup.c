@@ -23,9 +23,11 @@
 #include <vppinfra/tw_timer_1t_3w_1024sl_ov.h>
 #include <vppinfra/vec.h>
 
-#include "detunnel/detunnel.h"
+#include "vec.h"
 #include "config.h"
+#include "detunnel/detunnel.h"
 #include "ip_session.h"
+#include "metadata_generator_funcs.h"
 #include "producer.h"
 
 #define foreach_session_v6_lookup_next	\
@@ -59,6 +61,9 @@ typedef struct
 
 typedef struct
 {
+	vlib_simple_counter_main_t create_session;
+	vlib_simple_counter_main_t find_session;
+	vlib_simple_counter_main_t remove_session;
 } session_v6_lookup_main_t;
 
 typedef struct
@@ -66,7 +71,7 @@ typedef struct
 	CLIB_CACHE_LINE_ALIGN_MARK (cacheline);
 	f64 now;
 	ipv6_session_t *session_pool;
-	clib_bihash_40_8_t session_hash;
+	session_v6_map session_map;
 	tw_timer_wheel_1t_3w_1024sl_ov_t time_wheel;
 } session_v6_lookup_worker_t;
 
@@ -104,78 +109,79 @@ add_trace(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b,
 static_always_inline void
 process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, u16 *next, u8 is_trace)
 {
-	const producer_worker_t *pw = producer_worker;
 	const ip6_header_t *ip6 = (void *) b->data + vnet_buffer(b)->l3_hdr_offset;
 	const nat_tcp_udp_header_t *nat_tcp_udp = (void *) b->data + vnet_buffer(b)->l4_hdr_offset;
-	i32 failed;
+	session_v6_lookup_main_t *sm = &session_v6_lookup_main;
 
-	clib_bihash_kv_40_8_t kv;
+	session_flow_t *sf = vnet_buffer_get_opaque(b);
+	ipv6_flow_key_t key = {
+		.src_ip = ip6->src_address,
+		.dst_ip = ip6->dst_address,
+		.src_port = nat_tcp_udp->src_port,
+		.dst_port = nat_tcp_udp->dst_port,
+		.l4_protocol = ip6->protocol
+	};
 
-	ipv6_flow_key_t *key = (void *) &kv.key;
-
-	key->src_ip = ip6->src_address;
-	key->dst_ip = ip6->dst_address;
-	key->src_port = nat_tcp_udp->src_port;
-	key->dst_port = nat_tcp_udp->dst_port;
-	key->l4_protocol = ip6->protocol;
 	next[0] = SESSION_V6_LOOKUP_NEXT_DROP;
 
 	session_v6_lookup_worker_t *sw = session_v6_lookup_worker;
-	session_flow_t *sf = vnet_buffer_get_opaque(b);
 	ipv6_session_t *session;
 
-	if (clib_bihash_search_40_8(&sw->session_hash, &kv, &kv))
+	session_v6_map_itr it = vt_get(&sw->session_map, key);
+
+	if (vt_is_end(it))
 	{
-		const i32 rv = rte_ring_sc_dequeue(pw->buffer_ring, (void **) &session);
-		if (rv)
-			pool_get_aligned(sw->session_pool, session, CLIB_CACHE_LINE_BYTES);
+		pool_get_aligned(sw->session_pool, session, CLIB_CACHE_LINE_BYTES);
 
 		sf->index = session - sw->session_pool;
 		sf->direction = FLOW_DIRECTION_CLIENT_TO_SERVER;
 
-		session->key = *key;
-		session->start_time = sw->now;
-		session->counter[FLOW_DIRECTION_SERVER_TO_CLIENT] = (vlib_counter_t) {0};
-		session->counter[FLOW_DIRECTION_CLIENT_TO_SERVER] = (vlib_counter_t) {0};
-		kv.value = sf->as_u64;
+		it = session_v6_map_insert_raw(&sw->session_map, key, sf, true, true);
 
-		failed = clib_bihash_add_del_40_8(&sw->session_hash, &kv, 1);
-		if (PREDICT_FALSE(failed))
+		if (PREDICT_FALSE(vt_is_end(it)))
 		{
 			pool_put(sw->session_pool, session);
 			next[0] = SESSION_V6_LOOKUP_NEXT_DROP;
-			return;
+			goto trace;
 		}
 
 		// adding reverse flow
-		clib_bihash_kv_40_8_t rkv;
-		ipv6_flow_key_t *rkey = (void *) &rkv.key;
-		session_flow_t *rsf = (void *)&rkv.value;
+		session_flow_t rsf;
+		ipv6_flow_key_t rkey = {
+			.src_ip = ip6->dst_address,
+			.dst_ip = ip6->src_address,
+			.src_port = nat_tcp_udp->dst_port,
+			.dst_port = nat_tcp_udp->src_port,
+			.l4_protocol = ip6->protocol
+		};
 
-		rkey->src_ip = ip6->dst_address;
-		rkey->dst_ip = ip6->src_address;
-		rkey->src_port = nat_tcp_udp->dst_port;
-		rkey->dst_port = nat_tcp_udp->src_port;
-		rkey->l4_protocol = ip6->protocol;
-		rsf->index = sf->index;
-		rsf->direction = FLOW_DIRECTION_SERVER_TO_CLIENT;
+		rsf.index = sf->index;
+		rsf.direction = FLOW_DIRECTION_SERVER_TO_CLIENT;
 
-		failed = clib_bihash_add_del_40_8(&sw->session_hash, &kv, 1);
-		if (PREDICT_FALSE(failed))
+		session_v6_map_itr rit = session_v6_map_insert_raw(&sw->session_map, rkey, &rsf, true, true);
+
+		if (PREDICT_FALSE(vt_is_end(rit)))
 		{
-			clib_bihash_add_del_40_8(&sw->session_hash, &kv, 0);
+			vt_erase_itr(&sw->session_map, it);
 			pool_put(sw->session_pool, session);
 			next[0] = SESSION_V6_LOOKUP_NEXT_DROP;
-			return;
+			goto trace;
 		}
 
-		clib_warning("Timer added! rv %d %u %u\n" , rv, sf->index, sf->direction);
+		session->key = key;
+		session->start_time = sw->now;
+		session->counter[FLOW_DIRECTION_SERVER_TO_CLIENT] = (vlib_counter_t) {0};
+		session->counter[FLOW_DIRECTION_CLIENT_TO_SERVER] = (vlib_counter_t) {0};
+
 		tw_timer_start_1t_3w_1024sl_ov(&sw->time_wheel, sf->index, 0, SESSION_TIMEOUT);
+
+		vlib_increment_simple_counter(&sm->create_session, vm->thread_index, 0, 1);
 	}
 	else
 	{
-		sf->as_u64 = kv.value;
+		*sf = it.data->val;
 		session = pool_elt_at_index(sw->session_pool, sf->index);
+		vlib_increment_simple_counter(&sm->find_session, vm->thread_index, 0, 1);
 	}
 
 	session->end_time = sw->now + SESSION_TIMEOUT;
@@ -183,8 +189,9 @@ process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, 
 	session->counter[sf->direction].packets++;
 	session->counter[sf->direction].bytes += vlib_buffer_length_in_chain(vm, b);
 
+trace:
 	if (is_trace)
-		add_trace(vm, node, b, key);
+		add_trace(vm, node, b, &key);
 }
 
 static_always_inline u64
@@ -255,60 +262,74 @@ VLIB_NODE_FN (session_v6_timer_expiration) (vlib_main_t *vm, vlib_node_runtime_t
 {
 	const producer_worker_t *pw = producer_worker;
 	const udpi_time_wheel_config_t *tc = &udpi_config->ipv6_config.time_wheel;
+	session_v6_lookup_main_t *sm = &session_v6_lookup_main;
 	session_v6_lookup_worker_t *sw = session_v6_lookup_worker;
 	tw_timer_wheel_1t_3w_1024sl_ov_t *tw = &sw->time_wheel;
 	ipv6_session_t *session;
+	u32 n_remove = 0;
+	i32 rv;
+	rd_kafka_message_t msg = {
+		.partition = RD_KAFKA_PARTITION_UA,
+		.key = NULL,
+		.key_len = 0,
+		._private = pw->buffer_ring,
+	};
 
 	sw->now = vlib_time_now(vm);
 	tw->expired_timer_handles = tw_timer_expire_timers_vec_1t_3w_1024sl_ov(tw, sw->now, tw->expired_timer_handles);
 	u32 *session_indices = tw->expired_timer_handles;
 
-	if (session_indices == NULL)
-		return 0;
+	const u32 n_expire = clib_min(_vec_len(session_indices), tc->max_expiration);
 
-	const u32 max_size = clib_min(_vec_len(session_indices), tc->max_expiration);
-
-	for (u32 i = 1; i <= max_size; i++)
+	for (u32 i = 0; i < n_expire; i++)
 	{
-		const i32 rv = rte_ring_sc_dequeue(pw->buffer_ring, (void **) &session);
-		if (!rv)
-			pool_put(sw->session_pool, session);
-
-		u32 session_index = vec_elt(session_indices, _vec_len(session_indices) - i);
+		u32 session_index = vec_elt(session_indices, i);
 		session = pool_elt_at_index(sw->session_pool, session_index);
 
 		if (session->end_time - sw->now > tc->resolution)
 		{
 			const u64 timeout = floor(session->end_time - sw->now);
 			tw_timer_start_1t_3w_1024sl_ov(&sw->time_wheel, session_index, 0, timeout);
+			continue;
 		}
-		else
-		{
-			clib_bihash_kv_40_8_t *kv = (void *) &session->key;
-			clib_bihash_add_del_40_8(&sw->session_hash, kv, 0);
 
-			clib_bihash_kv_40_8_t reverse_kv;
-			ipv6_flow_key_t *key = (ipv6_flow_key_t *) &reverse_kv.key;
+		ipv6_flow_key_t rkey = {
+			.src_ip = session->dst_ip,
+			.dst_ip = session->src_ip,
+			.src_port = session->dst_port,
+			.dst_port = session->src_port,
+			.l4_protocol = session->l4_protocol
+		};
 
-			key->src_ip = session->dst_ip;
-			key->dst_ip = session->src_ip;
-			key->src_port = session->dst_port;
-			key->dst_port = session->src_port;
-			key->l4_protocol = session->l4_protocol;
+		vt_erase(&sw->session_map, session->key);
+		vt_erase(&sw->session_map, rkey);
 
-			clib_bihash_add_del_40_8(&sw->session_hash, &reverse_kv, 0);
+		u8 *buffer = NULL;
 
-			const i32 rv = rte_ring_sp_enqueue(pw->buffer_ring, (void *) session);
-			if (rv)
-			{
-				pool_put_index(sw->session_pool, session_index);
-				clib_warning("failed to enqueeu session");
-			}
-		}
+		rv = rte_ring_sc_dequeue(pw->buffer_ring, (void **) &buffer);
+		if (rv)
+			vec_validate(buffer, 1 << 8);
+
+		buffer = produce_v6_csv_record(buffer, session);
+		pool_put_index(sw->session_pool, session_index);
+
+		msg.payload = buffer;
+		msg.len = _vec_len(buffer);
+
+		vec_add1(pw->msgs, msg);
+
+		n_remove++;
 	}
 
-	vec_dec_len(session_indices, max_size);
-	return max_size;
+	u32 n_send = rd_kafka_produce_batch(pt->rkt, RD_KAFKA_PARTITION_UA, 0, pw->msgs, _vec_len(pw->msgs));
+	rd_kafka_poll(pt->rk, 0);
+
+	vec_fast_delete(pw->msgs, n_send, 0);
+	vec_fast_delete(session_indices, n_expire, 0);
+
+	vlib_increment_simple_counter(&sm->remove_session, vm->thread_index, 0, n_remove);
+
+	return n_remove;
 }
 
 VLIB_NODE_FN (session_v6_timer_expiration_process) (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_frame_t *frame)
@@ -397,29 +418,28 @@ session_v6_lookup_worker_init(vlib_main_t __clib_unused *vm)
 {
 	session_v6_lookup_worker = clib_mem_alloc(sizeof(session_v6_lookup_worker_t));
 	clib_memset(session_v6_lookup_worker, 0, sizeof(session_v6_lookup_worker_t));
-	// const udpi_session_collection_config_t *sc = &udpi_config->session_collection;
+	const udpi_session_collection_config_t *sc = &udpi_config->ipv6_config.session_collection;
 	const udpi_time_wheel_config_t *tc = &udpi_config->ipv6_config.time_wheel;
 	session_v6_lookup_worker_t *sw = session_v6_lookup_worker;
 	tw_timer_wheel_1t_3w_1024sl_ov_t *tw = &sw->time_wheel;
 
-	// const u32 max_entries = sc->map_capacity * 2; /* forward + reverse */
-	// const u32 nbuckets = clib_max(max_pow2 (max_entries / BIHASH_KVP_PER_PAGE), 64);
-	// const u64 memory_size = (u64) nbuckets * BIHASH_KVP_PER_PAGE * sizeof(clib_bihash_kv_40_8_t);
+	vt_init(&sw->session_map);
+	vt_reserve(&sw->session_map,  max_pow2((u64) sc->map_capacity * 2));
 
-	// void *name = format(NULL, "session-v6-table-%u", vlib_get_thread_index());
-	// clib_bihash_init_40_8(&sw->session_hash, name,  nbuckets, memory_size);
-	// vec_free(name);
+	vlib_worker_thread_barrier_check();
 
-	// pool_init_fixed(sw->session_pool, sc->pool_capacity);
+	pool_init_fixed(sw->session_pool, sc->pool_capacity);
+
+	vlib_worker_thread_barrier_check();
 
 	if (!sw->session_pool)
 		return clib_error_return(0, "failed to create session pool");
 
 	tw_timer_wheel_init_1t_3w_1024sl_ov(tw, NULL, tc->resolution, tc->max_expiration);
-	vec_resize_aligned(tw->expired_timer_handles, tc->max_expiration, CLIB_CACHE_LINE_BYTES);
-	vec_reset_length(tw->expired_timer_handles);
+	vec_validate_aligned(tw->expired_timer_handles, tc->max_expiration, CLIB_CACHE_LINE_BYTES);
+	vec_set_len(tw->expired_timer_handles, 0);
 
-	ASSERT(vec_len(tw->expired_timer_handles) == 0);
+	ASSERT(_vec_len(tw->expired_timer_handles) == 0);
 
 	return 0;
 }
@@ -433,6 +453,23 @@ session_v6_lookup_init(vlib_main_t *vm)
 
 	if (tr->count == 0)
 		session_v6_lookup_worker_init(vm);
+
+	session_v6_lookup_main_t *sm = &session_v6_lookup_main;
+
+	sm->create_session.name = "create_session_v6";
+	sm->create_session.stat_segment_name = "/udpi/ipv6/create_session_v6";
+	vlib_validate_simple_counter(&sm->create_session, 0);
+	vlib_zero_simple_counter(&sm->create_session, 0);
+
+	sm->find_session.name = "find_session_v6";
+	sm->find_session.stat_segment_name = "/udpi/ipv6/find_session_v6";
+	vlib_validate_simple_counter(&sm->find_session, 0);
+	vlib_zero_simple_counter(&sm->find_session, 0);
+
+	sm->remove_session.name = "remove_session_v6";
+	sm->remove_session.stat_segment_name = "/udpi/ipv6/remove_session_v6";
+	vlib_validate_simple_counter(&sm->remove_session, 0);
+	vlib_zero_simple_counter(&sm->remove_session, 0);
 
 	return CLIB_MARCH_FN_SELECT(session_v6_lookup_init) (vm);
 }
