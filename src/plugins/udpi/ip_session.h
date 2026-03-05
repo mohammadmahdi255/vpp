@@ -1,7 +1,6 @@
 #ifndef UDPI_IP_SESSION_H_
 #define UDPI_IP_SESSION_H_
 
-#include "vppinfra/string.h"
 #include <vlib/counter_types.h>
 #include <vlib/vlib.h>
 

@@ -126,7 +126,7 @@ process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, 
 
 	if (clib_bihash_search_40_8(&sw->session_hash, &kv, &kv))
 	{
-		const i32 rv = rte_ring_sc_dequeue(pw->release_session_v6_ring, (void **) &session);
+		const i32 rv = rte_ring_sc_dequeue(pw->buffer_ring, (void **) &session);
 		if (rv)
 			pool_get_aligned(sw->session_pool, session, CLIB_CACHE_LINE_BYTES);
 
@@ -270,7 +270,7 @@ VLIB_NODE_FN (session_v6_timer_expiration) (vlib_main_t *vm, vlib_node_runtime_t
 
 	for (u32 i = 1; i <= max_size; i++)
 	{
-		const i32 rv = rte_ring_sc_dequeue(pw->release_session_v6_ring, (void **) &session);
+		const i32 rv = rte_ring_sc_dequeue(pw->buffer_ring, (void **) &session);
 		if (!rv)
 			pool_put(sw->session_pool, session);
 
@@ -298,7 +298,7 @@ VLIB_NODE_FN (session_v6_timer_expiration) (vlib_main_t *vm, vlib_node_runtime_t
 
 			clib_bihash_add_del_40_8(&sw->session_hash, &reverse_kv, 0);
 
-			const i32 rv = rte_ring_sp_enqueue(pw->acquire_session_v6_ring, (void *) session);
+			const i32 rv = rte_ring_sp_enqueue(pw->buffer_ring, (void *) session);
 			if (rv)
 			{
 				pool_put_index(sw->session_pool, session_index);

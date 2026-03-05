@@ -278,7 +278,7 @@ VLIB_NODE_FN (session_v4_timer_expiration) (vlib_main_t *vm, vlib_node_runtime_t
 		.partition = RD_KAFKA_PARTITION_UA,
 		.key = NULL,
 		.key_len = 0,
-		._private = pw->release_session_v4_ring,
+		._private = pw->buffer_ring,
 	};
 
 	sw->now = vlib_time_now(vm);
@@ -311,7 +311,7 @@ VLIB_NODE_FN (session_v4_timer_expiration) (vlib_main_t *vm, vlib_node_runtime_t
 
 		u8 *buffer = NULL;
 
-		rv = rte_ring_sc_dequeue(pw->release_session_v4_ring, (void **) &buffer);
+		rv = rte_ring_sc_dequeue(pw->buffer_ring, (void **) &buffer);
 		if (rv)
 			vec_validate(buffer, 1 << 8);
 
@@ -439,17 +439,18 @@ session_v4_lookup_worker_init(vlib_main_t __clib_unused *vm)
 
 	vlib_worker_thread_barrier_check();
 
-	vec_validate(sw->msgs, tc->max_expiration);
-	vec_reset_length(sw->msgs);
+	vec_validate_aligned(sw->msgs, tc->max_expiration, CLIB_CACHE_LINE_BYTES);
+	vec_set_len(sw->msgs, 0);
 
 	if (!sw->session_pool)
 		return clib_error_return(0, "failed to create session pool");
 
 	tw_timer_wheel_init_1t_3w_1024sl_ov(tw, NULL, tc->resolution, tc->max_expiration);
-	vec_resize_aligned(tw->expired_timer_handles, tc->max_expiration, CLIB_CACHE_LINE_BYTES);
-	vec_reset_length(tw->expired_timer_handles);
+	vec_validate_aligned(tw->expired_timer_handles, tc->max_expiration, CLIB_CACHE_LINE_BYTES);
+	vec_set_len(tw->expired_timer_handles, 0);
 
-	ASSERT(vec_len(tw->expired_timer_handles) == 0);
+	ASSERT(_vec_len(sw->msgs) == 0);
+	ASSERT(_vec_len(tw->expired_timer_handles) == 0);
 
 	return 0;
 }

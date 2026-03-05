@@ -1,5 +1,8 @@
 #include "config.h"
+#include "vppinfra/vec.h"
+#include "vppinfra/vec_bootstrap.h"
 
+#include <sched.h>
 #include <vlib/vlib.h>
 
 #include <vppinfra/clib.h>
@@ -70,44 +73,28 @@ unformat_kafka_config(unformat_input_t *input, va_list __clib_unused *args)
 	if (!unformat(input, "%U", unformat_vlib_cli_sub_input, &sub_input))
 		return 0;
 
-	while (unformat_check_input(&sub_input) != UNFORMAT_END_OF_INPUT)
-	{
-		if (unformat(&sub_input, "broker %s", &kc->broker))
-			continue;
+	vec_validate(kc->names, 10);
+	vec_validate(kc->values, 10);
+	vec_set_len(kc->names, 0);
+	vec_set_len(kc->values, 0);
 
-		if (unformat (&sub_input, "topic %s", &kc->topic))
-			continue;
+	ASSERT(_vec_len(kc->names) == 0);
+	ASSERT(_vec_len(kc->values) == 0);
 
-		if (unformat (&sub_input, "linger-ms %u", &kc->linger_ms))
-			continue;
-
-		if (unformat (&sub_input, "batch-size %u", &kc->batch_size))
-			continue;
-
-		return 0;
-	}
-
-	unformat_free(&sub_input);
-	return 1;
-}
-
-uword
-unformat_producer_config(unformat_input_t *input, va_list __clib_unused *args)
-{
-	udpi_producer_config_t *pc = va_arg(*args, udpi_producer_config_t *);
-
-	unformat_input_t sub_input;
-	if (!unformat(input, "%U", unformat_vlib_cli_sub_input, &sub_input))
-		return 0;
+	void *name = NULL;
+	void *value = NULL;
 
 	while (unformat_check_input(&sub_input) != UNFORMAT_END_OF_INPUT)
 	{
-		if (unformat(&sub_input, "kafka %U", unformat_kafka_config, &pc->kafka))
+		if (unformat(&sub_input, "topic %s", &kc->topic))
 			continue;
 
-		if (unformat(&sub_input, "ring-capacity %u", &pc->ring_capacity))
+		if (unformat(&sub_input, "%s %s", &name, &value))
 		{
-			pc->ring_capacity = max_pow2(pc->ring_capacity);
+			vec_add1(kc->names, name);
+			vec_add1(kc->values, value);
+			name = NULL;
+			value = NULL;
 			continue;
 		}
 
@@ -155,7 +142,7 @@ udpi_config_fn (vlib_main_t __clib_unused *vm, unformat_input_t *input)
 		if (unformat(input, "ipv6 %U", unformat_ip_config, &uc->ipv6_config))
 			continue;
 
-		if (unformat(input, "producer %U", unformat_producer_config, &uc->producer))
+		if (unformat(input, "kafka %U", unformat_kafka_config, &uc->kafka))
 			continue;
 
 		return clib_error_return(0, "unknown udpi option: '%U'", format_unformat_error, input);

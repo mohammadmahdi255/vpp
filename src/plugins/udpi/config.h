@@ -24,23 +24,16 @@ typedef struct
 
 typedef struct
 {
-	void *broker;
 	void *topic;
-	u32 linger_ms;
-	u32 batch_size;
+	void **names;
+	void **values;
 } udpi_kafka_config_t;
-
-typedef struct
-{
-	udpi_kafka_config_t kafka;
-	u32 ring_capacity;
-} udpi_producer_config_t;
 
 typedef struct
 {
 	udpi_ip_config_t ipv4_config;
 	udpi_ip_config_t ipv6_config;
-	udpi_producer_config_t producer;
+	udpi_kafka_config_t kafka;
 } udpi_config_t;
 
 extern const udpi_config_t *udpi_config;
