@@ -21,19 +21,18 @@ link_directories(
 
 add_vpp_plugin(udpi
 	SOURCES
+		boost_flat_map_template.cpp
+		cli.c
 		config.c
 		kafka_producer.c
 		metadata_generator.c
 		plugin.c
 		producer.c
-		session_classifier.c
 		session_v4_lookup.c
 		session_v6_lookup.c
-		boost_flat_map_template.cpp
 
 	MULTIARCH_SOURCES
 		producer.c
-		session_classifier.c
 		session_v4_lookup.c
 		session_v6_lookup.c
 

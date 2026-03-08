@@ -299,9 +299,3 @@ ethernet_detunnel_init(vlib_main_t *vm)
 VLIB_WORKER_INIT_FUNCTION (ethernet_detunnel_worker_init);
 
 VLIB_INIT_FUNCTION (ethernet_detunnel_init);
-
-VNET_FEATURE_INIT (detunnel, static) = {
-	.arc_name = "device-input",
-	.node_name = "ethernet-detunnel",
-	.runs_before = VNET_FEATURES("ethernet-input"),
-};

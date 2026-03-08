@@ -9,8 +9,8 @@
 
 #include "detunnel.h"
 
-#define foreach_l2tp_detunnel_next					    \
-	_(drop_next, DROP, "drop")						    \
+#define foreach_l2tp_detunnel_next						\
+	_(drop_next, DROP, "drop")							\
 	_(ppp_next, PPP_DETUNNEL, "ppp-detunnel")			\
 	_(failed_next, FAILED_DETUNNEL, "failed-detunnel")
 
@@ -257,9 +257,9 @@ l2tp_detunnel_init(vlib_main_t __clib_unused *vm)
 	ldm->counter_if_index = pool_elts(im->sw_interfaces);
 
 #define _(E, n)																\
-	vlib_combined_counter_main_t *cm_##n = &ldm->counters[L2TP_##E];	\
-	cm_##n->name = "l2tp_" #n;											\
-	cm_##n->stat_segment_name = "/detunnel/l2tp/" #n;					\
+	vlib_combined_counter_main_t *cm_##n = &ldm->counters[L2TP_##E];		\
+	cm_##n->name = "l2tp_" #n;												\
+	cm_##n->stat_segment_name = "/detunnel/l2tp/" #n;						\
 	vlib_validate_combined_counter(cm_##n, ldm->counter_if_index);			\
 	vlib_zero_combined_counter(cm_##n, ldm->counter_if_index);
 

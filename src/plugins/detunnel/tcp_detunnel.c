@@ -12,8 +12,8 @@
 
 #include "detunnel.h"
 
-#define foreach_tcp_detunnel_next						\
-	_(session_next, SESSION, "session-classifier")				\
+#define foreach_tcp_detunnel_next									\
+	_(detunnel_output_next, DETUNNEL_OUTPUT, "detunnel-output")		\
 	_(failed_next, FAILED_DETUNNEL, "failed-detunnel")
 
 #define foreach_tcp_port	\
@@ -76,7 +76,7 @@ tcp_to_next(u16 *src_port, u16 *dst_port, u16 *next, u16 len)
 		SIMD_TYPE dst_port_vec = SIMD_LOAD(dst_port + i);
 		SIMD_TYPE failed_mask_vec = (src_port_vec == SIMD_VEC(invalid_port)) & (dst_port_vec == SIMD_VEC(invalid_port));
 
-		SIMD_TYPE result = SIMD_VEC(session_next) |
+		SIMD_TYPE result = SIMD_VEC(detunnel_output_next) |
 				(failed_mask_vec & SIMD_VEC(failed_next));
 
 		SIMD_STORE(result, next + i);
@@ -256,7 +256,7 @@ CLIB_MARCH_FN (tcp_detunnel_init, clib_error_t *, vlib_main_t __clib_unused *vm)
 
 	SIMD_VEC(invalid_port) = SIMD_SPLAT(clib_host_to_net_u16(INVALID_PORT));
 
-	SIMD_VEC(session_next) = SIMD_SPLAT(TCP_NEXT_SESSION);
+	SIMD_VEC(detunnel_output_next) = SIMD_SPLAT(TCP_NEXT_DETUNNEL_OUTPUT);
 	SIMD_VEC(failed_next) = SIMD_SPLAT(TCP_NEXT_FAILED_DETUNNEL);
 
 	return 0;
@@ -279,9 +279,9 @@ tcp_detunnel_init(vlib_main_t *vm)
 	udm->counter_if_index = pool_elts(im->sw_interfaces);
 
 #define _(E, n)																\
-	vlib_combined_counter_main_t *cm_##n = &udm->counters[TCP_##E];	\
-	cm_##n->name = "tcp_" #n;											\
-	cm_##n->stat_segment_name = "/detunnel/tcp/" #n;					\
+	vlib_combined_counter_main_t *cm_##n = &udm->counters[TCP_##E];			\
+	cm_##n->name = "tcp_" #n;												\
+	cm_##n->stat_segment_name = "/detunnel/tcp/" #n;						\
 	vlib_validate_combined_counter(cm_##n, udm->counter_if_index);			\
 	vlib_zero_combined_counter(cm_##n, udm->counter_if_index);
 

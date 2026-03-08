@@ -12,10 +12,10 @@
 
 #include "detunnel.h"
 
-#define foreach_udp_detunnel_next						\
-	_(session_next, SESSION, "session-classifier")		\
-	_(l2tp_next, L2TP_DETUNNEL, "l2tp-detunnel")		\
-	_(gtpu_next, GTPU_DETUNNEL, "gtpu-detunnel")		\
+#define foreach_udp_detunnel_next									\
+	_(detunnel_output_next, DETUNNEL_OUTPUT, "detunnel-output")		\
+	_(l2tp_next, L2TP_DETUNNEL, "l2tp-detunnel")					\
+	_(gtpu_next, GTPU_DETUNNEL, "gtpu-detunnel")					\
 	_(failed_next, FAILED_DETUNNEL, "failed-detunnel")
 
 #define foreach_udp_port	\
@@ -84,7 +84,7 @@ udp_to_next(u16 *src_port, u16 *dst_port, u16 *next, u16 len)
 		SIMD_TYPE gtpu_mask_vec = (src_port_vec == SIMD_VEC(gtpu_port)) | (dst_port_vec == SIMD_VEC(gtpu_port));
 		SIMD_TYPE failed_mask_vec = (src_port_vec == SIMD_VEC(invalid_port)) & (dst_port_vec == SIMD_VEC(invalid_port));
 
-		SIMD_TYPE result = SIMD_VEC(session_next) |
+		SIMD_TYPE result = SIMD_VEC(detunnel_output_next) |
 				(l2tp_mask_vec & SIMD_VEC(l2tp_next)) |
 				(gtpu_mask_vec & SIMD_VEC(gtpu_next)) |
 				(failed_mask_vec & SIMD_VEC(failed_next));
@@ -267,7 +267,7 @@ CLIB_MARCH_FN (udp_detunnel_init, clib_error_t *, vlib_main_t __clib_unused *vm)
 	SIMD_VEC(gtpu_port) = SIMD_SPLAT(clib_host_to_net_u16(GTPU_PORT));
 	SIMD_VEC(invalid_port) = SIMD_SPLAT(clib_host_to_net_u16(INVALID_PORT));
 
-	SIMD_VEC(session_next) = SIMD_SPLAT(UDP_NEXT_SESSION);
+	SIMD_VEC(detunnel_output_next) = SIMD_SPLAT(UDP_NEXT_DETUNNEL_OUTPUT);
 	SIMD_VEC(l2tp_next) = SIMD_SPLAT(UDP_NEXT_L2TP_DETUNNEL);
 	SIMD_VEC(gtpu_next) = SIMD_SPLAT(UDP_NEXT_GTPU_DETUNNEL);
 	SIMD_VEC(failed_next) = SIMD_SPLAT(UDP_NEXT_FAILED_DETUNNEL);
@@ -292,9 +292,9 @@ udp_detunnel_init(vlib_main_t *vm)
 	udm->counter_if_index = pool_elts(im->sw_interfaces);
 
 #define _(E, n)																\
-	vlib_combined_counter_main_t *cm_##n = &udm->counters[UDP_##E];	\
-	cm_##n->name = "udp_" #n;											\
-	cm_##n->stat_segment_name = "/detunnel/udp/" #n;					\
+	vlib_combined_counter_main_t *cm_##n = &udm->counters[UDP_##E];			\
+	cm_##n->name = "udp_" #n;												\
+	cm_##n->stat_segment_name = "/detunnel/udp/" #n;						\
 	vlib_validate_combined_counter(cm_##n, udm->counter_if_index);			\
 	vlib_zero_combined_counter(cm_##n, udm->counter_if_index);
 

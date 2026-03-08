@@ -287,9 +287,9 @@ mpls_detunnel_init(vlib_main_t *vm)
 	mdm->counter_if_index = pool_elts(im->sw_interfaces);
 
 #define _(E, n)																\
-	vlib_combined_counter_main_t *cm_##n = &mdm->counters[MPLS_##E];	\
-	cm_##n->name = "mpls_" #n;											\
-	cm_##n->stat_segment_name = "/detunnel/mpls/" #n;					\
+	vlib_combined_counter_main_t *cm_##n = &mdm->counters[MPLS_##E];		\
+	cm_##n->name = "mpls_" #n;												\
+	cm_##n->stat_segment_name = "/detunnel/mpls/" #n;						\
 	vlib_validate_combined_counter(cm_##n, mdm->counter_if_index);			\
 	vlib_zero_combined_counter(cm_##n, mdm->counter_if_index);
 

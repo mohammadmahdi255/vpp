@@ -350,7 +350,7 @@ gre_detunnel_init(vlib_main_t *vm)
 	gdm->counter_if_index = pool_elts(im->sw_interfaces);
 
 #define _(E, n)																\
-	vlib_combined_counter_main_t *cm_##n = &gdm->counters[GRE_##E];		\
+	vlib_combined_counter_main_t *cm_##n = &gdm->counters[GRE_##E];			\
 	cm_##n->name = "gre_" #n;												\
 	cm_##n->stat_segment_name = "/detunnel/gre/" #n;						\
 	vlib_validate_combined_counter(cm_##n, gdm->counter_if_index);			\

@@ -9,20 +9,35 @@ set int state loop2 up
 clear trace
 trace add pg-input 100
 
+# packet-generator new {		  \
+#   name udp0                 \
+#   limit 49546457546					\
+#   maxframe 25               \
+#   node ethernet-input				\
+#   interface loop0					\
+#   size 100-100						\
+#   worker 1							\
+#   data {							\
+#     IP4: 1.2.3 -> 4.5.6 vlan 1					\
+#     UDP: 192.0.0.0 - 192.200.255.255 -> 10.0.0.0 - 10.200.255.255		\
+#     UDP: 1000 -> 3000						\
+#     length 72							\
+#     incrementing 100						\
+#   }								\
+# }
+
 packet-generator new {		  \
   name udp0                 \
   limit 49546457546					\
   maxframe 25               \
   node ethernet-input				\
   interface loop0					\
-  size 100-100						\
+  size 128-128						\
   worker 1							\
-  data {							\
-    IP4: 1.2.3 -> 4.5.6 vlan 1					\
-    UDP: 192.0.0.0 - 192.200.255.255 -> 10.0.0.0 - 10.200.255.255		\
-    UDP: 1000 -> 3000						\
-    length 72							\
-    incrementing 100						\
+  data { IP6: 1.2.40 -> 3cfd.fed0.b6c8		\
+    UDP: 2001:db01::3 -> 2003:db01::4			\
+    UDP: 3000 - 63040 -> 400	- 599			\
+    incrementing 80					\
   }								\
 }
 
@@ -62,6 +77,8 @@ packet-generator new {		  \
 
 
 set interface detunnel loop0 arc device-input
+set interface udpi loop0 arc detunnel-v6-output node session-v6-lookup
+set interface udpi loop0 arc detunnel-v4-output node session-v4-lookup
 # set interface detunnel loop1 arc device-input
 # set interface detunnel loop2 arc device-input
 

@@ -284,7 +284,7 @@ ppp_detunnel_init(vlib_main_t *vm)
 	pdm->counter_if_index = pool_elts(im->sw_interfaces);
 
 #define _(E, n)																\
-	vlib_combined_counter_main_t *cm_##n = &pdm->counters[PPP_##E];		\
+	vlib_combined_counter_main_t *cm_##n = &pdm->counters[PPP_##E];			\
 	cm_##n->name = "ppp_" #n;												\
 	cm_##n->stat_segment_name = "/detunnel/ppp/" #n;						\
 	vlib_validate_combined_counter(cm_##n, pdm->counter_if_index);			\

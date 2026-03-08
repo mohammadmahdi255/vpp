@@ -13,6 +13,7 @@
 
 #include <vat/vat.h>
 #include <vnet/buffer.h>
+#include <vnet/feature/feature.h>
 #include <vnet/ip/ip4_packet.h>
 #include <vnet/vnet.h>
 
@@ -65,7 +66,6 @@ typedef struct
 typedef struct
 {
 	vlib_simple_counter_main_t create_session;
-	vlib_simple_counter_main_t find_session;
 	vlib_simple_counter_main_t remove_session;
 } session_v4_lookup_main_t;
 
@@ -183,7 +183,6 @@ process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, 
 	{
 		*sf = it.data->val;
 		session = pool_elt_at_index(sw->session_pool, sf->index);
-		vlib_increment_simple_counter(&sm->find_session, vm->thread_index, 0, 1);
 	}
 
 	session->end_time = sw->now + SESSION_TIMEOUT;
@@ -404,6 +403,21 @@ VLIB_REGISTER_NODE (session_v4_timer_expiration_process) = {
 	.type = VLIB_NODE_TYPE_PROCESS,
 };
 
+void session_v4_lookup_counter_validate(u32 sw_idx)
+{
+	session_v4_lookup_main_t *sm = &session_v4_lookup_main;
+
+	sm->create_session.name = "create_session_v4";
+	sm->create_session.stat_segment_name = "/udpi/create_session_v4";
+	vlib_validate_simple_counter(&sm->create_session, sw_idx);
+	vlib_zero_simple_counter(&sm->create_session, sw_idx);
+
+	sm->remove_session.name = "remove_session_v4";
+	sm->remove_session.stat_segment_name = "/udpi/remove_session_v4";
+	vlib_validate_simple_counter(&sm->remove_session, sw_idx);
+	vlib_zero_simple_counter(&sm->remove_session, sw_idx);
+}
+
 #endif
 
 CLIB_MARCH_FN (session_v4_lookup_init, clib_error_t *, vlib_main_t __clib_unused *vm)
@@ -459,17 +473,12 @@ session_v4_lookup_init(vlib_main_t *vm)
 	session_v4_lookup_main_t *sm = &session_v4_lookup_main;
 
 	sm->create_session.name = "create_session_v4";
-	sm->create_session.stat_segment_name = "/udpi/ipv4/create_session_v4";
+	sm->create_session.stat_segment_name = "/udpi/create_session_v4";
 	vlib_validate_simple_counter(&sm->create_session, 0);
 	vlib_zero_simple_counter(&sm->create_session, 0);
 
-	sm->find_session.name = "find_session_v4";
-	sm->find_session.stat_segment_name = "/udpi/ipv4/find_session_v4";
-	vlib_validate_simple_counter(&sm->find_session, 0);
-	vlib_zero_simple_counter(&sm->find_session, 0);
-
 	sm->remove_session.name = "remove_session_v4";
-	sm->remove_session.stat_segment_name = "/udpi/ipv4/remove_session_v4";
+	sm->remove_session.stat_segment_name = "/udpi/remove_session_v4";
 	vlib_validate_simple_counter(&sm->remove_session, 0);
 	vlib_zero_simple_counter(&sm->remove_session, 0);
 
@@ -478,3 +487,8 @@ session_v4_lookup_init(vlib_main_t *vm)
 
 VLIB_WORKER_INIT_FUNCTION (session_v4_lookup_worker_init);
 VLIB_INIT_FUNCTION (session_v4_lookup_init);
+
+VNET_FEATURE_INIT (session_v4_lookup_input, static) = {
+	.arc_name = "detunnel-v4-output",
+	.node_name = "session-v4-lookup",
+};

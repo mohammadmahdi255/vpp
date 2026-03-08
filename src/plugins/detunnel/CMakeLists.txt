@@ -14,6 +14,7 @@ add_vpp_library(detunnel_commons
 add_vpp_plugin(detunnel
 	SOURCES
 		cli.c
+		detunnel_output.c
 		ethernet_detunnel.c
 		failed_detunnel.c
 		gre_detunnel.c
@@ -30,6 +31,7 @@ add_vpp_plugin(detunnel
 		vlan_detunnel.c
 
 	MULTIARCH_SOURCES
+		detunnel_output.c
 		ethernet_detunnel.c
 		failed_detunnel.c
 		gre_detunnel.c
