@@ -28,7 +28,7 @@
 
 #include "vec.h"
 #include "config.h"
-#include "detunnel/detunnel.h"
+#include "detunnel/simd_type.h"
 #include "ip_session.h"
 #include "metadata_generator_funcs.h"
 #include "producer.h"
@@ -45,18 +45,10 @@ enum
 	SESSION_V4_LOOKUP_NEXT_N,
 };
 
-#define _(var, id, name) static SIMD_TYPE DETUNNEL_CONCAT(var, SIMD_TYPE);
+#define _(var, id, name) static simd_u16_t simd_u16(var);
 
 foreach_session_v4_lookup_next
 #undef _
-
-enum
-{
-#define _(id, name) SESSION_V4_LOOKUP_##id,
-	foreach_detunnel_counter
-#undef _
-	SESSION_V4_LOOKUP_COUNTER_N,
-};
 
 typedef struct
 {
@@ -87,13 +79,13 @@ extern vlib_node_registration_t session_v4_timer_expiration_process;
 static_always_inline void
 session_v4_lookup_to_next(u16 *next, u16 len)
 {
-	for (u16 i = 0; i < len; i += SIMD_SIZE)
+	for (u16 i = 0; i < len; i += simd_u16_size)
 	{
-		SIMD_TYPE __clib_unused next_vec = SIMD_LOAD(next + i);
+		simd_u16_t __clib_unused next_vec = simd_u16_load(next + i);
 
-		SIMD_TYPE result = SIMD_VEC(drop_next);
+		simd_u16_t result = simd_u16(drop_next);
 
-		SIMD_STORE(result, next + i);
+		simd_u16_store(result, next + i);
 	}
 }
 
@@ -424,9 +416,9 @@ void session_v4_lookup_counter_validate(u32 sw_idx)
 
 CLIB_MARCH_FN (session_v4_lookup_init, clib_error_t *, vlib_main_t __clib_unused *vm)
 {
-	clib_warning("size: %lu %s", SIMD_SIZE, CLIB_STRING_MACRO(SIMD_TYPE));
+	clib_warning("size: %lu %s", simd_u16_size, CLIB_STRING_MACRO(simd_u16_t));
 
-	SIMD_VEC(drop_next) = SIMD_SPLAT(SESSION_V4_LOOKUP_NEXT_DROP);
+	simd_u16(drop_next) = simd_u16_splat(SESSION_V4_LOOKUP_NEXT_DROP);
 
 	return 0;
 }

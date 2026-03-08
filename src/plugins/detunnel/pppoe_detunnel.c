@@ -23,7 +23,7 @@ enum
 	PPPOE_NEXT_N,
 };
 
-#define _(var, id, name) static SIMD_TYPE DETUNNEL_CONCAT(var, SIMD_TYPE);
+#define _(var, id, name) static simd_u16_t simd_u16(var);
 
 foreach_pppoe_detunnel_next
 #undef _
@@ -59,19 +59,19 @@ extern vlib_node_registration_t pppoe_detunnel;
 static_always_inline void
 pppoe_to_next(u16 *next, u16 len)
 {
-	for (u16 i = 0; i < len; i += SIMD_SIZE)
+	for (u16 i = 0; i < len; i += simd_u16_size)
 	{
-		SIMD_TYPE next_vec = SIMD_LOAD(next + i);
-		SIMD_TYPE ipv4_mask_vec = (next_vec == SIMD_VEC(ipv4_ppp_protocol));
-		SIMD_TYPE ipv6_mask_vec = (next_vec == SIMD_VEC(ipv6_ppp_protocol));
-		SIMD_TYPE failed_mask_vec = (next_vec == SIMD_VEC(invalid_ppp_protocol));
+		simd_u16_t next_vec = simd_u16_load(next + i);
+		simd_u16_t ipv4_mask_vec = (next_vec == simd_u16(ipv4_ppp_protocol));
+		simd_u16_t ipv6_mask_vec = (next_vec == simd_u16(ipv6_ppp_protocol));
+		simd_u16_t failed_mask_vec = (next_vec == simd_u16(invalid_ppp_protocol));
 
-		SIMD_TYPE result = SIMD_VEC(drop_next) |
-				(ipv4_mask_vec & SIMD_VEC(ipv4_next)) |
-				(ipv6_mask_vec & SIMD_VEC(ipv6_next)) |
-				(failed_mask_vec & SIMD_VEC(failed_next));
+		simd_u16_t result = simd_u16(drop_next) |
+				(ipv4_mask_vec & simd_u16(ipv4_next)) |
+				(ipv6_mask_vec & simd_u16(ipv6_next)) |
+				(failed_mask_vec & simd_u16(failed_next));
 
-		SIMD_STORE(result, next + i);
+		simd_u16_store(result, next + i);
 	}
 }
 
@@ -242,12 +242,12 @@ void pppoe_detunnel_counter_validate(u32 sw_if_index)
 
 CLIB_MARCH_FN (pppoe_detunnel_init, clib_error_t *, vlib_main_t __clib_unused *vm)
 {
-	clib_warning("size: %lu %s", SIMD_SIZE, CLIB_STRING_MACRO(SIMD_TYPE));
+	clib_warning("size: %lu", simd_u16_size);
 
-	SIMD_VEC(drop_next) = SIMD_SPLAT(PPPOE_NEXT_DROP);
-	SIMD_VEC(ipv4_next) = SIMD_SPLAT(PPPOE_NEXT_IPV4_DETUNNEL);
-	SIMD_VEC(ipv6_next) = SIMD_SPLAT(PPPOE_NEXT_IPV6_DETUNNEL);
-	SIMD_VEC(failed_next) = SIMD_SPLAT(PPPOE_NEXT_FAILED_DETUNNEL);
+	simd_u16(drop_next) = simd_u16_splat(PPPOE_NEXT_DROP);
+	simd_u16(ipv4_next) = simd_u16_splat(PPPOE_NEXT_IPV4_DETUNNEL);
+	simd_u16(ipv6_next) = simd_u16_splat(PPPOE_NEXT_IPV6_DETUNNEL);
+	simd_u16(failed_next) = simd_u16_splat(PPPOE_NEXT_FAILED_DETUNNEL);
 
 	return 0;
 }

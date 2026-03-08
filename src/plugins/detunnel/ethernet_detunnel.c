@@ -29,7 +29,7 @@ enum
 	ETHERNET_NEXT_N,
 };
 
-#define _(var, id, name) static SIMD_TYPE DETUNNEL_CONCAT(var, SIMD_TYPE);
+#define _(var, id, name) static simd_u16_t simd_u16(var);
 
 foreach_ethernet_detunnel_next
 #undef _
@@ -65,28 +65,28 @@ extern vlib_node_registration_t ethernet_detunnel;
 static_always_inline void
 ethernet_to_next(u16 *next, u16 len)
 {
-	for (u16 i = 0; i < len; i += SIMD_SIZE)
+	for (u16 i = 0; i < len; i += simd_u16_size)
 	{
-		SIMD_TYPE next_vec = SIMD_LOAD(next + i);
-		SIMD_TYPE vlan_mask_vec = (next_vec == SIMD_VEC(vlan_ethertype));
-		SIMD_TYPE ipv4_mask_vec = (next_vec == SIMD_VEC(ipv4_ethertype));
-		SIMD_TYPE ipv6_mask_vec = (next_vec == SIMD_VEC(ipv6_ethertype));
-		SIMD_TYPE mpls_mask_vec = (next_vec == SIMD_VEC(mpls_ethertype));
-		SIMD_TYPE pppoe_mask_vec = (next_vec == SIMD_VEC(pppoe_session_ethertype)) |
-				(next_vec == SIMD_VEC(pppoe_discovery_ethertype));
-		SIMD_TYPE ppp_mask_vec = (next_vec == SIMD_VEC(ppp_ethertype));
-		SIMD_TYPE failed_mask_vec = (next_vec == SIMD_VEC(invalid_ethertype));
+		simd_u16_t next_vec = simd_u16_load(next + i);
+		simd_u16_t vlan_mask_vec = (next_vec == simd_u16(vlan_ethertype));
+		simd_u16_t ipv4_mask_vec = (next_vec == simd_u16(ipv4_ethertype));
+		simd_u16_t ipv6_mask_vec = (next_vec == simd_u16(ipv6_ethertype));
+		simd_u16_t mpls_mask_vec = (next_vec == simd_u16(mpls_ethertype));
+		simd_u16_t pppoe_mask_vec = (next_vec == simd_u16(pppoe_session_ethertype)) |
+				(next_vec == simd_u16(pppoe_discovery_ethertype));
+		simd_u16_t ppp_mask_vec = (next_vec == simd_u16(ppp_ethertype));
+		simd_u16_t failed_mask_vec = (next_vec == simd_u16(invalid_ethertype));
 
-		SIMD_TYPE result = SIMD_VEC(drop_next) |
-				(vlan_mask_vec & SIMD_VEC(vlan_next)) |
-				(ipv4_mask_vec & SIMD_VEC(ipv4_next)) |
-				(ipv6_mask_vec & SIMD_VEC(ipv6_next)) |
-				(mpls_mask_vec & SIMD_VEC(mpls_next)) |
-				(pppoe_mask_vec & SIMD_VEC(pppoe_next)) |
-				(ppp_mask_vec & SIMD_VEC(ppp_next)) |
-				(failed_mask_vec & SIMD_VEC(failed_next));
+		simd_u16_t result = simd_u16(drop_next) |
+				(vlan_mask_vec & simd_u16(vlan_next)) |
+				(ipv4_mask_vec & simd_u16(ipv4_next)) |
+				(ipv6_mask_vec & simd_u16(ipv6_next)) |
+				(mpls_mask_vec & simd_u16(mpls_next)) |
+				(pppoe_mask_vec & simd_u16(pppoe_next)) |
+				(ppp_mask_vec & simd_u16(ppp_next)) |
+				(failed_mask_vec & simd_u16(failed_next));
 
-		SIMD_STORE(result, next + i);
+		simd_u16_store(result, next + i);
 	}
 }
 
@@ -253,16 +253,16 @@ void ethernet_detunnel_counter_validate(u32 sw_if_index)
 
 CLIB_MARCH_FN (ethernet_detunnel_init, clib_error_t *, vlib_main_t __clib_unused *vm)
 {
-	clib_warning("size: %lu %s", SIMD_SIZE, CLIB_STRING_MACRO(SIMD_TYPE));
+	clib_warning("size: %lu", _SIMD_VBITS);
 
-	SIMD_VEC(drop_next) = SIMD_SPLAT(ETHERNET_NEXT_DROP);
-	SIMD_VEC(vlan_next) = SIMD_SPLAT(ETHERNET_NEXT_VLAN_DETUNNEL);
-	SIMD_VEC(ipv4_next) = SIMD_SPLAT(ETHERNET_NEXT_IPV4_DETUNNEL);
-	SIMD_VEC(ipv6_next) = SIMD_SPLAT(ETHERNET_NEXT_IPV6_DETUNNEL);
-	SIMD_VEC(mpls_next) = SIMD_SPLAT(ETHERNET_NEXT_MPLS_DETUNNEL);
-	SIMD_VEC(pppoe_next) = SIMD_SPLAT(ETHERNET_NEXT_PPPOE_DETUNNEL);
-	SIMD_VEC(ppp_next) = SIMD_SPLAT(ETHERNET_NEXT_PPP_DETUNNEL);
-	SIMD_VEC(failed_next) = SIMD_SPLAT(ETHERNET_NEXT_FAILED_DETUNNEL);
+	simd_u16(drop_next) = simd_u16_splat(ETHERNET_NEXT_DROP);
+	simd_u16(vlan_next) = simd_u16_splat(ETHERNET_NEXT_VLAN_DETUNNEL);
+	simd_u16(ipv4_next) = simd_u16_splat(ETHERNET_NEXT_IPV4_DETUNNEL);
+	simd_u16(ipv6_next) = simd_u16_splat(ETHERNET_NEXT_IPV6_DETUNNEL);
+	simd_u16(mpls_next) = simd_u16_splat(ETHERNET_NEXT_MPLS_DETUNNEL);
+	simd_u16(pppoe_next) = simd_u16_splat(ETHERNET_NEXT_PPPOE_DETUNNEL);
+	simd_u16(ppp_next) = simd_u16_splat(ETHERNET_NEXT_PPP_DETUNNEL);
+	simd_u16(failed_next) = simd_u16_splat(ETHERNET_NEXT_FAILED_DETUNNEL);
 
 	return 0;
 }

@@ -20,8 +20,8 @@
     _(failed_next, FAILED_DETUNNEL, "failed-detunnel")
 
 #define foreach_gtpu_protocol	\
-	_(ipv4_version)				\
-	_(ipv6_version)
+	_(ipv4_version, _, _)				\
+	_(ipv6_version, _, _)
 
 #define IPV4_VERSION	0x0040
 #define IPV6_VERSION	0x0060
@@ -34,13 +34,9 @@ enum
 	GTPU_NEXT_N,
 };
 
-#define _(var, id, name) static SIMD_TYPE DETUNNEL_CONCAT(var, SIMD_TYPE);
+#define _(var, id, name) static simd_u16_t simd_u16(var);
 
 foreach_gtpu_detunnel_next
-#undef _
-
-#define _(var) static SIMD_TYPE DETUNNEL_CONCAT(var, SIMD_TYPE);
-
 foreach_gtpu_protocol
 #undef _
 
@@ -74,19 +70,19 @@ extern vlib_node_registration_t gtpu_detunnel;
 static_always_inline void
 gtpu_to_next(u16 *next, u16 len)
 {
-	for (u16 i = 0; i < len; i += SIMD_SIZE)
+	for (u16 i = 0; i < len; i += simd_u16_size)
 	{
-		SIMD_TYPE next_vec = SIMD_LOAD(next + i);
-		SIMD_TYPE ipv4_mask_vec = (next_vec == SIMD_VEC(ipv4_version));
-		SIMD_TYPE ipv6_mask_vec = (next_vec == SIMD_VEC(ipv6_version));
-		SIMD_TYPE failed_mask_vec = (next_vec == SIMD_VEC(invalid_protocol));
+		simd_u16_t next_vec = simd_u16_load(next + i);
+		simd_u16_t ipv4_mask_vec = (next_vec == simd_u16(ipv4_version));
+		simd_u16_t ipv6_mask_vec = (next_vec == simd_u16(ipv6_version));
+		simd_u16_t failed_mask_vec = (next_vec == simd_u16(invalid_protocol));
 
-		SIMD_TYPE result = SIMD_VEC(detunnel_output_next) |
-				(ipv4_mask_vec & SIMD_VEC(ipv4_next)) |
-				(ipv6_mask_vec & SIMD_VEC(ipv6_next)) |
-                (failed_mask_vec & SIMD_VEC(failed_next));
+		simd_u16_t result = simd_u16(detunnel_output_next) |
+				(ipv4_mask_vec & simd_u16(ipv4_next)) |
+				(ipv6_mask_vec & simd_u16(ipv6_next)) |
+                (failed_mask_vec & simd_u16(failed_next));
 
-		SIMD_STORE(result, next + i);
+		simd_u16_store(result, next + i);
 	}
 }
 
@@ -274,15 +270,15 @@ void gtpu_detunnel_counter_validate(u32 sw_if_index)
 
 CLIB_MARCH_FN (gtpu_detunnel_init, clib_error_t *, vlib_main_t __clib_unused *vm)
 {
-	clib_warning("size: %lu %s", SIMD_SIZE, CLIB_STRING_MACRO(SIMD_TYPE));
+	clib_warning("size: %lu", _SIMD_VBITS);
 
-	SIMD_VEC(ipv4_version) = SIMD_SPLAT(IPV4_VERSION);
-	SIMD_VEC(ipv6_version) = SIMD_SPLAT(IPV6_VERSION);
+	simd_u16(ipv4_version) = simd_u16_splat(IPV4_VERSION);
+	simd_u16(ipv6_version) = simd_u16_splat(IPV6_VERSION);
 
-	SIMD_VEC(detunnel_output_next) = SIMD_SPLAT(GTPU_NEXT_DETUNNEL_OUTPUT);
-	SIMD_VEC(ipv4_next) = SIMD_SPLAT(GTPU_NEXT_IPV4_DETUNNEL);
-	SIMD_VEC(ipv6_next) = SIMD_SPLAT(GTPU_NEXT_IPV6_DETUNNEL);
-	SIMD_VEC(failed_next) = SIMD_SPLAT(GTPU_NEXT_FAILED_DETUNNEL);
+	simd_u16(detunnel_output_next) = simd_u16_splat(GTPU_NEXT_DETUNNEL_OUTPUT);
+	simd_u16(ipv4_next) = simd_u16_splat(GTPU_NEXT_IPV4_DETUNNEL);
+	simd_u16(ipv6_next) = simd_u16_splat(GTPU_NEXT_IPV6_DETUNNEL);
+	simd_u16(failed_next) = simd_u16_splat(GTPU_NEXT_FAILED_DETUNNEL);
 
 	return 0;
 }

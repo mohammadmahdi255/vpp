@@ -19,9 +19,9 @@
 	_(failed_next, FAILED_DETUNNEL, "failed-detunnel")
 
 #define foreach_udp_port	\
-	_(l2tp_port)			\
-	_(gtpu_port)			\
-	_(invalid_port)
+	_(l2tp_port, _, _)			\
+	_(gtpu_port, _, _)			\
+	_(invalid_port, _, _)
 
 #define L2TP_PORT		1701
 #define GTPU_PORT		2152
@@ -35,13 +35,9 @@ enum
 	UDP_NEXT_N,
 };
 
-#define _(var, id, name) static SIMD_TYPE DETUNNEL_CONCAT(var, SIMD_TYPE);
+#define _(var, id, name) static simd_u16_t simd_u16(var);
 
 foreach_udp_detunnel_next
-#undef _
-
-#define _(var) static SIMD_TYPE DETUNNEL_CONCAT(var, SIMD_TYPE);
-
 foreach_udp_port
 #undef _
 
@@ -76,20 +72,20 @@ extern vlib_node_registration_t udp_detunnel;
 static_always_inline void
 udp_to_next(u16 *src_port, u16 *dst_port, u16 *next, u16 len)
 {
-	for (u16 i = 0; i < len; i += SIMD_SIZE)
+	for (u16 i = 0; i < len; i += simd_u16_size)
 	{
-		SIMD_TYPE src_port_vec = SIMD_LOAD(src_port + i);
-		SIMD_TYPE dst_port_vec = SIMD_LOAD(dst_port + i);
-		SIMD_TYPE l2tp_mask_vec = (src_port_vec == SIMD_VEC(l2tp_port)) | (dst_port_vec == SIMD_VEC(l2tp_port));
-		SIMD_TYPE gtpu_mask_vec = (src_port_vec == SIMD_VEC(gtpu_port)) | (dst_port_vec == SIMD_VEC(gtpu_port));
-		SIMD_TYPE failed_mask_vec = (src_port_vec == SIMD_VEC(invalid_port)) & (dst_port_vec == SIMD_VEC(invalid_port));
+		simd_u16_t src_port_vec = simd_u16_load(src_port + i);
+		simd_u16_t dst_port_vec = simd_u16_load(dst_port + i);
+		simd_u16_t l2tp_mask_vec = (src_port_vec == simd_u16(l2tp_port)) | (dst_port_vec == simd_u16(l2tp_port));
+		simd_u16_t gtpu_mask_vec = (src_port_vec == simd_u16(gtpu_port)) | (dst_port_vec == simd_u16(gtpu_port));
+		simd_u16_t failed_mask_vec = (src_port_vec == simd_u16(invalid_port)) & (dst_port_vec == simd_u16(invalid_port));
 
-		SIMD_TYPE result = SIMD_VEC(detunnel_output_next) |
-				(l2tp_mask_vec & SIMD_VEC(l2tp_next)) |
-				(gtpu_mask_vec & SIMD_VEC(gtpu_next)) |
-				(failed_mask_vec & SIMD_VEC(failed_next));
+		simd_u16_t result = simd_u16(detunnel_output_next) |
+				(l2tp_mask_vec & simd_u16(l2tp_next)) |
+				(gtpu_mask_vec & simd_u16(gtpu_next)) |
+				(failed_mask_vec & simd_u16(failed_next));
 
-		SIMD_STORE(result, next + i);
+		simd_u16_store(result, next + i);
 	}
 }
 
@@ -261,16 +257,16 @@ void udp_detunnel_counter_validate(u32 sw_if_index)
 
 CLIB_MARCH_FN (udp_detunnel_init, clib_error_t *, vlib_main_t __clib_unused *vm)
 {
-	clib_warning("size: %lu %s", SIMD_SIZE, CLIB_STRING_MACRO(SIMD_TYPE));
+	clib_warning("size: %lu %s", simd_u16_size, CLIB_STRING_MACRO(simd_u16_t));
 
-	SIMD_VEC(l2tp_port) = SIMD_SPLAT(clib_host_to_net_u16(L2TP_PORT));
-	SIMD_VEC(gtpu_port) = SIMD_SPLAT(clib_host_to_net_u16(GTPU_PORT));
-	SIMD_VEC(invalid_port) = SIMD_SPLAT(clib_host_to_net_u16(INVALID_PORT));
+	simd_u16(l2tp_port) = simd_u16_splat(clib_host_to_net_u16(L2TP_PORT));
+	simd_u16(gtpu_port) = simd_u16_splat(clib_host_to_net_u16(GTPU_PORT));
+	simd_u16(invalid_port) = simd_u16_splat(clib_host_to_net_u16(INVALID_PORT));
 
-	SIMD_VEC(detunnel_output_next) = SIMD_SPLAT(UDP_NEXT_DETUNNEL_OUTPUT);
-	SIMD_VEC(l2tp_next) = SIMD_SPLAT(UDP_NEXT_L2TP_DETUNNEL);
-	SIMD_VEC(gtpu_next) = SIMD_SPLAT(UDP_NEXT_GTPU_DETUNNEL);
-	SIMD_VEC(failed_next) = SIMD_SPLAT(UDP_NEXT_FAILED_DETUNNEL);
+	simd_u16(detunnel_output_next) = simd_u16_splat(UDP_NEXT_DETUNNEL_OUTPUT);
+	simd_u16(l2tp_next) = simd_u16_splat(UDP_NEXT_L2TP_DETUNNEL);
+	simd_u16(gtpu_next) = simd_u16_splat(UDP_NEXT_GTPU_DETUNNEL);
+	simd_u16(failed_next) = simd_u16_splat(UDP_NEXT_FAILED_DETUNNEL);
 
 	return 0;
 }

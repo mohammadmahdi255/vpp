@@ -17,7 +17,7 @@
 	_(failed_next, FAILED_DETUNNEL, "failed-detunnel")
 
 #define foreach_tcp_port	\
-	_(invalid_port)
+	_(invalid_port, _, _)
 
 #define INVALID_PORT	0
 
@@ -29,15 +29,12 @@ enum
 	TCP_NEXT_N,
 };
 
-#define _(var, id, name) static SIMD_TYPE DETUNNEL_CONCAT(var, SIMD_TYPE);
+#define _(var, id, name) static simd_u16_t simd_u16(var);
 
 foreach_tcp_detunnel_next
-#undef _
-
-#define _(var) static SIMD_TYPE DETUNNEL_CONCAT(var, SIMD_TYPE);
-
 foreach_tcp_port
 #undef _
+
 
 enum
 {
@@ -70,16 +67,16 @@ extern vlib_node_registration_t tcp_detunnel;
 static_always_inline void
 tcp_to_next(u16 *src_port, u16 *dst_port, u16 *next, u16 len)
 {
-	for (u16 i = 0; i < len; i += SIMD_SIZE)
+	for (u16 i = 0; i < len; i += simd_u16_size)
 	{
-		SIMD_TYPE src_port_vec = SIMD_LOAD(src_port + i);
-		SIMD_TYPE dst_port_vec = SIMD_LOAD(dst_port + i);
-		SIMD_TYPE failed_mask_vec = (src_port_vec == SIMD_VEC(invalid_port)) & (dst_port_vec == SIMD_VEC(invalid_port));
+		simd_u16_t src_port_vec = simd_u16_load(src_port + i);
+		simd_u16_t dst_port_vec = simd_u16_load(dst_port + i);
+		simd_u16_t failed_mask_vec = (src_port_vec == simd_u16(invalid_port)) & (dst_port_vec == simd_u16(invalid_port));
 
-		SIMD_TYPE result = SIMD_VEC(detunnel_output_next) |
-				(failed_mask_vec & SIMD_VEC(failed_next));
+		simd_u16_t result = simd_u16(detunnel_output_next) |
+				(failed_mask_vec & simd_u16(failed_next));
 
-		SIMD_STORE(result, next + i);
+		simd_u16_store(result, next + i);
 	}
 }
 
@@ -252,12 +249,12 @@ void tcp_detunnel_counter_validate(u32 sw_if_index)
 
 CLIB_MARCH_FN (tcp_detunnel_init, clib_error_t *, vlib_main_t __clib_unused *vm)
 {
-	clib_warning("size: %lu %s", SIMD_SIZE, CLIB_STRING_MACRO(SIMD_TYPE));
+	clib_warning("size: %lu %s", simd_u16_size, CLIB_STRING_MACRO(simd_u16_t));
 
-	SIMD_VEC(invalid_port) = SIMD_SPLAT(clib_host_to_net_u16(INVALID_PORT));
+	simd_u16(invalid_port) = simd_u16_splat(clib_host_to_net_u16(INVALID_PORT));
 
-	SIMD_VEC(detunnel_output_next) = SIMD_SPLAT(TCP_NEXT_DETUNNEL_OUTPUT);
-	SIMD_VEC(failed_next) = SIMD_SPLAT(TCP_NEXT_FAILED_DETUNNEL);
+	simd_u16(detunnel_output_next) = simd_u16_splat(TCP_NEXT_DETUNNEL_OUTPUT);
+	simd_u16(failed_next) = simd_u16_splat(TCP_NEXT_FAILED_DETUNNEL);
 
 	return 0;
 }

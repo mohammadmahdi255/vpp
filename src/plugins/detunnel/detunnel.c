@@ -23,32 +23,32 @@ foreach_ppp_protocol
 
 CLIB_MARCH_FN (detunnel_init, clib_error_t *, vlib_main_t __clib_unused *vm)
 {
-	clib_warning("size: %lu %s", SIMD_SIZE, CLIB_STRING_MACRO(SIMD_TYPE));
-	SIMD_VEC(eoip_ethertype) = SIMD_SPLAT(clib_host_to_net_u16(ETHERNET_TYPE_EOIP));
-	SIMD_VEC(vlan_ethertype) = SIMD_SPLAT(clib_host_to_net_u16(ETHERNET_TYPE_VLAN));
-	SIMD_VEC(ipv4_ethertype) = SIMD_SPLAT(clib_host_to_net_u16(ETHERNET_TYPE_IP4));
-	SIMD_VEC(ipv6_ethertype) = SIMD_SPLAT(clib_host_to_net_u16(ETHERNET_TYPE_IP6));
-	SIMD_VEC(mpls_ethertype) = SIMD_SPLAT(clib_host_to_net_u16(ETHERNET_TYPE_MPLS));
-	SIMD_VEC(pppoe_session_ethertype) = SIMD_SPLAT(clib_host_to_net_u16(ETHERNET_TYPE_PPPOE_SESSION));
-	SIMD_VEC(pppoe_discovery_ethertype) = SIMD_SPLAT(clib_host_to_net_u16(ETHERNET_TYPE_PPPOE_DISCOVERY));
-	SIMD_VEC(ppp_ethertype) = SIMD_SPLAT(clib_host_to_net_u16(ETHERNET_TYPE_PPP));
-	SIMD_VEC(invalid_ethertype) = SIMD_SPLAT(clib_host_to_net_u16(ETHERNET_TYPE_INVALID));
+	// clib_warning("size: %lu %s", simd_u16_size, CLIB_STRING_MACRO(simd_u16_t));
+	simd_u16(eoip_ethertype) = simd_u16_splat(clib_host_to_net_u16(ETHERNET_TYPE_EOIP));
+	simd_u16(vlan_ethertype) = simd_u16_splat(clib_host_to_net_u16(ETHERNET_TYPE_VLAN));
+	simd_u16(ipv4_ethertype) = simd_u16_splat(clib_host_to_net_u16(ETHERNET_TYPE_IP4));
+	simd_u16(ipv6_ethertype) = simd_u16_splat(clib_host_to_net_u16(ETHERNET_TYPE_IP6));
+	simd_u16(mpls_ethertype) = simd_u16_splat(clib_host_to_net_u16(ETHERNET_TYPE_MPLS));
+	simd_u16(pppoe_session_ethertype) = simd_u16_splat(clib_host_to_net_u16(ETHERNET_TYPE_PPPOE_SESSION));
+	simd_u16(pppoe_discovery_ethertype) = simd_u16_splat(clib_host_to_net_u16(ETHERNET_TYPE_PPPOE_DISCOVERY));
+	simd_u16(ppp_ethertype) = simd_u16_splat(clib_host_to_net_u16(ETHERNET_TYPE_PPP));
+	simd_u16(invalid_ethertype) = simd_u16_splat(clib_host_to_net_u16(ETHERNET_TYPE_INVALID));
 
-	SIMD_VEC(ipv4_protocol) = SIMD_SPLAT(IP_PROTOCOL_IP_IN_IP);
-	SIMD_VEC(ipv6_protocol) = SIMD_SPLAT(IP_PROTOCOL_IPV6);
-	SIMD_VEC(ipv6_frag_protocol) = SIMD_SPLAT(IP_PROTOCOL_IPV6_FRAGMENTATION);
-	SIMD_VEC(ipv6_route_protocol) = SIMD_SPLAT(IP_PROTOCOL_IPV6_ROUTE);
-	SIMD_VEC(ipv6_dest_protocol) = SIMD_SPLAT(IP_PROTOCOL_IP6_DESTINATION_OPTIONS);
-	SIMD_VEC(ipv6_hop_protocol) = SIMD_SPLAT(IP_PROTOCOL_IP6_HOP_BY_HOP_OPTIONS);
-	SIMD_VEC(ipsec_ah_protocol) = SIMD_SPLAT(IP_PROTOCOL_IPSEC_AH);
-	SIMD_VEC(tcp_protocol) = SIMD_SPLAT(IP_PROTOCOL_TCP);
-	SIMD_VEC(udp_protocol) = SIMD_SPLAT(IP_PROTOCOL_UDP);
-	SIMD_VEC(gre_protocol) = SIMD_SPLAT(IP_PROTOCOL_GRE);
-	SIMD_VEC(invalid_protocol) = SIMD_SPLAT(IP_PROTOCOL_INVALID);
+	simd_u16(ipv4_protocol) = simd_u16_splat(IP_PROTOCOL_IP_IN_IP);
+	simd_u16(ipv6_protocol) = simd_u16_splat(IP_PROTOCOL_IPV6);
+	simd_u16(ipv6_frag_protocol) = simd_u16_splat(IP_PROTOCOL_IPV6_FRAGMENTATION);
+	simd_u16(ipv6_route_protocol) = simd_u16_splat(IP_PROTOCOL_IPV6_ROUTE);
+	simd_u16(ipv6_dest_protocol) = simd_u16_splat(IP_PROTOCOL_IP6_DESTINATION_OPTIONS);
+	simd_u16(ipv6_hop_protocol) = simd_u16_splat(IP_PROTOCOL_IP6_HOP_BY_HOP_OPTIONS);
+	simd_u16(ipsec_ah_protocol) = simd_u16_splat(IP_PROTOCOL_IPSEC_AH);
+	simd_u16(tcp_protocol) = simd_u16_splat(IP_PROTOCOL_TCP);
+	simd_u16(udp_protocol) = simd_u16_splat(IP_PROTOCOL_UDP);
+	simd_u16(gre_protocol) = simd_u16_splat(IP_PROTOCOL_GRE);
+	simd_u16(invalid_protocol) = simd_u16_splat(IP_PROTOCOL_INVALID);
 
-	SIMD_VEC(ipv4_ppp_protocol) = SIMD_SPLAT(clib_host_to_net_u16(PPP_PROTOCOL_ip4));
-	SIMD_VEC(ipv6_ppp_protocol) = SIMD_SPLAT(clib_host_to_net_u16(PPP_PROTOCOL_ip6));
-	SIMD_VEC(invalid_ppp_protocol) = SIMD_SPLAT(clib_host_to_net_u16(PPP_PROTOCOL_INVALID));
+	simd_u16(ipv4_ppp_protocol) = simd_u16_splat(clib_host_to_net_u16(PPP_PROTOCOL_ip4));
+	simd_u16(ipv6_ppp_protocol) = simd_u16_splat(clib_host_to_net_u16(PPP_PROTOCOL_ip6));
+	simd_u16(invalid_ppp_protocol) = simd_u16_splat(clib_host_to_net_u16(PPP_PROTOCOL_INVALID));
 
 	return 0;
 }

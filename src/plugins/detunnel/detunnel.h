@@ -5,34 +5,10 @@
 
 #include <vppinfra/types.h>
 
+#include "simd_type.h"
+
 #define foreach_detunnel_counter	\
 	_(PROCESSED, processed)
-
-#if defined(CLIB_HAVE_VEC512)
-#define SIMD_VEC(name)		name##_u16x32
-#define SIMD_TYPE			u16x32
-#define SIMD_SIZE			32
-#define SIMD_SPLAT			u16x32_splat
-#define SIMD_LOAD			u16x32_load_unaligned
-#define SIMD_STORE			u16x32_store_unaligned
-#elif defined(CLIB_HAVE_VEC256)
-#define SIMD_VEC(name)		name##_u16x16
-#define SIMD_TYPE			u16x16
-#define SIMD_SIZE			16
-#define SIMD_SPLAT			u16x16_splat
-#define SIMD_LOAD			u16x16_load_unaligned
-#define SIMD_STORE			u16x16_store_unaligned
-#elif defined(CLIB_HAVE_VEC128)
-#define SIMD_VEC(name)		name##_u16x8
-#define SIMD_TYPE			u16x8
-#define SIMD_SIZE			8
-#define SIMD_SPLAT			u16x8_splat
-#define SIMD_LOAD			u16x8_load_unaligned
-#define SIMD_STORE			u16x8_store_unaligned
-#endif
-
-#define DETUNNEL_CONCAT2(a, b) a##_##b
-#define DETUNNEL_CONCAT(a, b) DETUNNEL_CONCAT2(a, b)
 
 #define MAX_IF_SIZE	8
 #define ETHERNET_TYPE_INVALID	0x0000
@@ -69,7 +45,7 @@
 	_(ipv6_ppp_protocol)			\
 	_(invalid_ppp_protocol)
 
-#define _(var)	extern SIMD_TYPE DETUNNEL_CONCAT(var, SIMD_TYPE);
+#define _(var)	extern simd_u16_t simd_u16(var);
 
 foreach_ethertype
 foreach_ip_protocol
