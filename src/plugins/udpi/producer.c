@@ -7,7 +7,6 @@
 #include <vppinfra/vec.h>
 
 #include "config.h"
-#include "vppinfra/clib.h"
 
 static clib_error_t *
 producer_worker_init(vlib_main_t __clib_unused *vm)
@@ -39,32 +38,18 @@ producer_worker_init(vlib_main_t __clib_unused *vm)
 
 	ASSERT(_vec_len(pw->msgs) == 0);
 
-	// void *name;
-	// name = format(NULL, "acquire-session-v4-ring-%u", vlib_get_thread_index());
-	// pw->acquire_session_v4_ring = rte_ring_create_elem(name, sizeof(u8 *),
-	// 		pc->ring_capacity,
-	// 		(i32) rte_socket_id(),
-	// 		RING_F_SP_ENQ | RING_F_SC_DEQ);
-	// vec_free(name);
-
-	// clib_warning("ring size: %u\n", rte_ring_get_size(pw->acquire_session_v4_ring));
-
-	// name = format(NULL, "acquire-session-v6-ring-%u", vlib_get_thread_index());
-	// pw->acquire_session_v6_ring = rte_ring_create_elem(name, sizeof(void *),
-	// 		pc->ring_capacity,
-	// 		(i32) rte_socket_id(),
-	// 		RING_F_SP_ENQ | RING_F_SC_DEQ);
-	// vec_free(name);
-
-	// name = format(NULL, "release-session-v6-ring-%u", vlib_get_thread_index());
-	// pw->release_session_v6_ring = rte_ring_create_elem(name, sizeof(void *),
-	// 		pc->ring_capacity,
-	// 		(i32) rte_socket_id(),
-	// 		RING_F_SP_ENQ | RING_F_SC_DEQ);
-	// vec_free(name);
-
 	if (!pw->buffer_ring)
 		return clib_error_return (0, "failed to create rte_ring for thread %u", vlib_get_thread_index());
+
+	for (u32 i = 1; i < ring_capacity; i++)
+	{
+		u8 *buffer = NULL;
+		vec_validate_aligned(buffer, 1 << 8, CLIB_CACHE_LINE_BYTES);
+		const i32 rv = rte_ring_sp_enqueue(pw->buffer_ring, buffer);
+
+		if (PREDICT_FALSE(rv))
+			clib_error("failed to enqueue to ring buffer");
+	}
 
 	return 0;
 }

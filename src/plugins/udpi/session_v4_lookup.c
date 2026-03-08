@@ -305,21 +305,23 @@ VLIB_NODE_FN (session_v4_timer_expiration) (vlib_main_t *vm, vlib_node_runtime_t
 		vt_erase(&sw->session_map, session->key);
 		vt_erase(&sw->session_map, rkey);
 
-		u8 *buffer = NULL;
+		n_remove++;
 
+		u8 *buffer = NULL;
 		rv = rte_ring_sc_dequeue(pw->buffer_ring, (void **) &buffer);
 		if (rv)
-			vec_validate(buffer, 1 << 8);
+		{
+			clib_warning("ring size %u", rte_ring_count(pw->buffer_ring));
+			pool_put_index(sw->session_pool, session_index);
+			continue;
+		}
 
-		buffer = produce_v4_csv_record(buffer, session);
-		pool_put_index(sw->session_pool, session_index);
-
+		buffer = produce_v4_csv_record(vm, session, buffer);
 		msg.payload = buffer;
 		msg.len = _vec_len(buffer);
-
 		vec_add1(pw->msgs, msg);
 
-		n_remove++;
+		pool_put_index(sw->session_pool, session_index);
 	}
 
 	u32 n_send = rd_kafka_produce_batch(pt->rkt, RD_KAFKA_PARTITION_UA, 0, pw->msgs, _vec_len(pw->msgs));

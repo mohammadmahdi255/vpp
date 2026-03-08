@@ -11,43 +11,16 @@
 #include <librdkafka/rdkafka.h>
 
 #include "config.h"
-#include "metadata_generator_funcs.h"
 #include "producer.h"
-#include "vppinfra/vec_bootstrap.h"
-
-#define PRODUCER_POLL_INTERVAL_NS   1000000 /* 1ms between loops            */
 
 extern vlib_node_registration_t kafka_producer_node;
-
-#ifndef CLIB_MARCH_VARIANT
-
-producer_thread_t *pt = NULL;
-
-// static const char *kafka_perf_config[][2] = {
-//     { "acks",                           "1"         },
-//     { "retries",                        "0"         },
-//     { "linger.ms",                      "100"       },  /* was 10, match 1s cycle */
-//     { "batch.size",                     "1048576"   },
-//     { "queue.buffering.max.kbytes",     "131072"    },
-//     { "compression.type",               "snappy"    },
-//     { "queue.buffering.max.messages",   "1000000"   },
-//     { "batch.num.messages",             "10000"     },
-//     { "socket.keepalive.enable",        "true"      },
-//     { "request.timeout.ms",             "5000"      },
-//     { "message.timeout.ms",             "10000"     },
-//     { "api.version.request",            "true"      },
-//     { NULL, NULL }
-// };
-
-#endif
+extern producer_thread_t *pt;
 
 static void
 dr_msg_cb(rd_kafka_t __clib_unused *rk, const rd_kafka_message_t __clib_unused *msg, void __clib_unused *opaque)
 {
-	const i32 rv = rte_ring_sp_enqueue(msg->_private, msg->payload);
-
-	if (PREDICT_FALSE(rv))
-		clib_warning("failed to enqueue");
+	if (PREDICT_FALSE(rte_ring_sp_enqueue(msg->_private, msg->payload)))
+		clib_error("failed to enqueue to ring buffer");
 }
 
 static_always_inline u64
@@ -233,40 +206,34 @@ kafka_setup(producer_thread_t *pt)
 // }
 
 #ifndef CLIB_MARCH_VARIANT
+producer_thread_t *pt = NULL;
 
-// static clib_error_t *
-// producer_show_stats_fn (vlib_main_t *vm, unformat_input_t __clib_unused *input,
-// 						 vlib_cli_command_t __clib_unused *cmd)
-// {
-// 	const producer_main_t *pm = &producer_main;
-// 	const udpi_producer_config_t *pc = &udpi_config->producer;
-// 	const udpi_kafka_config_t *kc = &udpi_config->producer.kafka;
+static clib_error_t *
+producer_show_stats_fn (vlib_main_t *vm, unformat_input_t __clib_unused *input,
+						 vlib_cli_command_t __clib_unused *cmd)
+{
+	const producer_main_t *pm = &producer_main;
+	const udpi_kafka_config_t *kc = &udpi_config->kafka;
 
-// 	const vlib_thread_main_t *tm = vlib_get_thread_main();
-// 	const uword *p = hash_get_mem (tm->thread_registrations_by_name, "workers");
-// 	const vlib_thread_registration_t *tr = (const vlib_thread_registration_t *) p[0];
-// 	const u32 n_workers = tr->count ? tr->count : 1;
+	const vlib_thread_main_t *tm = vlib_get_thread_main();
+	const uword *p = hash_get_mem (tm->thread_registrations_by_name, "workers");
+	const vlib_thread_registration_t *tr = (const vlib_thread_registration_t *) p[0];
+	const u32 n_workers = tr->count ? tr->count : 1;
 
-// 	vlib_cli_output (vm, "broker:      %s", kc->broker);
-// 	vlib_cli_output (vm, "topic:       %s", kc->topic);
+	vlib_cli_output (vm, "topic:       %s", kc->topic);
 
-// 	vlib_cli_output (vm, "\nWorker rings:");
-// 	for (u32 i = 0; i < n_workers; i++)
-// 	{
-// 		vlib_cli_output (vm, "acquire session v4 ring [%u] count=%u", i, rte_ring_count(pm->pw[i].acquire_session_v4_ring));
-// 		vlib_cli_output (vm, "release session v4 ring [%u] count=%u", i, rte_ring_count(pm->pw[i].release_session_v4_ring));
-// 		vlib_cli_output (vm, "acquire session v6 ring [%u] count=%u", i, rte_ring_count(pm->pw[i].acquire_session_v6_ring));
-// 		vlib_cli_output (vm, "release session v6 ring [%u] count=%u", i, rte_ring_count(pm->pw[i].release_session_v6_ring));
-// 	}
+	vlib_cli_output (vm, "\nWorker rings:");
+	for (u32 i = 0; i < n_workers; i++)
+		vlib_cli_output (vm, "buffer ring [%u] count=%u", i, rte_ring_count(pm->pw[i].buffer_ring));
 
-// 	return 0;
-// }
+	return 0;
+}
 
-// VLIB_CLI_COMMAND (producer_show_stats_cmd, static) = {
-// 	.path       = "show producer stats",
-// 	.short_help = "show producer statistics",
-// 	.function   = producer_show_stats_fn,
-// };
+VLIB_CLI_COMMAND (producer_show_stats_cmd, static) = {
+	.path = "show producer stats",
+	.short_help = "show producer statistics",
+	.function = producer_show_stats_fn,
+};
 
 // VLIB_REGISTER_THREAD (producer_thread_reg, static) = {
 // 	.name       = "producers",
@@ -281,8 +248,10 @@ kafka_setup(producer_thread_t *pt)
 // 	.vector_size = sizeof (u32),
 // };
 
+#endif
+
 static clib_error_t *
-kafka_producer_init(vlib_main_t *vm)
+kafka_producer_init(vlib_main_t __clib_unused *vm)
 {
 	pt = clib_mem_alloc(sizeof(producer_thread_t));
 	clib_memset(pt, 0, sizeof(producer_thread_t));
@@ -294,5 +263,3 @@ kafka_producer_init(vlib_main_t *vm)
 }
 
 VLIB_INIT_FUNCTION (kafka_producer_init);
-
-#endif

@@ -17,7 +17,7 @@
 			ip_type dst_ip;										\
 			u16 src_port;										\
 			u16 dst_port;										\
-			u8 l4_protocol;										\
+			u32 l4_protocol;									\
 		};														\
 	};															\
 	f64 start_time;												\
