@@ -110,7 +110,7 @@ process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, 
 
 	session_flow_t sf;
 	session_worker_t *sw = session_worker;
-	session_t *session;
+	session_t *session = NULL;
 
 	session_v4_map_itr it = vt_get(&sw->session_map_v4, key);
 

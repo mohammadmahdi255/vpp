@@ -21,7 +21,7 @@
 		};														\
 	}															\
 
-#define SESSION_TIMEOUT	1
+#define SESSION_TIMEOUT	3
 
 typedef enum
 {

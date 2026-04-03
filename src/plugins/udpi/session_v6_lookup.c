@@ -107,7 +107,7 @@ process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, 
 	next[0] = SESSION_V6_LOOKUP_NEXT_DROP;
 
 	session_worker_t *sw = session_worker;
-	session_t *session;
+	session_t *session = NULL;
 
 	session_v6_map_itr it = vt_get(&sw->session_map_v6, key);
 
