@@ -28,13 +28,17 @@ add_vpp_plugin(udpi
 		metadata_generator.c
 		plugin.c
 		producer.c
+		session.c
 		session_v4_lookup.c
 		session_v6_lookup.c
+		tcp_v4_session.c
 
 	MULTIARCH_SOURCES
 		producer.c
 		session_v4_lookup.c
 		session_v6_lookup.c
+		tcp_v4_session.c
+		session.c
 
 	LINK_FLAGS
 		${DPDK_LDFLAGS}

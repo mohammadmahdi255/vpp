@@ -28,14 +28,14 @@
 
 #include "vec.h"
 #include "config.h"
-#include "detunnel/simd_type.h"
-#include "ip_session.h"
+#include "detunnel/detunnel.h"
+#include "session.h"
 #include "metadata_generator_funcs.h"
 #include "producer.h"
-#include "vppinfra/vec_bootstrap.h"
 
-#define foreach_session_v4_lookup_next	\
-	_(drop_next, DROP, "drop")			\
+#define foreach_session_v4_lookup_next						\
+	_(drop_next, DROP, "drop")								\
+	_(tcp_v4_session_next, TCP_V4_SESSION, "tcp-session")	\
 
 enum
 {
@@ -52,7 +52,7 @@ foreach_session_v4_lookup_next
 
 typedef struct
 {
-	ipv4_flow_key_t key;
+	flow_key_v4_t key;
 } session_v4_lookup_trace_t;
 
 typedef struct
@@ -61,16 +61,6 @@ typedef struct
 	vlib_simple_counter_main_t remove_session;
 } session_v4_lookup_main_t;
 
-typedef struct
-{
-	CLIB_CACHE_LINE_ALIGN_MARK (cacheline);
-	f64 now;
-	ipv4_session_t *session_pool;
-	session_v4_map session_map;
-	tw_timer_wheel_1t_3w_1024sl_ov_t time_wheel;
-} session_v4_lookup_worker_t;
-
-extern __thread session_v4_lookup_worker_t *session_v4_lookup_worker;
 extern session_v4_lookup_main_t session_v4_lookup_main;
 extern vlib_node_registration_t session_v4_lookup;
 extern vlib_node_registration_t session_v4_timer_expiration;
@@ -81,9 +71,12 @@ session_v4_lookup_to_next(u16 *next, u16 len)
 {
 	for (u16 i = 0; i < len; i += simd_u16_size)
 	{
-		simd_u16_t __clib_unused next_vec = simd_u16_load(next + i);
+		simd_u16_t next_vec = simd_u16_load(next + i);
 
-		simd_u16_t result = simd_u16(drop_next);
+		simd_u16_t tcp_session_mask_vec = (next_vec == simd_u16(tcp_protocol));
+
+		simd_u16_t result = simd_u16(drop_next) |
+				(tcp_session_mask_vec & simd_u16(tcp_v4_session_next));
 
 		simd_u16_store(result, next + i);
 	}
@@ -91,7 +84,7 @@ session_v4_lookup_to_next(u16 *next, u16 len)
 
 static_always_inline void
 add_trace(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b,
-		const ipv4_flow_key_t *key)
+		const flow_key_v4_t *key)
 {
 	if (PREDICT_FALSE(b->flags & VLIB_BUFFER_IS_TRACED))
 	{
@@ -107,8 +100,7 @@ process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, 
 	const nat_tcp_udp_header_t *nat_tcp_udp = (void *) b->data + vnet_buffer(b)->l4_hdr_offset;
 	session_v4_lookup_main_t *sm = &session_v4_lookup_main;
 
-	session_flow_t *sf = vnet_buffer_get_opaque(b);
-	ipv4_flow_key_t key = {
+	flow_key_v4_t key = {
 		.src_ip = ip4->src_address,
 		.dst_ip = ip4->dst_address,
 		.src_port = nat_tcp_udp->src_port,
@@ -116,21 +108,20 @@ process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, 
 		.l4_protocol = ip4->protocol
 	};
 
-	next[0] = SESSION_V4_LOOKUP_NEXT_DROP;
+	session_flow_t sf;
+	session_worker_t *sw = session_worker;
+	session_t *session;
 
-	session_v4_lookup_worker_t *sw = session_v4_lookup_worker;
-	ipv4_session_t *session;
-
-	session_v4_map_itr it = vt_get(&sw->session_map, key);
+	session_v4_map_itr it = vt_get(&sw->session_map_v4, key);
 
 	if (vt_is_end(it))
 	{
 		pool_get_aligned(sw->session_pool, session, CLIB_CACHE_LINE_BYTES);
 
-		sf->index = session - sw->session_pool;
-		sf->direction = FLOW_DIRECTION_CLIENT_TO_SERVER;
+		sf.index = session - sw->session_pool;
+		sf.direction = FLOW_DIRECTION_CLIENT_TO_SERVER;
 
-		it = session_v4_map_insert_raw(&sw->session_map, key, sf, true, true);
+		it = session_v4_map_insert_raw(&sw->session_map_v4, key, &sf, true, true);
 
 		if (PREDICT_FALSE(vt_is_end(it)))
 		{
@@ -141,7 +132,7 @@ process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, 
 
 		// adding reverse flow
 		session_flow_t rsf;
-		ipv4_flow_key_t rkey = {
+		flow_key_v4_t rkey = {
 			.src_ip = ip4->dst_address,
 			.dst_ip = ip4->src_address,
 			.src_port = nat_tcp_udp->dst_port,
@@ -149,38 +140,42 @@ process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, 
 			.l4_protocol = ip4->protocol
 		};
 
-		rsf.index = sf->index;
+		rsf.index = sf.index;
 		rsf.direction = FLOW_DIRECTION_SERVER_TO_CLIENT;
 
-		session_v4_map_itr rit = session_v4_map_insert_raw(&sw->session_map, rkey, &rsf, true, true);
+		session_v4_map_itr rit = session_v4_map_insert_raw(&sw->session_map_v4, rkey, &rsf, true, true);
 
 		if (PREDICT_FALSE(vt_is_end(rit)))
 		{
-			vt_erase_itr(&sw->session_map, it);
+			vt_erase_itr(&sw->session_map_v4, it);
 			pool_put(sw->session_pool, session);
 			next[0] = SESSION_V4_LOOKUP_NEXT_DROP;
 			goto trace;
 		}
 
-		session->key = key;
+		session->key_v4 = key;
 		session->start_time = sw->now;
 		session->counter[FLOW_DIRECTION_SERVER_TO_CLIENT] = (vlib_counter_t) {0};
 		session->counter[FLOW_DIRECTION_CLIENT_TO_SERVER] = (vlib_counter_t) {0};
+		session->l7_protocol = 0;
+		session->application_id = 0;
+		session->transport =  NULL;
 
-		tw_timer_start_1t_3w_1024sl_ov(&sw->time_wheel, sf->index, 0, SESSION_TIMEOUT);
+		tw_timer_start_1t_3w_1024sl_ov(&sw->time_wheel_v4, sf.index, 0, SESSION_TIMEOUT);
 
 		vlib_increment_simple_counter(&sm->create_session, vm->thread_index, 0, 1);
 	}
 	else
 	{
-		*sf = it.data->val;
-		session = pool_elt_at_index(sw->session_pool, sf->index);
+		sf = it.data->val;
+		session = pool_elt_at_index(sw->session_pool, sf.index);
 	}
 
 	session->end_time = sw->now + SESSION_TIMEOUT;
+	next[0] = ip4->protocol;
 
-	session->counter[sf->direction].packets++;
-	session->counter[sf->direction].bytes += vlib_buffer_length_in_chain(vm, b);
+	// session->counter[sf->direction].packets++;
+	// session->counter[sf->direction].bytes += b->current_data + vlib_buffer_length_in_chain(vm, b);
 
 trace:
 	if (is_trace)
@@ -196,7 +191,7 @@ session_v4_lookup_inline(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_frame_
 
 	vlib_buffer_t **b = bufs;
 
-	session_v4_lookup_worker_t *sw = session_v4_lookup_worker;
+	session_worker_t *sw = session_worker;
 
 	u32 *from = vlib_frame_vector_args(frame);
 	u32 n_left_from = frame->n_vectors;
@@ -256,9 +251,9 @@ VLIB_NODE_FN (session_v4_timer_expiration) (vlib_main_t *vm, vlib_node_runtime_t
 	const producer_worker_t *pw = producer_worker;
 	const udpi_time_wheel_config_t *tc = &udpi_config->ipv4_config.time_wheel;
 	session_v4_lookup_main_t *sm = &session_v4_lookup_main;
-	session_v4_lookup_worker_t *sw = session_v4_lookup_worker;
-	tw_timer_wheel_1t_3w_1024sl_ov_t *tw = &sw->time_wheel;
-	ipv4_session_t *session;
+	session_worker_t *sw = session_worker;
+	tw_timer_wheel_1t_3w_1024sl_ov_t *tw = &sw->time_wheel_v4;
+	session_t *session;
 	u32 n_remove = 0;
 	i32 rv;
 	rd_kafka_message_t msg = {
@@ -282,20 +277,20 @@ VLIB_NODE_FN (session_v4_timer_expiration) (vlib_main_t *vm, vlib_node_runtime_t
 		if (session->end_time - sw->now > tc->resolution)
 		{
 			const u64 timeout = floor(session->end_time - sw->now);
-			tw_timer_start_1t_3w_1024sl_ov(&sw->time_wheel, session_index, 0, timeout);
+			tw_timer_start_1t_3w_1024sl_ov(&sw->time_wheel_v4, session_index, 0, timeout);
 			continue;
 		}
 
-		ipv4_flow_key_t rkey = {
-			.src_ip = session->dst_ip,
-			.dst_ip = session->src_ip,
+		flow_key_v4_t rkey = {
+			.src_ip = session->dst_ip4,
+			.dst_ip = session->src_ip4,
 			.src_port = session->dst_port,
 			.dst_port = session->src_port,
 			.l4_protocol = session->l4_protocol
 		};
 
-		vt_erase(&sw->session_map, session->key);
-		vt_erase(&sw->session_map, rkey);
+		vt_erase(&sw->session_map_v4, session->key_v4);
+		vt_erase(&sw->session_map_v4, rkey);
 
 		n_remove++;
 
@@ -355,7 +350,6 @@ VLIB_NODE_FN (session_v4_timer_expiration_process) (vlib_main_t *vm, vlib_node_r
 }
 
 #ifndef CLIB_MARCH_VARIANT
-__thread session_v4_lookup_worker_t *session_v4_lookup_worker;
 session_v4_lookup_main_t session_v4_lookup_main;
 
 static u8 *format_session_v4_lookup_trace(u8 *s, va_list *args)
@@ -419,37 +413,7 @@ CLIB_MARCH_FN (session_v4_lookup_init, clib_error_t *, vlib_main_t __clib_unused
 	clib_warning("size: %lu %s", simd_u16_size, CLIB_STRING_MACRO(simd_u16_t));
 
 	simd_u16(drop_next) = simd_u16_splat(SESSION_V4_LOOKUP_NEXT_DROP);
-
-	return 0;
-}
-
-static clib_error_t *
-session_v4_lookup_worker_init(vlib_main_t __clib_unused *vm)
-{
-	session_v4_lookup_worker = clib_mem_alloc(sizeof(session_v4_lookup_worker_t));
-	clib_memset(session_v4_lookup_worker, 0, sizeof(session_v4_lookup_worker_t));
-	const udpi_session_collection_config_t *sc = &udpi_config->ipv4_config.session_collection;
-	const udpi_time_wheel_config_t *tc = &udpi_config->ipv4_config.time_wheel;
-	session_v4_lookup_worker_t *sw = session_v4_lookup_worker;
-	tw_timer_wheel_1t_3w_1024sl_ov_t *tw = &sw->time_wheel;
-
-	vt_init(&sw->session_map);
-	vt_reserve(&sw->session_map,  max_pow2((u64) sc->map_capacity * 2));
-
-	vlib_worker_thread_barrier_check();
-
-	pool_init_fixed(sw->session_pool, sc->pool_capacity);
-
-	vlib_worker_thread_barrier_check();
-
-	if (!sw->session_pool)
-		return clib_error_return(0, "failed to create session pool");
-
-	tw_timer_wheel_init_1t_3w_1024sl_ov(tw, NULL, tc->resolution, tc->max_expiration);
-	vec_validate_aligned(tw->expired_timer_handles, tc->max_expiration, CLIB_CACHE_LINE_BYTES);
-	vec_set_len(tw->expired_timer_handles, 0);
-
-	ASSERT(_vec_len(tw->expired_timer_handles) == 0);
+	simd_u16(tcp_v4_session_next) = simd_u16_splat(SESSION_V4_LOOKUP_NEXT_TCP_V4_SESSION);
 
 	return 0;
 }
@@ -457,13 +421,6 @@ session_v4_lookup_worker_init(vlib_main_t __clib_unused *vm)
 static clib_error_t *
 session_v4_lookup_init(vlib_main_t *vm)
 {
-	const vlib_thread_main_t *tm = vlib_get_thread_main();
-	const u64 *p = hash_get_mem(tm->thread_registrations_by_name, "workers");
-	const vlib_thread_registration_t *tr = (vlib_thread_registration_t *) p[0];
-
-	if (tr->count == 0)
-		session_v4_lookup_worker_init(vm);
-
 	session_v4_lookup_main_t *sm = &session_v4_lookup_main;
 
 	sm->create_session.name = "create_session_v4";
@@ -479,7 +436,6 @@ session_v4_lookup_init(vlib_main_t *vm)
 	return CLIB_MARCH_FN_SELECT(session_v4_lookup_init) (vm);
 }
 
-VLIB_WORKER_INIT_FUNCTION (session_v4_lookup_worker_init);
 VLIB_INIT_FUNCTION (session_v4_lookup_init);
 
 VNET_FEATURE_INIT (session_v4_lookup_input, static) = {

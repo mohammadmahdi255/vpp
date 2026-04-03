@@ -3,7 +3,7 @@
 #include <vnet/ip/ip4_packet.h>
 #include <vnet/vnet.h>
 
-#include "ip_session.h"
+#include "session.h"
 
 static u8 *
 format_session_id(u8 *s, va_list *args)
@@ -26,7 +26,7 @@ format_unix_time(u8 *s, va_list *args)
 }
 
 u8 *
-produce_v4_csv_record(const vlib_main_t* vm, const ipv4_session_t *session, u8 *buffer)
+produce_v4_csv_record(const vlib_main_t* vm, const session_t *session, u8 *buffer)
 {
 	const clib_time_t *ct = &vm->clib_time;
 
@@ -52,15 +52,15 @@ produce_v4_csv_record(const vlib_main_t* vm, const ipv4_session_t *session, u8 *
 			/* probe_id */
 			254,
 			/* session id */
-			format_session_id, &session->key, sizeof(session->key), unix_start,
+			format_session_id, &session->key_v4, sizeof(session->key_v4), unix_start,
 			/* timestamps */
 			format_unix_time, unix_start,
 			format_unix_time, unix_end,
 			/* src */
-			format_ip4_address, &session->src_ip,
+			format_ip4_address, &session->src_ip4,
 			clib_net_to_host_u16(session->src_port),
 			/* dst */
-			format_ip4_address, &session->dst_ip,
+			format_ip4_address, &session->dst_ip4,
 			clib_net_to_host_u16(session->dst_port),
 			/* protocol */
 			session->l4_protocol,
@@ -73,7 +73,7 @@ produce_v4_csv_record(const vlib_main_t* vm, const ipv4_session_t *session, u8 *
 }
 
 u8 *
-produce_v6_csv_record(const vlib_main_t* vm, const ipv6_session_t *session, u8 *buffer)
+produce_v6_csv_record(const vlib_main_t* vm, const session_t *session, u8 *buffer)
 {
 	const clib_time_t *ct = &vm->clib_time;
 
@@ -99,15 +99,15 @@ produce_v6_csv_record(const vlib_main_t* vm, const ipv6_session_t *session, u8 *
 			/* probe_id */
 			254,
 			/* session id */
-			format_session_id, &session->key, sizeof(session->key), unix_start,
+			format_session_id, &session->key_v6, sizeof(session->key_v6), unix_start,
 			/* timestamps */
 			format_unix_time, unix_start,
 			format_unix_time, unix_end,
 			/* src */
-			format_ip6_address, &session->src_ip,
+			format_ip6_address, &session->src_ip6,
 			clib_net_to_host_u16(session->src_port),
 			/* dst */
-			format_ip6_address, &session->dst_ip,
+			format_ip6_address, &session->dst_ip6,
 			clib_net_to_host_u16(session->dst_port),
 			/* protocol */
 			session->l4_protocol,
