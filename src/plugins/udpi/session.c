@@ -21,10 +21,10 @@ session_worker_init(vlib_main_t __clib_unused *vm)
 	tw_timer_wheel_1t_3w_1024sl_ov_t *tw6 = &sw->time_wheel_v6;
 
 	vt_init(&sw->session_map_v4);
-	vt_reserve(&sw->session_map_v4,  max_pow2((u64) sc4->map_capacity * 2));
+	vt_reserve(&sw->session_map_v4,  max_pow2((u64) sc4->map_capacity));
 
 	vt_init(&sw->session_map_v6);
-	vt_reserve(&sw->session_map_v6,  max_pow2((u64) sc6->map_capacity * 2));
+	vt_reserve(&sw->session_map_v6,  max_pow2((u64) sc6->map_capacity));
 
 	tw_timer_wheel_init_1t_3w_1024sl_ov(tw4, NULL, tc->resolution, tc->max_expiration);
 	vec_validate_aligned(tw4->expired_timer_handles, tc->max_expiration, CLIB_CACHE_LINE_BYTES);

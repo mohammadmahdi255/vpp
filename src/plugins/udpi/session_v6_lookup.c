@@ -370,10 +370,15 @@ void session_v6_lookup_counter_validate(u32 sw_idx)
 {
 	session_v6_lookup_main_t *sm = &session_v6_lookup_main;
 
-	sm->create_session.name = "create_session_v4";
-	sm->create_session.stat_segment_name = "/udpi/create_session_v4";
+	sm->create_session.name = "create_session_v6";
+	sm->create_session.stat_segment_name = "/udpi/create_session_v6";
 	vlib_validate_simple_counter(&sm->create_session, sw_idx);
 	vlib_zero_simple_counter(&sm->create_session, sw_idx);
+
+	sm->remove_session.name = "remove_session_v6";
+	sm->remove_session.stat_segment_name = "/udpi/remove_session_v6";
+	vlib_validate_simple_counter(&sm->remove_session, sw_idx);
+	vlib_zero_simple_counter(&sm->remove_session, sw_idx);
 }
 
 #endif
@@ -394,8 +399,8 @@ session_v6_lookup_init(vlib_main_t *vm)
 
 	sm->create_session.name = "create_session_v6";
 	sm->create_session.stat_segment_name = "/udpi/create_session_v6";
-	vlib_validate_simple_counter(&sm->create_session, 4);
-	vlib_zero_simple_counter(&sm->create_session, 4);
+	vlib_validate_simple_counter(&sm->create_session, 0);
+	vlib_zero_simple_counter(&sm->create_session, 0);
 
 	sm->remove_session.name = "remove_session_v6";
 	sm->remove_session.stat_segment_name = "/udpi/remove_session_v6";

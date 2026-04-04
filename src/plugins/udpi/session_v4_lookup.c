@@ -147,10 +147,11 @@ process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, 
 		session->application_id = 0;
 		session->key_v4 = key;
 
-		tw_timer_start_1t_3w_1024sl_ov(&sw->time_wheel_v6, index, 0, SESSION_TIMEOUT);
+		tw_timer_start_1t_3w_1024sl_ov(&sw->time_wheel_v4, index, 0, SESSION_TIMEOUT);
 
 		const u32 sw_idx = vnet_buffer(b)->sw_if_index[VLIB_RX];
 		vlib_increment_simple_counter(&sm->create_session, vm->thread_index, sw_idx, 1);
+		session->end_time = sw->now + SESSION_TIMEOUT;
 	}
 	else
 	{
@@ -161,7 +162,7 @@ process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, 
 	sf->flow_direction = fd;
 	sf->session = session;
 
-	session->end_time = sw->now + SESSION_TIMEOUT;
+	// session->end_time = sw->now + SESSION_TIMEOUT;
 	session->counter[fd].packets++;
 	session->counter[fd].bytes += vlib_buffer_length_in_chain(vm, b);
 
