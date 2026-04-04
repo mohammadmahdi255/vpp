@@ -379,11 +379,6 @@ void session_v4_lookup_counter_validate(u32 sw_idx)
 	sm->create_session.stat_segment_name = "/udpi/create_session_v4";
 	vlib_validate_simple_counter(&sm->create_session, sw_idx);
 	vlib_zero_simple_counter(&sm->create_session, sw_idx);
-
-	sm->remove_session.name = "remove_session_v4";
-	sm->remove_session.stat_segment_name = "/udpi/remove_session_v4";
-	vlib_validate_simple_counter(&sm->remove_session, sw_idx);
-	vlib_zero_simple_counter(&sm->remove_session, sw_idx);
 }
 
 #endif

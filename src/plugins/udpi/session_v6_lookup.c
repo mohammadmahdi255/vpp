@@ -147,6 +147,8 @@ process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, 
 
 		const u32 sw_idx = vnet_buffer(b)->sw_if_index[VLIB_RX];
 		vlib_increment_simple_counter(&sm->create_session, vm->thread_index, sw_idx, 1);
+
+		session->end_time = sw->now + SESSION_TIMEOUT;
 	}
 	else
 	{
@@ -157,7 +159,7 @@ process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, 
 	sf->flow_direction = fd;
 	sf->session = session;
 
-	session->end_time = sw->now + SESSION_TIMEOUT;
+	// session->end_time = sw->now + SESSION_TIMEOUT;
 	session->counter[fd].packets++;
 	session->counter[fd].bytes += vlib_buffer_length_in_chain(vm, b);
 
@@ -374,11 +376,6 @@ void session_v6_lookup_counter_validate(u32 sw_idx)
 	sm->create_session.stat_segment_name = "/udpi/create_session_v6";
 	vlib_validate_simple_counter(&sm->create_session, sw_idx);
 	vlib_zero_simple_counter(&sm->create_session, sw_idx);
-
-	sm->remove_session.name = "remove_session_v6";
-	sm->remove_session.stat_segment_name = "/udpi/remove_session_v6";
-	vlib_validate_simple_counter(&sm->remove_session, sw_idx);
-	vlib_zero_simple_counter(&sm->remove_session, sw_idx);
 }
 
 #endif

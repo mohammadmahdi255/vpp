@@ -7,7 +7,10 @@
 
 #include <vppinfra/clib.h>
 #include <vppinfra/error.h>
+#include <vppinfra/string.h>
 
+extern void session_v4_lookup_counter_validate(u32 sw_if_index);
+extern void session_v6_lookup_counter_validate(u32 sw_if_index);
 
 static clib_error_t *
 set_interface_udpi_command_fn(vlib_main_t __clib_unused *vm, unformat_input_t *input,
@@ -49,6 +52,11 @@ set_interface_udpi_command_fn(vlib_main_t __clib_unused *vm, unformat_input_t *i
 	}
 
 	rv = vnet_feature_enable_disable(arc_name, node_name, sw_if_index, enable, 0, 0);
+
+	if (clib_strcmp(arc_name, "detunnel-v4-output"))
+		session_v4_lookup_counter_validate(sw_if_index);
+	else if (clib_strcmp(arc_name, "detunnel-v6-output"))
+		session_v6_lookup_counter_validate(sw_if_index);
 
 	if (rv)
 		err = clib_error_return(0, "failed to enable deunnel feature on arc %s", arc_name);
