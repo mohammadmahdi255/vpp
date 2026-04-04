@@ -117,20 +117,20 @@ process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, 
 	next[0] = vnet_buffer(b)->ip.save_protocol;
 
 	session_worker_t *sw = session_worker;
-	session_v6_map_itr it = vt_get_or_insert(&sw->session_map_v6, key, NULL);
+	session_v6_map_itr it = vt_get(&sw->session_map_v6, key);
 
-	if (PREDICT_FALSE(vt_is_end(it)))
+	session_t *session = NULL;
+
+	if (vt_is_end(it))
 	{
-		next[0] = SESSION_V6_LOOKUP_NEXT_DROP;
-		goto trace;
-	}
+		pool_get_aligned(sw->session_pool, session, CLIB_CACHE_LINE_BYTES);
+		it = session_v6_map_insert_raw(&sw->session_map_v6, key, &session, true, true);
 
-	session_t *session = it.data->val;
-
-	if (it.data->val == NULL)
-	{
-		pool_get_aligned(sw->session_pool, it.data->val, CLIB_CACHE_LINE_BYTES);
-		session = it.data->val;
+		if (PREDICT_FALSE(vt_is_end(it)))
+		{
+			next[0] = SESSION_V6_LOOKUP_NEXT_DROP;
+			goto trace;
+		}
 
 		u32 index = session - sw->session_pool;
 
@@ -147,14 +147,17 @@ process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, 
 
 		const u32 sw_idx = vnet_buffer(b)->sw_if_index[VLIB_RX];
 		vlib_increment_simple_counter(&sm->create_session, vm->thread_index, sw_idx, 1);
-		session->end_time = sw->now + SESSION_TIMEOUT;
+	}
+	else
+	{
+		session = it.data->val;
 	}
 
 	session_flow_t *sf = vnet_buffer_get_opaque(b);
 	sf->flow_direction = fd;
 	sf->session = session;
 
-	// session->end_time = sw->now + SESSION_TIMEOUT;
+	session->end_time = sw->now + SESSION_TIMEOUT;
 	session->counter[fd].packets++;
 	session->counter[fd].bytes += vlib_buffer_length_in_chain(vm, b);
 

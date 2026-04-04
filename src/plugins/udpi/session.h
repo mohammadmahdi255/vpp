@@ -9,7 +9,7 @@
 #include <vnet/ip/ip4_packet.h>
 #include <vnet/ip/ip6_packet.h>
 
-#define SESSION_TIMEOUT	20
+#define SESSION_TIMEOUT	10
 
 #define reverse_direction(direction)	((direction) ^ 0x1)
 
