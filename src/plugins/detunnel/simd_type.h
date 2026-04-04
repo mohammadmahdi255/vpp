@@ -1,5 +1,3 @@
-
-
 #define _SIMD_LANES_512_u8    64
 #define _SIMD_LANES_512_u16   32
 #define _SIMD_LANES_512_u32   16

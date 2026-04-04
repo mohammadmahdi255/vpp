@@ -93,89 +93,73 @@ add_trace(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b,
 	}
 }
 
+static_always_inline flow_direction_t
+flow_key_v4_direction(const ip4_header_t *ip4, const nat_tcp_udp_header_t *l4)
+{
+	if (l4->src_port != l4->dst_port)
+		return l4->src_port > l4->dst_port;
+
+	return ip4->src_address.as_u32 > ip4->dst_address.as_u32;
+}
+
 static_always_inline void
 process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, u16 *next, u8 is_trace)
 {
 	const ip4_header_t *ip4 = (void *) b->data + vnet_buffer(b)->l3_hdr_offset;
-	const nat_tcp_udp_header_t *nat_tcp_udp = (void *) b->data + vnet_buffer(b)->l4_hdr_offset;
+	const nat_tcp_udp_header_t *l4 = (void *) b->data + vnet_buffer(b)->l4_hdr_offset;
 	session_v4_lookup_main_t *sm = &session_v4_lookup_main;
 
-	flow_key_v4_t key = {
-		.src_ip = ip4->src_address,
-		.dst_ip = ip4->dst_address,
-		.src_port = nat_tcp_udp->src_port,
-		.dst_port = nat_tcp_udp->dst_port,
-		.l4_protocol = ip4->protocol
-	};
+	flow_direction_t fd = flow_key_v4_direction(ip4, l4);
+	flow_direction_t rfd = reverse_direction(fd);
 
-	session_flow_t sf;
+	flow_key_v4_t key;
+    key.l4_protocol = vnet_buffer(b)->ip.save_protocol;
+    key.ip[fd] = ip4->src_address;
+    key.port[fd] = l4->src_port;
+    key.ip[rfd] = ip4->dst_address;
+    key.port[rfd] = l4->dst_port;
+	next[0] = vnet_buffer(b)->ip.save_protocol;
+
 	session_worker_t *sw = session_worker;
-	session_t *session = NULL;
+	session_v4_map_itr it = vt_get_or_insert(&sw->session_map_v4, key, NULL);
 
-	session_v4_map_itr it = vt_get(&sw->session_map_v4, key);
-
-	if (vt_is_end(it))
+	if (PREDICT_FALSE(vt_is_end(it)))
 	{
-		pool_get_aligned(sw->session_pool, session, CLIB_CACHE_LINE_BYTES);
+		next[0] = SESSION_V4_LOOKUP_NEXT_DROP;
+		goto trace;
+	}
 
-		sf.index = session - sw->session_pool;
-		sf.direction = FLOW_DIRECTION_CLIENT_TO_SERVER;
+	session_t *session = it.data->val;
 
-		it = session_v4_map_insert_raw(&sw->session_map_v4, key, &sf, true, true);
+	if (it.data->val == NULL)
+	{
+		pool_get_aligned(sw->session_pool, it.data->val, CLIB_CACHE_LINE_BYTES);
+		session = it.data->val;
 
-		if (PREDICT_FALSE(vt_is_end(it)))
-		{
-			pool_put(sw->session_pool, session);
-			next[0] = SESSION_V4_LOOKUP_NEXT_DROP;
-			goto trace;
-		}
+		u32 index = session - sw->session_pool;
 
-		// adding reverse flow
-		session_flow_t rsf;
-		flow_key_v4_t rkey = {
-			.src_ip = ip4->dst_address,
-			.dst_ip = ip4->src_address,
-			.src_port = nat_tcp_udp->dst_port,
-			.dst_port = nat_tcp_udp->src_port,
-			.l4_protocol = ip4->protocol
-		};
-
-		rsf.index = sf.index;
-		rsf.direction = FLOW_DIRECTION_SERVER_TO_CLIENT;
-
-		session_v4_map_itr rit = session_v4_map_insert_raw(&sw->session_map_v4, rkey, &rsf, true, true);
-
-		if (PREDICT_FALSE(vt_is_end(rit)))
-		{
-			vt_erase_itr(&sw->session_map_v4, it);
-			pool_put(sw->session_pool, session);
-			next[0] = SESSION_V4_LOOKUP_NEXT_DROP;
-			goto trace;
-		}
-
-		session->key_v4 = key;
+		session->flow_direction = fd;
+		session->session_direction = SESSION_DIRECTION_CLIENT_TO_SERVER;
 		session->start_time = sw->now;
-		session->counter[FLOW_DIRECTION_SERVER_TO_CLIENT] = (vlib_counter_t) {0};
-		session->counter[FLOW_DIRECTION_CLIENT_TO_SERVER] = (vlib_counter_t) {0};
+		session->counter[FLOW_DIRECTION_ORIGINAL] = (vlib_counter_t) {0};
+		session->counter[FLOW_DIRECTION_REVERSE] = (vlib_counter_t) {0};
 		session->l7_protocol = 0;
 		session->application_id = 0;
-		session->transport =  NULL;
+		session->key_v4 = key;
 
-		tw_timer_start_1t_3w_1024sl_ov(&sw->time_wheel_v4, sf.index, 0, SESSION_TIMEOUT);
+		tw_timer_start_1t_3w_1024sl_ov(&sw->time_wheel_v6, index, 0, SESSION_TIMEOUT);
 
-		vlib_increment_simple_counter(&sm->create_session, vm->thread_index, 0, 1);
+		const u32 sw_idx = vnet_buffer(b)->sw_if_index[VLIB_RX];
+		vlib_increment_simple_counter(&sm->create_session, vm->thread_index, sw_idx, 1);
 	}
-	else
-	{
-		sf = it.data->val;
-		session = pool_elt_at_index(sw->session_pool, sf.index);
-	}
+
+	session_flow_t *sf = vnet_buffer_get_opaque(b);
+	sf->flow_direction = fd;
+	sf->session = session;
 
 	session->end_time = sw->now + SESSION_TIMEOUT;
-	next[0] = ip4->protocol;
-
-	// session->counter[sf->direction].packets++;
-	// session->counter[sf->direction].bytes += b->current_data + vlib_buffer_length_in_chain(vm, b);
+	session->counter[fd].packets++;
+	session->counter[fd].bytes += vlib_buffer_length_in_chain(vm, b);
 
 trace:
 	if (is_trace)
@@ -281,16 +265,7 @@ VLIB_NODE_FN (session_v4_timer_expiration) (vlib_main_t *vm, vlib_node_runtime_t
 			continue;
 		}
 
-		flow_key_v4_t rkey = {
-			.src_ip = session->dst_ip4,
-			.dst_ip = session->src_ip4,
-			.src_port = session->dst_port,
-			.dst_port = session->src_port,
-			.l4_protocol = session->l4_protocol
-		};
-
 		vt_erase(&sw->session_map_v4, session->key_v4);
-		vt_erase(&sw->session_map_v4, rkey);
 
 		n_remove++;
 
@@ -361,10 +336,10 @@ static u8 *format_session_v4_lookup_trace(u8 *s, va_list *args)
 			"  dst ip   %U\n"
 			"  src port %U\n"
 			"  dst port %U",
-			format_ip4_address, &t->key.src_ip,
-			format_ip4_address, &t->key.dst_ip,
-			format_network_port, t->key.l4_protocol, t->key.src_port,
-			format_network_port, t->key.l4_protocol, t->key.dst_port);
+			format_ip4_address, &t->key.ip[FLOW_DIRECTION_ORIGINAL],
+			format_ip4_address, &t->key.ip[FLOW_DIRECTION_REVERSE],
+			format_network_port, t->key.l4_protocol, t->key.port[FLOW_DIRECTION_ORIGINAL],
+			format_network_port, t->key.l4_protocol, t->key.port[FLOW_DIRECTION_REVERSE]);
 }
 
 VLIB_REGISTER_NODE (session_v4_lookup) = {

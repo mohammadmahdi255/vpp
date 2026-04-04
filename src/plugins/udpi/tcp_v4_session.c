@@ -101,87 +101,6 @@ process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, 
 {
 	next[0] = tcp_v4_session_NEXT_DROP;
 	return;
-	const ip4_header_t *ip4 = (void *) b->data + vnet_buffer(b)->l3_hdr_offset;
-	const nat_tcp_udp_header_t *nat_tcp_udp = (void *) b->data + vnet_buffer(b)->l4_hdr_offset;
-	tcp_v4_session_main_t *sm = &tcp_v4_session_main;
-
-	session_flow_t *sf = vnet_buffer_get_opaque(b);
-	flow_key_v4_t key = {
-		.src_ip = ip4->src_address,
-		.dst_ip = ip4->dst_address,
-		.src_port = nat_tcp_udp->src_port,
-		.dst_port = nat_tcp_udp->dst_port,
-		.l4_protocol = ip4->protocol
-	};
-
-	tcp_v4_session_worker_t *sw = tcp_v4_session_worker;
-	session_t *session;
-
-	session_v4_map_itr it = vt_get(&sw->session_map, key);
-
-	if (vt_is_end(it))
-	{
-		pool_get_aligned(sw->session_pool, session, CLIB_CACHE_LINE_BYTES);
-
-		sf->index = session - sw->session_pool;
-		sf->direction = FLOW_DIRECTION_CLIENT_TO_SERVER;
-
-		it = session_v4_map_insert_raw(&sw->session_map, key, sf, true, true);
-
-		if (PREDICT_FALSE(vt_is_end(it)))
-		{
-			pool_put(sw->session_pool, session);
-			next[0] = tcp_v4_session_NEXT_DROP;
-			goto trace;
-		}
-
-		// adding reverse flow
-		session_flow_t rsf;
-		flow_key_v4_t rkey = {
-			.src_ip = ip4->dst_address,
-			.dst_ip = ip4->src_address,
-			.src_port = nat_tcp_udp->dst_port,
-			.dst_port = nat_tcp_udp->src_port,
-			.l4_protocol = ip4->protocol
-		};
-
-		rsf.index = sf->index;
-		rsf.direction = FLOW_DIRECTION_SERVER_TO_CLIENT;
-
-		session_v4_map_itr rit = session_v4_map_insert_raw(&sw->session_map, rkey, &rsf, true, true);
-
-		if (PREDICT_FALSE(vt_is_end(rit)))
-		{
-			vt_erase_itr(&sw->session_map, it);
-			pool_put(sw->session_pool, session);
-			next[0] = tcp_v4_session_NEXT_DROP;
-			goto trace;
-		}
-
-		session->key_v4 = key;
-		session->start_time = sw->now;
-		session->counter[FLOW_DIRECTION_SERVER_TO_CLIENT] = (vlib_counter_t) {0};
-		session->counter[FLOW_DIRECTION_CLIENT_TO_SERVER] = (vlib_counter_t) {0};
-
-		tw_timer_start_1t_3w_1024sl_ov(&sw->time_wheel, sf->index, 0, SESSION_TIMEOUT);
-
-		vlib_increment_simple_counter(&sm->create_session, vm->thread_index, 0, 1);
-	}
-	else
-	{
-		*sf = it.data->val;
-		session = pool_elt_at_index(sw->session_pool, sf->index);
-	}
-
-	session->end_time = sw->now + SESSION_TIMEOUT;
-	next[0] = ip4->protocol;
-
-	// session->counter[sf->direction].packets++;
-	// session->counter[sf->direction].bytes += b->current_data + vlib_buffer_length_in_chain(vm, b);
-
-trace:
-	if (is_trace)
-		add_trace(vm, node, b, &key);
 }
 
 static_always_inline u64
@@ -260,10 +179,10 @@ static u8 *format_tcp_v4_session_trace(u8 *s, va_list *args)
 			"  dst ip   %U\n"
 			"  src port %U\n"
 			"  dst port %U",
-			format_ip4_address, &t->key.src_ip,
-			format_ip4_address, &t->key.dst_ip,
-			format_network_port, t->key.l4_protocol, t->key.src_port,
-			format_network_port, t->key.l4_protocol, t->key.dst_port);
+			format_ip6_address, &t->key.ip[FLOW_DIRECTION_ORIGINAL],
+			format_ip6_address, &t->key.ip[FLOW_DIRECTION_REVERSE],
+			format_network_port, t->key.l4_protocol, t->key.port[FLOW_DIRECTION_ORIGINAL],
+			format_network_port, t->key.l4_protocol, t->key.port[FLOW_DIRECTION_REVERSE]);
 }
 
 VLIB_REGISTER_NODE (tcp_v4_session) = {

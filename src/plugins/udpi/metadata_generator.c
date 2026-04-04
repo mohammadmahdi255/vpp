@@ -4,6 +4,7 @@
 #include <vnet/vnet.h>
 
 #include "session.h"
+#include "udpi/session_inlines.h"
 
 static u8 *
 format_session_id(u8 *s, va_list *args)
@@ -33,6 +34,9 @@ produce_v4_csv_record(const vlib_main_t* vm, const session_t *session, u8 *buffe
 	f64 unix_start = session->start_time + ct->init_reference_time;
 	f64 unix_end = session->end_time + ct->init_reference_time;
 
+	session_direction_t c2s = session->session_direction;
+	session_direction_t s2c = reverse_direction(c2s);
+
 	vec_reset_length(buffer);
 
 	return format(buffer,
@@ -57,18 +61,18 @@ produce_v4_csv_record(const vlib_main_t* vm, const session_t *session, u8 *buffe
 			format_unix_time, unix_start,
 			format_unix_time, unix_end,
 			/* src */
-			format_ip4_address, &session->src_ip4,
-			clib_net_to_host_u16(session->src_port),
+			format_ip4_address, &session->ip4[c2s],
+			clib_net_to_host_u16(session->port[c2s]),
 			/* dst */
-			format_ip4_address, &session->dst_ip4,
-			clib_net_to_host_u16(session->dst_port),
+			format_ip4_address, &session->ip4[s2c],
+			clib_net_to_host_u16(session->port[s2c]),
 			/* protocol */
 			session->l4_protocol,
 			/* counters */
-			session->counter[FLOW_DIRECTION_CLIENT_TO_SERVER].packets,
-			session->counter[FLOW_DIRECTION_SERVER_TO_CLIENT].packets,
-			session->counter[FLOW_DIRECTION_CLIENT_TO_SERVER].bytes,
-			session->counter[FLOW_DIRECTION_SERVER_TO_CLIENT].bytes
+			session->counter[c2s].packets,
+			session->counter[s2c].packets,
+			session->counter[c2s].bytes,
+			session->counter[s2c].bytes
 	);
 }
 
@@ -79,6 +83,9 @@ produce_v6_csv_record(const vlib_main_t* vm, const session_t *session, u8 *buffe
 
 	f64 unix_start = session->start_time + ct->init_reference_time;
 	f64 unix_end = session->end_time + ct->init_reference_time;
+
+	session_direction_t c2s = session->session_direction;
+	session_direction_t s2c = reverse_direction(c2s);
 
 	vec_reset_length(buffer);
 
@@ -104,17 +111,17 @@ produce_v6_csv_record(const vlib_main_t* vm, const session_t *session, u8 *buffe
 			format_unix_time, unix_start,
 			format_unix_time, unix_end,
 			/* src */
-			format_ip6_address, &session->src_ip6,
-			clib_net_to_host_u16(session->src_port),
+			format_ip6_address, &session->ip6[c2s],
+			clib_net_to_host_u16(session->port[c2s]),
 			/* dst */
-			format_ip6_address, &session->dst_ip6,
-			clib_net_to_host_u16(session->dst_port),
+			format_ip6_address, &session->ip6[s2c],
+			clib_net_to_host_u16(session->port[s2c]),
 			/* protocol */
 			session->l4_protocol,
 			/* counters */
-			session->counter[FLOW_DIRECTION_CLIENT_TO_SERVER].packets,
-			session->counter[FLOW_DIRECTION_SERVER_TO_CLIENT].packets,
-			session->counter[FLOW_DIRECTION_CLIENT_TO_SERVER].bytes,
-			session->counter[FLOW_DIRECTION_SERVER_TO_CLIENT].bytes
+			session->counter[c2s].packets,
+			session->counter[s2c].packets,
+			session->counter[c2s].bytes,
+			session->counter[s2c].bytes
 	);
 }

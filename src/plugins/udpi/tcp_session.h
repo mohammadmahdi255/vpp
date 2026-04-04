@@ -43,7 +43,7 @@ typedef struct
 	u32 syn_seq_end;
 	u32 syn_ack_seq_end;
 	tcp_handshake_t handshake;
-	tcp_flow_t flow[FLOW_DIRECTION_COUNT];
+	tcp_flow_t flow[SESSION_DIRECTION_COUNT];
 } tcp_session_t;
 
 

@@ -9,59 +9,44 @@
 #include <vnet/ip/ip4_packet.h>
 #include <vnet/ip/ip6_packet.h>
 
-#define session_template_fields(key_type, ip_type)				\
-	union {														\
-		key_type key;											\
-		struct {												\
-			ip_type src_ip;										\
-			ip_type dst_ip;										\
-			u16 src_port;										\
-			u16 dst_port;										\
-			u32 l4_protocol;									\
-		};														\
-	}															\
+#define SESSION_TIMEOUT	20
 
-#define SESSION_TIMEOUT	3
+#define reverse_direction(direction)	((direction) ^ 0x1)
 
 typedef enum
 {
-	FLOW_DIRECTION_SERVER_TO_CLIENT,
-	FLOW_DIRECTION_CLIENT_TO_SERVER,
+	FLOW_DIRECTION_REVERSE,
+	FLOW_DIRECTION_ORIGINAL,
 	FLOW_DIRECTION_COUNT
 } flow_direction_t;
 
-typedef union
+typedef enum
 {
-	struct
-	{
-		u32 index;
-		flow_direction_t direction;
-	};
-	u64 as_u64;
-} session_flow_t;
+	SESSION_DIRECTION_SERVER_TO_CLIENT,
+	SESSION_DIRECTION_CLIENT_TO_SERVER,
+	SESSION_DIRECTION_COUNT,
+} session_direction_t;
 
 typedef struct
 {
 	u32 l4_protocol;
-	u16 src_port;
-	u16 dst_port;
-	ip4_address_t src_ip;
-	ip4_address_t dst_ip;
+	u16 port[FLOW_DIRECTION_COUNT];
+	ip4_address_t ip[FLOW_DIRECTION_COUNT];
 } flow_key_v4_t;
 
 typedef struct
 {
 	u32 l4_protocol;
-	u16 src_port;
-	u16 dst_port;
-	ip6_address_t src_ip;
-	ip6_address_t dst_ip;
+	u16 port[FLOW_DIRECTION_COUNT];
+	ip6_address_t ip[FLOW_DIRECTION_COUNT];
 } flow_key_v6_t;
 
 typedef struct
 {
 	CLIB_CACHE_LINE_ALIGN_MARK (cacheline0);
 
+	u64 flow_direction : 1;
+	u64 session_direction : 1;
 	f64 start_time;
 	f64 end_time;
 	vlib_counter_t counter[FLOW_DIRECTION_COUNT];
@@ -76,31 +61,34 @@ typedef struct
 		struct
 		{
 			u32 l4_protocol;
-			u16 src_port;
-			u16 dst_port;
+			u16 port[FLOW_DIRECTION_COUNT];
 			union
 			{
 				struct
 				{
-					ip4_address_t src_ip4;
-					ip4_address_t dst_ip4;
+					ip4_address_t ip4[FLOW_DIRECTION_COUNT];
 				};
 
 				struct
 				{
-					ip6_address_t src_ip6;
-					ip6_address_t dst_ip6;
+					ip6_address_t ip6[FLOW_DIRECTION_COUNT];
 				};
 			};
 		};
 	};
 } session_t;
 
+typedef struct
+{
+	flow_direction_t flow_direction;
+	session_t *session;
+} session_flow_t;
+
 #undef always_inline
 
 #define NAME					session_v4_map
 #define KEY_TY					flow_key_v4_t
-#define VAL_TY					session_flow_t
+#define VAL_TY					session_t *
 #define HASH_FN(key)			vt_wyhash(&(key), sizeof(KEY_TY))
 #define CMPR_FN(key_1, key_2)	memcmp(&(key_1), &(key_2), sizeof(KEY_TY)) == 0
 #define MALLOC_FN				clib_mem_alloc
@@ -109,7 +97,7 @@ typedef struct
 
 #define NAME					session_v6_map
 #define KEY_TY					flow_key_v6_t
-#define VAL_TY					session_flow_t
+#define VAL_TY					session_t *
 #define HASH_FN(key)			vt_wyhash(&(key), sizeof(KEY_TY))
 #define CMPR_FN(key_1, key_2)	memcmp(&(key_1), &(key_2), sizeof(KEY_TY)) == 0
 #define MALLOC_FN				clib_mem_alloc
