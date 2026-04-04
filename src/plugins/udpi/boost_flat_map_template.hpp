@@ -51,6 +51,13 @@ bool FM_FN(try_emplace) (FM_TYPE() *flat_map, FM_TYPE(_key) *key, FM_TYPE(_value
 	return inserted;
 }
 
+bool FM_FN(find) (FM_TYPE() *flat_map, FM_TYPE(_key) *key)
+{
+	assert(flat_map != nullptr && key != nullptr);
+	auto it = flat_map->find(*key);
+	return it != flat_map->end();
+}
+
 void FM_FN(erase) (FM_TYPE() *flat_map, FM_TYPE(_key) *key)
 {
 	assert(flat_map != nullptr && key != nullptr);
