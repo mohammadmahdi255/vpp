@@ -17,40 +17,37 @@ extern vlib_node_registration_t kafka_producer_node;
 extern producer_thread_t *pt;
 
 static void
-dr_msg_cb(rd_kafka_t __clib_unused *rk, const rd_kafka_message_t __clib_unused *msg, void __clib_unused *opaque)
+dr_msg_cb(rd_kafka_t __clib_unused *rk, const rd_kafka_message_t *msg, void __clib_unused *opaque)
 {
 	if (PREDICT_FALSE(rte_ring_sp_enqueue(msg->_private, msg->payload)))
 		clib_error("failed to enqueue to ring buffer");
 }
 
-static_always_inline u64
+static_always_inline void
 kafka_setup(producer_thread_t *pt)
 {
-	char errstr[512];
-
 	const udpi_kafka_config_t *kc = &udpi_config->kafka;
 	rd_kafka_conf_t *conf = rd_kafka_conf_new();
 	rd_kafka_topic_conf_t *topic_conf = rd_kafka_topic_conf_new();
+	char errstr[512];
 
 	for (int i = 0; i < _vec_len(kc->names); i++)
 	{
 		const rd_kafka_conf_res_t rv =
 				rd_kafka_conf_set(conf, kc->names[i], kc->values[i], errstr, sizeof(errstr));
 		if (rv != RD_KAFKA_CONF_OK)
-			clib_error("kafka: config %s=%s failed: %s", kc->names[i], kc->values[i], errstr);
+			clib_error("failed to set config %s=%s error %s", kc->names[i], kc->values[i], errstr);
 	}
 
 	rd_kafka_conf_set_dr_msg_cb(conf, dr_msg_cb);
 
 	pt->rk = rd_kafka_new(RD_KAFKA_PRODUCER, conf, errstr, sizeof(errstr));
 	if (!pt->rk)
-		clib_error("kafka: failed to create producer: %s", errstr);
+		clib_error("failed to create producer: %s", errstr);
 
 	pt->rkt = rd_kafka_topic_new(pt->rk, kc->topic, topic_conf);
 	if (!pt->rkt)
-		clib_error("kafka: failed to create topic handle");
-
-	return 0;
+		clib_error("failed to create topic handle");
 }
 
 // static_always_inline u32
