@@ -85,16 +85,16 @@ tcp_v4_session_to_next(u16 *next, u16 len)
 	}
 }
 
-static_always_inline void
-add_trace(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b,
-		const flow_key_v4_t *key)
-{
-	if (PREDICT_FALSE(b->flags & VLIB_BUFFER_IS_TRACED))
-	{
-		tcp_v4_session_trace_t *t = vlib_add_trace(vm, node, b, sizeof(*t));
-		t->key = *key;
-	}
-}
+// static_always_inline void
+// add_trace(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b,
+// 		const flow_key_v4_t *key)
+// {
+// 	if (PREDICT_FALSE(b->flags & VLIB_BUFFER_IS_TRACED))
+// 	{
+// 		tcp_v4_session_trace_t *t = vlib_add_trace(vm, node, b, sizeof(*t));
+// 		t->key = *key;
+// 	}
+// }
 
 static_always_inline void
 process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, u16 *next, u8 is_trace)
