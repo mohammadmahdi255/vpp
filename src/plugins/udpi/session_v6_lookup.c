@@ -92,10 +92,20 @@ add_trace(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b,
 static_always_inline flow_direction_t
 flow_key_v6_direction(const ip6_header_t *ip6, const nat_tcp_udp_header_t *l4)
 {
-	if (l4->src_port != l4->dst_port)
-		return l4->src_port > l4->dst_port;
+	return l4->src_port > l4->dst_port || ip6->src_address.as_u64[0] > ip6->dst_address.as_u64[0]
+			|| ip6->src_address.as_u64[1] > ip6->dst_address.as_u64[1];
+}
 
-	return memcmp(ip6->src_address.as_u8, ip6->dst_address.as_u8, sizeof(ip6_address_t)) > 0;
+static_always_inline session_direction_t
+session_v6_direction(const flow_key_v6_t *key)
+{
+	const u16 src_port = clib_net_to_host_u16(key->port[FLOW_DIRECTION_ORIGINAL]);
+	const u16 dst_port = clib_net_to_host_u16(key->port[FLOW_DIRECTION_REVERSE]);
+
+	const ip6_address_t *src_ip = &key->ip[FLOW_DIRECTION_ORIGINAL];
+	const ip6_address_t *dst_ip = &key->ip[FLOW_DIRECTION_ORIGINAL];
+
+	return src_port > dst_port || clib_memcmp(src_ip, dst_ip, sizeof(ip6_address_t)) > 0;
 }
 
 static_always_inline void
@@ -135,7 +145,7 @@ process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, 
 		u32 index = session - sw->session_pool;
 
 		session->flow_direction = fd;
-		session->session_direction = SESSION_DIRECTION_CLIENT_TO_SERVER;
+		session->session_direction = session_v6_direction(&key);
 		session->start_time = sw->now;
 		session->counter[FLOW_DIRECTION_ORIGINAL] = (vlib_counter_t) {0};
 		session->counter[FLOW_DIRECTION_REVERSE] = (vlib_counter_t) {0};
