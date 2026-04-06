@@ -99,12 +99,15 @@ flow_key_v6_direction(const ip6_header_t *ip6, const nat_tcp_udp_header_t *l4)
 }
 
 static_always_inline session_direction_t
-init_session_v6_direction(const flow_key_v6_t *key)
+init_session_v6_direction(const flow_key_v6_t *key, const flow_direction_t flow_direction)
 {
 	const u16 src_port = clib_net_to_host_u16(key->port[FLOW_DIRECTION_ORIGINAL]);
 	const u16 dst_port = clib_net_to_host_u16(key->port[FLOW_DIRECTION_REVERSE]);
 
-	return src_port >= dst_port;
+	if (PREDICT_TRUE(src_port != dst_port))
+		return src_port > dst_port;
+
+	return (session_direction_t) flow_direction;
 }
 
 static_always_inline void
@@ -144,7 +147,7 @@ process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, 
 		u32 index = session - sw->session_pool;
 
 		session->flow_direction = fd;
-		session->session_direction = init_session_v6_direction(&key);
+		session->session_direction = init_session_v6_direction(&key, fd);
 		session->start_time = sw->now;
 		session->counter[FLOW_DIRECTION_ORIGINAL] = (vlib_counter_t) {0};
 		session->counter[FLOW_DIRECTION_REVERSE] = (vlib_counter_t) {0};
