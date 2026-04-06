@@ -24,21 +24,22 @@ add_vpp_plugin(udpi
 		boost_flat_map_template.cpp
 		cli.c
 		config.c
-		kafka_producer.c
+		kafka.c
 		metadata_generator.c
 		plugin.c
 		producer.c
-		session.c
 		session_v4_lookup.c
 		session_v6_lookup.c
+		session.c
 		tcp_v4_session.c
 
 	MULTIARCH_SOURCES
+		kafka.c
 		producer.c
 		session_v4_lookup.c
 		session_v6_lookup.c
-		tcp_v4_session.c
 		session.c
+		tcp_v4_session.c
 
 	LINK_FLAGS
 		${DPDK_LDFLAGS}

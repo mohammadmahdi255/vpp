@@ -11,7 +11,7 @@
 
 #define SESSION_TIMEOUT	10
 
-#define reverse_direction(direction)	((direction) ^ 0x1)
+#define reverse_direction(direction)	(typeof(direction)) ((direction) ^ 0x1)
 
 typedef enum
 {

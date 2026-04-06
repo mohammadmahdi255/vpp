@@ -235,6 +235,7 @@ VLIB_NODE_FN (session_v6_timer_expiration) (vlib_main_t *vm, vlib_node_runtime_t
 		vlib_frame_t __clib_unused *frame)
 {
 	const producer_worker_t *pw = producer_worker;
+	const producer_main_t *pm = &producer_main;
 	const udpi_time_wheel_config_t *tc = &udpi_config->ipv6_config.time_wheel;
 	session_v6_lookup_main_t *sm = &session_v6_lookup_main;
 	session_worker_t *sw = session_worker;
@@ -288,8 +289,8 @@ VLIB_NODE_FN (session_v6_timer_expiration) (vlib_main_t *vm, vlib_node_runtime_t
 		pool_put_index(sw->session_pool, session_index);
 	}
 
-	u32 n_send = rd_kafka_produce_batch(pt->rkt, RD_KAFKA_PARTITION_UA, 0, pw->msgs, _vec_len(pw->msgs));
-	rd_kafka_poll(pt->rk, 0);
+	u32 n_send = rd_kafka_produce_batch(pm->kafka_topic, RD_KAFKA_PARTITION_UA, 0, pw->msgs, _vec_len(pw->msgs));
+	rd_kafka_poll(pm->kafka, 0);
 
 	vec_fast_delete(pw->msgs, n_send, 0);
 	vec_fast_delete(session_indices, n_expire, 0);

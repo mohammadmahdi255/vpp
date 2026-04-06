@@ -21,24 +21,18 @@
 
 typedef struct
 {
+	CLIB_CACHE_LINE_ALIGN_MARK (cacheline);
+
 	struct rte_ring *buffer_ring;
 	rd_kafka_message_t *msgs;
 } producer_worker_t;
 
 typedef struct
 {
-	CLIB_CACHE_LINE_ALIGN_MARK (cacheline);
-	rd_kafka_t *rk;
-	rd_kafka_topic_t *rkt;
+	producer_worker_t *producer_worker;
 
-	u8 *scratch;
-} producer_thread_t;
-
-extern producer_thread_t *pt;
-
-typedef struct
-{
-	producer_worker_t *pw;
+	rd_kafka_t *kafka;
+	rd_kafka_topic_t *kafka_topic;
 } producer_main_t;
 
 extern __thread producer_worker_t *producer_worker;

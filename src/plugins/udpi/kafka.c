@@ -13,43 +13,6 @@
 #include "config.h"
 #include "producer.h"
 
-extern vlib_node_registration_t kafka_producer_node;
-extern producer_thread_t *pt;
-
-static void
-dr_msg_cb(rd_kafka_t __clib_unused *rk, const rd_kafka_message_t *msg, void __clib_unused *opaque)
-{
-	if (PREDICT_FALSE(rte_ring_sp_enqueue(msg->_private, msg->payload)))
-		clib_error("failed to enqueue to ring buffer");
-}
-
-static_always_inline void
-kafka_setup(producer_thread_t *pt)
-{
-	const udpi_kafka_config_t *kc = &udpi_config->kafka;
-	rd_kafka_conf_t *conf = rd_kafka_conf_new();
-	rd_kafka_topic_conf_t *topic_conf = rd_kafka_topic_conf_new();
-	char errstr[512];
-
-	for (int i = 0; i < _vec_len(kc->names); i++)
-	{
-		const rd_kafka_conf_res_t rv =
-				rd_kafka_conf_set(conf, kc->names[i], kc->values[i], errstr, sizeof(errstr));
-		if (rv != RD_KAFKA_CONF_OK)
-			clib_error("failed to set config %s=%s error %s", kc->names[i], kc->values[i], errstr);
-	}
-
-	rd_kafka_conf_set_dr_msg_cb(conf, dr_msg_cb);
-
-	pt->rk = rd_kafka_new(RD_KAFKA_PRODUCER, conf, errstr, sizeof(errstr));
-	if (!pt->rk)
-		clib_error("failed to create producer: %s", errstr);
-
-	pt->rkt = rd_kafka_topic_new(pt->rk, kc->topic, topic_conf);
-	if (!pt->rkt)
-		clib_error("failed to create topic handle");
-}
-
 // static_always_inline u32
 // produce_v4_process(producer_thread_t *pt, u32 worker_id)
 // {
@@ -202,8 +165,44 @@ kafka_setup(producer_thread_t *pt)
 // 	return 0;
 // }
 
+static void
+dr_msg_cb(rd_kafka_t __clib_unused *rk, const rd_kafka_message_t *msg, void __clib_unused *opaque)
+{
+	if (PREDICT_FALSE(rte_ring_sp_enqueue(msg->_private, msg->payload)))
+		clib_error("failed to enqueue to ring buffer");
+}
+
+static clib_error_t *
+kafka_init(vlib_main_t __clib_unused *vm)
+{
+	producer_main_t *pm = &producer_main;
+	const udpi_kafka_config_t *kc = &udpi_config->kafka;
+	rd_kafka_conf_t *conf = rd_kafka_conf_new();
+	rd_kafka_topic_conf_t *topic_conf = rd_kafka_topic_conf_new();
+	char errstr[512];
+
+	for (int i = 0; i < _vec_len(kc->names); i++)
+	{
+		const rd_kafka_conf_res_t rv =
+				rd_kafka_conf_set(conf, kc->names[i], kc->values[i], errstr, sizeof(errstr));
+		if (rv != RD_KAFKA_CONF_OK)
+			return clib_error_return(0, "failed to set config %s=%s error %s", kc->names[i], kc->values[i], errstr);
+	}
+
+	rd_kafka_conf_set_dr_msg_cb(conf, dr_msg_cb);
+
+	pm->kafka = rd_kafka_new(RD_KAFKA_PRODUCER, conf, errstr, sizeof(errstr));
+	if (!pm->kafka)
+		return clib_error_return(0, "failed to create producer: %s", errstr);
+
+	pm->kafka_topic = rd_kafka_topic_new(pm->kafka, kc->topic, topic_conf);
+	if (!pm->kafka_topic)
+		return clib_error_return(0, "failed to create topic handle");
+
+	return 0;
+}
+
 #ifndef CLIB_MARCH_VARIANT
-producer_thread_t *pt = NULL;
 
 static clib_error_t *
 producer_show_stats_fn (vlib_main_t *vm, unformat_input_t __clib_unused *input,
@@ -221,7 +220,7 @@ producer_show_stats_fn (vlib_main_t *vm, unformat_input_t __clib_unused *input,
 
 	vlib_cli_output (vm, "\nWorker rings:");
 	for (u32 i = 0; i < n_workers; i++)
-		vlib_cli_output (vm, "buffer ring [%u] count=%u", i, rte_ring_count(pm->pw[i].buffer_ring));
+		vlib_cli_output (vm, "buffer ring [%u] count=%u", i, rte_ring_count(pm->producer_worker[i].buffer_ring));
 
 	return 0;
 }
@@ -247,16 +246,4 @@ VLIB_CLI_COMMAND (producer_show_stats_cmd, static) = {
 
 #endif
 
-static clib_error_t *
-kafka_producer_init(vlib_main_t __clib_unused *vm)
-{
-	pt = clib_mem_alloc(sizeof(producer_thread_t));
-	clib_memset(pt, 0, sizeof(producer_thread_t));
-
-	vec_validate(pt->scratch, 1 << 10);
-	kafka_setup(pt);
-
-	return 0;
-}
-
-VLIB_INIT_FUNCTION (kafka_producer_init);
+VLIB_INIT_FUNCTION (kafka_init);
