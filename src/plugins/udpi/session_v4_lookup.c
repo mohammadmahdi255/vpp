@@ -100,7 +100,7 @@ flow_key_v4_direction(const ip4_header_t *ip4, const nat_tcp_udp_header_t *l4)
 }
 
 static_always_inline session_direction_t
-session_v4_direction(const flow_key_v4_t *key)
+init_session_v4_direction(const flow_key_v4_t *key)
 {
 	const u16 src_port = clib_net_to_host_u16(key->port[FLOW_DIRECTION_ORIGINAL]);
 	const u16 dst_port = clib_net_to_host_u16(key->port[FLOW_DIRECTION_REVERSE]);
@@ -148,7 +148,7 @@ process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, 
 		u32 index = session - sw->session_pool;
 
 		session->flow_direction = fd;
-		session->session_direction = session_v4_direction(&key);
+		session->session_direction = init_session_v4_direction(&key);
 		session->start_time = sw->now;
 		session->counter[FLOW_DIRECTION_ORIGINAL] = (vlib_counter_t) {0};
 		session->counter[FLOW_DIRECTION_REVERSE] = (vlib_counter_t) {0};
