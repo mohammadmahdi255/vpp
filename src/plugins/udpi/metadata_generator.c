@@ -34,8 +34,8 @@ produce_v4_csv_record(const vlib_main_t* vm, const session_t *session, u8 *buffe
 	f64 unix_start = session->start_time + ct->init_reference_time;
 	f64 unix_end = session->end_time + ct->init_reference_time;
 
-	session_direction_t c2s = session->session_direction;
-	session_direction_t s2c = reverse_direction(c2s);
+	flow_direction_t c2s = session->c2s_flow;
+	flow_direction_t s2c = reverse_direction(c2s);
 
 	vec_reset_length(buffer);
 
@@ -52,7 +52,7 @@ produce_v4_csv_record(const vlib_main_t* vm, const session_t *session, u8 *buffe
 			"%llu,"			/* packets c2s */
 			"%llu,"			/* packets s2c */
 			"%llu,"			/* bytes c2s */
-			"%llu",		/* bytes s2c */
+			"%llu",			/* bytes s2c */
 			/* probe_id */
 			254,
 			/* session id */
@@ -84,8 +84,8 @@ produce_v6_csv_record(const vlib_main_t* vm, const session_t *session, u8 *buffe
 	f64 unix_start = session->start_time + ct->init_reference_time;
 	f64 unix_end = session->end_time + ct->init_reference_time;
 
-	session_direction_t c2s = session->session_direction;
-	session_direction_t s2c = reverse_direction(c2s);
+	flow_direction_t c2s = session->c2s_flow;
+	flow_direction_t s2c = reverse_direction(c2s);
 
 	vec_reset_length(buffer);
 
@@ -102,7 +102,7 @@ produce_v6_csv_record(const vlib_main_t* vm, const session_t *session, u8 *buffe
 			"%llu,"			/* packets c2s */
 			"%llu,"			/* packets s2c */
 			"%llu,"			/* bytes c2s */
-			"%llu",		/* bytes s2c */
+			"%llu",			/* bytes s2c */
 			/* probe_id */
 			254,
 			/* session id */

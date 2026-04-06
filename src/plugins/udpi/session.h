@@ -45,8 +45,7 @@ typedef struct
 {
 	CLIB_CACHE_LINE_ALIGN_MARK (cacheline0);
 
-	u64 flow_direction : 1;
-	u64 session_direction : 1;
+	u64 c2s_flow : 1;
 	f64 start_time;
 	f64 end_time;
 	vlib_counter_t counter[FLOW_DIRECTION_COUNT];
