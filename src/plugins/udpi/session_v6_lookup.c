@@ -103,9 +103,9 @@ session_v6_direction(const flow_key_v6_t *key)
 	const u16 dst_port = clib_net_to_host_u16(key->port[FLOW_DIRECTION_REVERSE]);
 
 	const ip6_address_t *src_ip = &key->ip[FLOW_DIRECTION_ORIGINAL];
-	const ip6_address_t *dst_ip = &key->ip[FLOW_DIRECTION_ORIGINAL];
+	const ip6_address_t *dst_ip = &key->ip[FLOW_DIRECTION_REVERSE];
 
-	return src_port > dst_port || clib_memcmp(src_ip, dst_ip, sizeof(ip6_address_t)) > 0;
+	return src_port > dst_port || memcmp(src_ip->as_u8, dst_ip->as_u8, sizeof(ip6_address_t)) > 0;
 }
 
 static_always_inline void
