@@ -5,7 +5,7 @@
 
 #include "session.h"
 
-inline session_direction_t
+static_always_inline __clib_unused session_direction_t
 to_session_direction(const session_t *session, const flow_direction_t flow_direction)
 {
 	return session->flow_direction ^ flow_direction ^ session->session_direction;

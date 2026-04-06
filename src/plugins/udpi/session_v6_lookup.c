@@ -92,8 +92,10 @@ add_trace(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b,
 static_always_inline flow_direction_t
 flow_key_v6_direction(const ip6_header_t *ip6, const nat_tcp_udp_header_t *l4)
 {
-	return l4->src_port > l4->dst_port || ip6->src_address.as_u64[0] > ip6->dst_address.as_u64[0]
-			|| ip6->src_address.as_u64[1] > ip6->dst_address.as_u64[1];
+	if (PREDICT_TRUE(l4->src_port != l4->dst_port))
+		return l4->src_port > l4->dst_port;
+
+	return memcmp(ip6->src_address.as_u8, ip6->src_address.as_u8, sizeof(ip6_address_t)) > 0;
 }
 
 static_always_inline session_direction_t
@@ -102,10 +104,7 @@ init_session_v6_direction(const flow_key_v6_t *key)
 	const u16 src_port = clib_net_to_host_u16(key->port[FLOW_DIRECTION_ORIGINAL]);
 	const u16 dst_port = clib_net_to_host_u16(key->port[FLOW_DIRECTION_REVERSE]);
 
-	const ip6_address_t *src_ip = &key->ip[FLOW_DIRECTION_ORIGINAL];
-	const ip6_address_t *dst_ip = &key->ip[FLOW_DIRECTION_REVERSE];
-
-	return src_port > dst_port || memcmp(src_ip->as_u8, dst_ip->as_u8, sizeof(ip6_address_t)) > 0;
+	return src_port >= dst_port;
 }
 
 static_always_inline void
