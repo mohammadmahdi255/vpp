@@ -172,7 +172,7 @@ dr_msg_cb(rd_kafka_t __clib_unused *rk, const rd_kafka_message_t *msg, void __cl
 		clib_error("failed to enqueue to ring buffer");
 }
 
-static clib_error_t *
+static_always_inline clib_error_t *
 kafka_init(vlib_main_t __clib_unused *vm)
 {
 	producer_main_t *pm = &producer_main;
@@ -180,25 +180,46 @@ kafka_init(vlib_main_t __clib_unused *vm)
 	rd_kafka_conf_t *conf = rd_kafka_conf_new();
 	rd_kafka_topic_conf_t *topic_conf = rd_kafka_topic_conf_new();
 	char errstr[512];
+	clib_error_t *error = NULL;
 
 	for (int i = 0; i < _vec_len(kc->names); i++)
 	{
 		const rd_kafka_conf_res_t rv =
 				rd_kafka_conf_set(conf, kc->names[i], kc->values[i], errstr, sizeof(errstr));
 		if (rv != RD_KAFKA_CONF_OK)
+		{
+			rd_kafka_conf_destroy(conf);
+			rd_kafka_topic_conf_destroy(topic_conf);
 			return clib_error_return(0, "failed to set config %s=%s error %s", kc->names[i], kc->values[i], errstr);
+		}
 	}
 
 	rd_kafka_conf_set_dr_msg_cb(conf, dr_msg_cb);
 
 	pm->kafka = rd_kafka_new(RD_KAFKA_PRODUCER, conf, errstr, sizeof(errstr));
 	if (!pm->kafka)
+	{
+		rd_kafka_conf_destroy(conf);
+		rd_kafka_topic_conf_destroy(topic_conf);
 		return clib_error_return(0, "failed to create producer: %s", errstr);
+	}
 
 	pm->kafka_topic = rd_kafka_topic_new(pm->kafka, kc->topic, topic_conf);
 	if (!pm->kafka_topic)
+	{
+		rd_kafka_topic_conf_destroy(topic_conf);
 		return clib_error_return(0, "failed to create topic handle");
+	}
 
+	return error;
+}
+
+static_always_inline clib_error_t *
+kafka_exit(vlib_main_t __clib_unused *vm)
+{
+	producer_main_t *pm = &producer_main;
+	rd_kafka_destroy(pm->kafka);
+	rd_kafka_topic_destroy(pm->kafka_topic);
 	return 0;
 }
 
@@ -231,19 +252,7 @@ VLIB_CLI_COMMAND (producer_show_stats_cmd, static) = {
 	.function = producer_show_stats_fn,
 };
 
-// VLIB_REGISTER_THREAD (producer_thread_reg, static) = {
-// 	.name       = "producers",
-// 	.short_name = "prod",
-// 	.function   = producer_thread_fn,
-// };
-
-// VLIB_REGISTER_NODE (kafka_producer_node) = {
-// 	.name        = "kafka-producer",
-// 	.type        = VLIB_NODE_TYPE_INTERNAL,
-// 	.state       = VLIB_NODE_STATE_DISABLED,
-// 	.vector_size = sizeof (u32),
-// };
-
 #endif
 
 VLIB_INIT_FUNCTION (kafka_init);
+VLIB_MAIN_LOOP_EXIT_FUNCTION (kafka_exit);

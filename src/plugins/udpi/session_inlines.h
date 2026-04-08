@@ -8,7 +8,7 @@
 static_always_inline __clib_unused session_direction_t
 to_session_direction(const session_t *session, const flow_direction_t flow_direction)
 {
-	return flow_direction == session->c2s_flow;
+	return (session_direction_t) (flow_direction == session->c2s_flow);
 }
 
 #endif

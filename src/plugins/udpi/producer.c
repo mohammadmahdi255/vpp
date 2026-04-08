@@ -41,7 +41,7 @@ producer_worker_init(vlib_main_t __clib_unused *vm)
 	vec_free(name);
 
 	if (PREDICT_FALSE(rv))
-		return clib_error_return (0, "failed to create rte_ring for thread %u", vlib_get_thread_index());
+		return clib_error_return(0, "failed to create rte_ring for thread %u", vlib_get_thread_index());
 
 	vec_validate_aligned(pw->msgs, clib_max(tc4->max_expiration, tc6->max_expiration), CLIB_CACHE_LINE_BYTES);
 	vec_set_len(pw->msgs, 0);
@@ -55,7 +55,7 @@ producer_worker_init(vlib_main_t __clib_unused *vm)
 		const i32 rv = rte_ring_sp_enqueue(pw->buffer_ring, buffer);
 
 		if (PREDICT_FALSE(rv))
-			clib_error("failed to enqueue to buffer ring");
+			return clib_error_return(0, "failed to enqueue to buffer ring");
 	}
 
 	return 0;
@@ -79,5 +79,41 @@ producer_init(vlib_main_t *vm)
 	return 0;
 }
 
+static_always_inline clib_error_t *
+producer_exit(vlib_main_t __clib_unused *vm)
+{
+	producer_main_t *pm = &producer_main;
+	producer_worker_t *pw = NULL;
+	rd_kafka_message_t *msg = NULL;
+
+	vec_foreach(pw, pm->producer_worker)
+	{
+		while (!rte_ring_empty(pw->buffer_ring))
+		{
+			u8 *buffer = NULL;
+			const i32 rv = rte_ring_sc_dequeue(pw->buffer_ring, (void **) &buffer);
+
+			if (PREDICT_FALSE(rv))
+				return clib_error_return(0, "failed to dequque from buffer ring");
+
+			vec_free(buffer);
+		}
+
+		vec_foreach(msg, pw->msgs)
+		{
+			vec_free(msg->payload);
+		}
+
+		vec_free(pw->msgs);
+		clib_mem_free(pw->buffer_ring);
+		pw->buffer_ring = NULL;
+	}
+
+	vec_free(pm->producer_worker);
+
+	return 0;
+}
+
 VLIB_WORKER_INIT_FUNCTION (producer_worker_init);
 VLIB_INIT_FUNCTION (producer_init);
+VLIB_MAIN_LOOP_EXIT_FUNCTION (producer_exit);
