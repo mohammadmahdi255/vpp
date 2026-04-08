@@ -114,6 +114,28 @@ producer_exit(vlib_main_t __clib_unused *vm)
 	return 0;
 }
 
+static_always_inline clib_error_t *
+show_producer_stats_fn(vlib_main_t *vm, unformat_input_t __clib_unused *input,
+						 vlib_cli_command_t __clib_unused *cmd)
+{
+	const producer_main_t *pm = &producer_main;
+	const udpi_kafka_config_t *kc = &udpi_config->kafka;
+	u32 i;
+
+	vlib_cli_output(vm, "topic:       %s", kc->topic);
+
+	vec_foreach_index(i, pm->producer_worker)
+		vlib_cli_output(vm, "buffer ring [%u] count=%u", i, rte_ring_count(pm->producer_worker[i].buffer_ring));
+
+	return 0;
+}
+
+VLIB_CLI_COMMAND (producer_show_stats_cmd, static) = {
+	.path = "show producer stats",
+	.short_help = "show producer statistics",
+	.function = show_producer_stats_fn,
+};
+
 VLIB_WORKER_INIT_FUNCTION (producer_worker_init);
 VLIB_INIT_FUNCTION (producer_init);
 VLIB_MAIN_LOOP_EXIT_FUNCTION (producer_exit);

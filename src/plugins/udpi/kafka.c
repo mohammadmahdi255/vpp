@@ -223,36 +223,5 @@ kafka_exit(vlib_main_t __clib_unused *vm)
 	return 0;
 }
 
-#ifndef CLIB_MARCH_VARIANT
-
-static clib_error_t *
-producer_show_stats_fn (vlib_main_t *vm, unformat_input_t __clib_unused *input,
-						 vlib_cli_command_t __clib_unused *cmd)
-{
-	const producer_main_t *pm = &producer_main;
-	const udpi_kafka_config_t *kc = &udpi_config->kafka;
-
-	const vlib_thread_main_t *tm = vlib_get_thread_main();
-	const uword *p = hash_get_mem (tm->thread_registrations_by_name, "workers");
-	const vlib_thread_registration_t *tr = (const vlib_thread_registration_t *) p[0];
-	const u32 n_workers = tr->count ? tr->count : 1;
-
-	vlib_cli_output (vm, "topic:       %s", kc->topic);
-
-	vlib_cli_output (vm, "\nWorker rings:");
-	for (u32 i = 0; i < n_workers; i++)
-		vlib_cli_output (vm, "buffer ring [%u] count=%u", i, rte_ring_count(pm->producer_worker[i].buffer_ring));
-
-	return 0;
-}
-
-VLIB_CLI_COMMAND (producer_show_stats_cmd, static) = {
-	.path = "show producer stats",
-	.short_help = "show producer statistics",
-	.function = producer_show_stats_fn,
-};
-
-#endif
-
 VLIB_INIT_FUNCTION (kafka_init);
 VLIB_MAIN_LOOP_EXIT_FUNCTION (kafka_exit);

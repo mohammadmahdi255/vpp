@@ -7,7 +7,6 @@
 
 #include <librdkafka/rdkafka.h>
 
-
 #undef always_inline
 
 #include <rte_lcore.h>
