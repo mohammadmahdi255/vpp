@@ -304,25 +304,19 @@ VLIB_NODE_FN (session_v6_timer_expiration_process) (vlib_main_t *vm, vlib_node_r
 	const vlib_thread_main_t *tm = vlib_get_thread_main();
 	const u64 *p = hash_get_mem(tm->thread_registrations_by_name, "workers");
 	const vlib_thread_registration_t *tr = (const vlib_thread_registration_t *) p[0];
-	const udpi_time_wheel_config_t *tc = &udpi_config->ipv6_config.time_wheel;
-
-	if (tr->count == 0)
-	{
-		while (true)
-		{
-			(void) vlib_process_wait_for_event_or_clock(vm, tc->interval);
-			session_v6_timer_expiration.function(vm, node, frame);
-		}
-	}
+	const udpi_time_wheel_config_t *tc = &udpi_config->ipv4_config.time_wheel;
+	const u32 num_workers = clib_max(tr->count, 1);
+	const u32 first_index = vlib_num_workers() ? tr->first_index : 0;
+	u32 i = 0;
 
 	while (true)
 	{
 		(void) vlib_process_wait_for_event_or_clock(vm, tc->interval);
 
-		for (u32 i = 0; i < tr->count; i++)
-			vlib_node_set_interrupt_pending(vlib_get_main_by_index(tr->first_index + i), session_v6_timer_expiration.index);
+		vlib_node_set_interrupt_pending(vlib_get_main_by_index(first_index + i++), session_v6_timer_expiration.index);
+		if (i == num_workers)
+			i = 0;
 	}
-
 	return 0;
 }
 

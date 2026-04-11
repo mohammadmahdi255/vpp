@@ -37,7 +37,8 @@ session_worker_init(vlib_main_t __clib_unused *vm)
 	ASSERT(_vec_len(tw4->expired_timer_handles) == 0);
 	ASSERT(_vec_len(tw6->expired_timer_handles) == 0);
 
-	vlib_worker_thread_barrier_check();
+	if (!vlib_thread_is_main_w_barrier())
+		vlib_worker_thread_barrier_check();
 
 	pool_init_fixed(sw->session_pool, sc4->pool_capacity + sc6->pool_capacity);
 
