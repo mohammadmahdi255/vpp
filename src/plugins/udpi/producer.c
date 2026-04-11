@@ -12,11 +12,6 @@
 #include "vppinfra/clib.h"
 #include "vppinfra/mem.h"
 
-#ifndef CLIB_MARCH_VARIANT
-__thread producer_worker_t *producer_worker = NULL;
-producer_main_t producer_main;
-#endif
-
 static_always_inline clib_error_t *
 producer_worker_init(vlib_main_t __clib_unused *vm)
 {
@@ -139,3 +134,8 @@ VLIB_CLI_COMMAND (producer_show_stats_cmd, static) = {
 VLIB_WORKER_INIT_FUNCTION (producer_worker_init);
 VLIB_INIT_FUNCTION (producer_init);
 VLIB_MAIN_LOOP_EXIT_FUNCTION (producer_exit);
+
+#ifndef CLIB_MARCH_VARIANT
+__thread producer_worker_t *producer_worker = NULL;
+producer_main_t producer_main;
+#endif
