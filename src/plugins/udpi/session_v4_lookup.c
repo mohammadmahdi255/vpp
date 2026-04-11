@@ -150,7 +150,6 @@ process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, 
 
 		const u32 sw_idx = vnet_buffer(b)->sw_if_index[VLIB_RX];
 		vlib_increment_simple_counter(&sm->create_session, vm->thread_index, sw_idx, 1);
-		session->end_time = sw->now + SESSION_TIMEOUT;
 	}
 	else
 	{
@@ -161,7 +160,8 @@ process_buffer_1x(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_buffer_t *b, 
 	sf->flow_direction = fd;
 	sf->session = session;
 
-	// session->end_time = sw->now + SESSION_TIMEOUT;
+	session->end_time = sw->now;
+	session->expire_time = sw->now + SESSION_TIMEOUT;
 	session->counter[fd].packets++;
 	session->counter[fd].bytes += vlib_buffer_length_in_chain(vm, b);
 
@@ -263,9 +263,9 @@ VLIB_NODE_FN (session_v4_timer_expiration) (vlib_main_t *vm, vlib_node_runtime_t
 		u32 session_index = vec_elt(session_indices, i);
 		session = pool_elt_at_index(sw->session_pool, session_index);
 
-		if (session->end_time - sw->now > tc->resolution)
+		if (session->expire_time - sw->now > tc->resolution)
 		{
-			const u64 timeout = floor(session->end_time - sw->now);
+			const u64 timeout = floor(session->expire_time - sw->now);
 			tw_timer_start_1t_3w_1024sl_ov(&sw->time_wheel_v4, session_index, 0, timeout);
 			continue;
 		}
@@ -316,9 +316,8 @@ VLIB_NODE_FN (session_v4_timer_expiration_process) (vlib_main_t *vm, vlib_node_r
 	{
 		(void) vlib_process_wait_for_event_or_clock(vm, tc->interval);
 
-		vlib_node_set_interrupt_pending(vlib_get_main_by_index(first_index + i++), session_v4_timer_expiration.index);
-		if (i == num_workers)
-			i = 0;
+		vlib_node_set_interrupt_pending(vlib_get_main_by_index(first_index + i), session_v4_timer_expiration.index);
+		i = (i + 1) % num_workers;
 	}
 
 	return 0;

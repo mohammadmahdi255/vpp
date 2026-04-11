@@ -48,6 +48,7 @@ typedef struct
 	u64 c2s_flow : 1;
 	f64 start_time;
 	f64 end_time;
+	f64 expire_time;
 	vlib_counter_t counter[FLOW_DIRECTION_COUNT];
 	u64 l7_protocol;
 	u64 application_id;
